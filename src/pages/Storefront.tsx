@@ -51,6 +51,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [products, setProducts] = useState<Product[]>([]);
   const [categoryRows, setCategoryRows] = useState<Category[]>([]);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
   const [cart, setCart] = useState<Record<string, number>>(() => {
@@ -135,7 +136,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Unable to load BestMart');
-      });
+      })
+      .finally(() => setInitialLoading(false));
     apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
   }, []);
 
@@ -646,7 +648,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
       <div className="store-inner">
 
-      {!isBrowsing ? (
+      {initialLoading ? (
+        <div className="store-loading">
+          <div className="store-loading__orb" />
+          <p>Loading fresh groceries…</p>
+        </div>
+      ) : !isBrowsing ? (
         <>
           {publicCoupons.length > 0 && (
             <section className="coupon-banners">
@@ -1034,7 +1041,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
       {error ? <div className="message message--error">{error}</div> : null}
 
-      {isBrowsing ? (
+      {!initialLoading && isBrowsing ? (
       <section className="store-layout">
         <div className="catalog-panel">
           <div className="section-heading">

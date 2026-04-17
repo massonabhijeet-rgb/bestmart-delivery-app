@@ -4105,6 +4105,43 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Storefront initial loader
+   ───────────────────────────────────── */
+.store-loading {
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: var(--c-ink-3);
+  padding: var(--sp-6) var(--sp-4);
+}
+.store-loading p {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.store-loading__orb {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  position: relative;
+  background:
+    conic-gradient(from 180deg at 50% 50%,
+      var(--c-teal, #0d9488) 0deg,
+      color-mix(in srgb, var(--c-teal, #0d9488) 30%, transparent) 270deg,
+      transparent 360deg);
+  animation: store-loading-spin 0.9s linear infinite;
+  -webkit-mask: radial-gradient(circle at center, transparent 22px, #000 23px);
+          mask: radial-gradient(circle at center, transparent 22px, #000 23px);
+}
+@keyframes store-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─────────────────────────────────────
    Weather-based picks (landing page)
    ───────────────────────────────────── */
 .weather-picks {
