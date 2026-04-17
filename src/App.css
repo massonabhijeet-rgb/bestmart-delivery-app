@@ -5613,6 +5613,55 @@ textarea {
   font-size: 0.85rem;
 }
 
+.bogo-editor {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+.bogo-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 72px;
+}
+.bogo-editor__field span {
+  font-size: 0.7rem;
+  color: var(--c-ink-3, #6b6b6b);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.bogo-editor__field input {
+  height: 36px;
+  padding: 0 0.55rem;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 8px;
+  font-size: 0.92rem;
+  text-align: center;
+  font-weight: 600;
+  background: var(--c-surface);
+  color: var(--c-ink);
+}
+.bogo-editor__field input:focus {
+  outline: none;
+  border-color: var(--c-teal, #0d9488);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal, #0d9488) 18%, transparent);
+}
+.bogo-editor__sep {
+  padding-bottom: 8px;
+  font-weight: 700;
+  color: var(--c-ink-3, #6b6b6b);
+  font-size: 0.85rem;
+}
+.bogo-editor__preview {
+  width: 100%;
+  font-size: 0.78rem;
+  color: var(--c-teal, #0d9488);
+  font-weight: 600;
+}
+
 /* ─────────────────────────────────────
    Storefront Today's Offer section
    ───────────────────────────────────── */

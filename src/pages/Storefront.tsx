@@ -12,7 +12,7 @@ import {
   ApiError,
 } from '../services/api';
 import type { CouponPreview, PublicCoupon } from '../services/api';
-import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
+import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
@@ -887,7 +887,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                     <div className="todays-offer__thumb">
                       {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="todays-offer__thumb-img" />}
                       <span className="todays-offer__flag">
-                        {isBogoProduct(product) ? 'Buy 1 Get 1' : 'Offer'}
+                        {isBogoProduct(product) ? `Buy ${product.bogoBuyQty} Get ${product.bogoGetQty}` : 'Offer'}
                       </span>
                     </div>
                     <div className="todays-offer__body">
@@ -896,7 +896,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                       <div className="todays-offer__price-row">
                         <strong>{formatCurrency(effectivePriceCents(product))}</strong>
                         {isBogoProduct(product) ? (
-                          <span className="todays-offer__bogo">+1 FREE</span>
+                          <span className="todays-offer__bogo">+{bogoGet(product)} FREE</span>
                         ) : product.offerPriceCents != null &&
                           product.offerPriceCents < product.priceCents ? (
                           <span className="todays-offer__strike">
@@ -1113,7 +1113,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                   <div>
                     <strong>{formatCurrency(effectivePriceCents(product))}</strong>
                     {isBogoProduct(product) ? (
-                      <span className="product-card__bogo">Buy 1 Get 1 FREE</span>
+                      <span className="product-card__bogo">{bogoLabel(product)}</span>
                     ) : product.isOnOffer && product.offerPriceCents != null ? (
                       <span>{formatCurrency(product.priceCents)}</span>
                     ) : product.originalPriceCents ? (
@@ -1175,7 +1175,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                     </p>
                     {isBogoProduct(item.product) ? (
                       <p className="cart-row__bogo">
-                        Buy 1 Get 1 FREE · paying for {Math.ceil(item.quantity / 2)} of {item.quantity}
+                        {bogoLabel(item.product)} · paying for {bogoBillableQty(item.product, item.quantity)} of {item.quantity}
                       </p>
                     ) : null}
                     {item.product.stockQuantity <= 5 ? (

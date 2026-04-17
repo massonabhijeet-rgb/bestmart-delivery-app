@@ -38,6 +38,8 @@ export interface ProductRecord {
   isOnOffer: boolean;
   offerPriceCents: number | null;
   offerType: 'price' | 'bogo';
+  bogoBuyQty: number;
+  bogoGetQty: number;
   createdDate: string;
   updatedDate: string;
 }
@@ -107,6 +109,8 @@ interface OrderLookupProductRow {
   offerPriceCents: number | null;
   isOnOffer: boolean;
   offerType: string;
+  bogoBuyQty: number;
+  bogoGetQty: number;
   stockQuantity: number;
   isActive: boolean;
 }
@@ -207,6 +211,8 @@ function mapProduct(row: ProductRow): ProductRecord {
     isOnOffer: Boolean(row.isOnOffer),
     offerPriceCents: row.offerPriceCents ?? null,
     offerType: row.offerType === 'bogo' ? 'bogo' : 'price',
+    bogoBuyQty: Math.max(1, Number(row.bogoBuyQty ?? 1)),
+    bogoGetQty: Math.max(1, Number(row.bogoGetQty ?? 1)),
     createdDate: row.createdDate,
     updatedDate: row.updatedDate,
   };
@@ -328,6 +334,8 @@ async function createTables(client: PoolClient) {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS is_on_offer BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS offer_price_cents INTEGER;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS offer_type TEXT NOT NULL DEFAULT 'price';
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_buy_qty INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_get_qty INTEGER NOT NULL DEFAULT 1;
   `);
 
   await client.query(`
@@ -1576,6 +1584,8 @@ const PRODUCT_SELECT_COLUMNS = `
   p.is_on_offer AS "isOnOffer",
   p.offer_price_cents AS "offerPriceCents",
   p.offer_type AS "offerType",
+  p.bogo_buy_qty AS "bogoBuyQty",
+  p.bogo_get_qty AS "bogoGetQty",
   p.created_date AS "createdDate",
   p.updated_date AS "updatedDate"
 `;
@@ -1863,11 +1873,15 @@ export async function setProductOffer(
   companyId: number,
   isOnOffer: boolean,
   offerPriceCents: number | null,
-  offerType: 'price' | 'bogo' = 'price'
+  offerType: 'price' | 'bogo' = 'price',
+  bogoBuyQty: number = 1,
+  bogoGetQty: number = 1,
 ) {
   const resolvedType = isOnOffer ? offerType : 'price';
   const resolvedPrice =
     isOnOffer && resolvedType === 'price' ? offerPriceCents : null;
+  const resolvedBuy = resolvedType === 'bogo' ? Math.max(1, Math.round(bogoBuyQty || 1)) : 1;
+  const resolvedGet = resolvedType === 'bogo' ? Math.max(1, Math.round(bogoGetQty || 1)) : 1;
   const result = await pool.query<{ id: number }>(
     `
       UPDATE products
@@ -1875,11 +1889,13 @@ export async function setProductOffer(
         is_on_offer = $3,
         offer_price_cents = $4,
         offer_type = $5,
+        bogo_buy_qty = $6,
+        bogo_get_qty = $7,
         updated_date = NOW()
       WHERE unique_id = $1 AND company_id = $2
       RETURNING id;
     `,
-    [uniqueId, companyId, isOnOffer, resolvedPrice, resolvedType]
+    [uniqueId, companyId, isOnOffer, resolvedPrice, resolvedType, resolvedBuy, resolvedGet]
   );
   return result.rowCount ? readProductWithCategory(pool, result.rows[0].id) : null;
 }
@@ -2120,6 +2136,8 @@ export async function createOrder(input: CreateOrderInput) {
           offer_price_cents AS "offerPriceCents",
           is_on_offer AS "isOnOffer",
           offer_type AS "offerType",
+          bogo_buy_qty AS "bogoBuyQty",
+          bogo_get_qty AS "bogoGetQty",
           stock_quantity AS "stockQuantity",
           is_active AS "isActive"
         FROM products
@@ -2148,8 +2166,14 @@ export async function createOrder(input: CreateOrderInput) {
       }
       const isBogo = product.isOnOffer && product.offerType === 'bogo';
       const unitPriceCents = isBogo ? product.regularPriceCents : product.priceCents;
-      // Buy 1 Get 1: customer pays for ceil(qty/2), gets floor(qty/2) free.
-      const billableQty = isBogo ? Math.ceil(item.quantity / 2) : item.quantity;
+      // Generalised BOGO: for every (buy + get) units in the cart, `get` are free.
+      // e.g. buy=2, get=1 => every 3rd is free. buy=1, get=3 => every 4 units, 3 are free.
+      const buyQty = Math.max(1, product.bogoBuyQty ?? 1);
+      const getQty = Math.max(1, product.bogoGetQty ?? 1);
+      const freeUnits = isBogo
+        ? Math.floor(item.quantity / (buyQty + getQty)) * getQty
+        : 0;
+      const billableQty = Math.max(item.quantity - freeUnits, 0);
       const lineTotalCents = unitPriceCents * billableQty;
       subtotalCents += lineTotalCents;
       return {

@@ -277,10 +277,12 @@ router.patch(
       if (!uniqueId) {
         return res.status(400).json({ error: 'Product ID is required' });
       }
-      const { isOnOffer, offerPriceCents, offerType } = req.body as {
+      const { isOnOffer, offerPriceCents, offerType, bogoBuyQty, bogoGetQty } = req.body as {
         isOnOffer?: boolean;
         offerPriceCents?: number | null;
         offerType?: 'price' | 'bogo';
+        bogoBuyQty?: number;
+        bogoGetQty?: number;
       };
       if (typeof isOnOffer !== 'boolean') {
         return res.status(400).json({ error: 'isOnOffer boolean is required' });
@@ -297,12 +299,21 @@ router.patch(
       if (isOnOffer && resolvedType === 'price' && normalizedPrice == null) {
         return res.status(400).json({ error: 'offerPriceCents is required for price offers' });
       }
+      const buyQty =
+        resolvedType === 'bogo' ? Math.max(1, Math.round(Number(bogoBuyQty ?? 1))) : 1;
+      const getQty =
+        resolvedType === 'bogo' ? Math.max(1, Math.round(Number(bogoGetQty ?? 1))) : 1;
+      if (resolvedType === 'bogo' && (!Number.isFinite(buyQty) || !Number.isFinite(getQty))) {
+        return res.status(400).json({ error: 'bogoBuyQty and bogoGetQty must be positive integers' });
+      }
       const product = await setProductOffer(
         uniqueId,
         req.user.companyId,
         isOnOffer,
         normalizedPrice,
-        resolvedType
+        resolvedType,
+        buyQty,
+        getQty,
       );
       if (!product) {
         return res.status(404).json({ error: 'Product not found' });

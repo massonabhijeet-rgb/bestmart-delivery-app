@@ -776,7 +776,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     product: Product,
     isOnOffer: boolean,
     offerPriceCents: number | null = null,
-    offerType: 'price' | 'bogo' = 'price'
+    offerType: 'price' | 'bogo' = 'price',
+    bogoBuyQty: number = 1,
+    bogoGetQty: number = 1,
   ) {
     if (isOnOffer && offerType === 'price') {
       if (offerPriceCents == null || !Number.isFinite(offerPriceCents) || offerPriceCents < 0) {
@@ -788,6 +790,12 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         return;
       }
     }
+    if (isOnOffer && offerType === 'bogo') {
+      if (!Number.isInteger(bogoBuyQty) || bogoBuyQty < 1 || !Number.isInteger(bogoGetQty) || bogoGetQty < 1) {
+        setError('Buy and Get quantities must be positive integers.');
+        return;
+      }
+    }
     setTogglingOfferId(product.uniqueId);
     try {
       const updated = await apiToggleProductOffer(
@@ -795,13 +803,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         isOnOffer,
         isOnOffer && offerType === 'price' ? offerPriceCents : null,
         offerType,
+        bogoBuyQty,
+        bogoGetQty,
       );
       setProducts((prev) => prev.map((p) => (p.uniqueId === product.uniqueId ? updated : p)));
       setNotice(
         !isOnOffer
           ? `"${product.name}" removed from Today's Offers.`
           : offerType === 'bogo'
-            ? `"${product.name}" set to Buy 1 Get 1 Free.`
+            ? `"${product.name}" set to Buy ${bogoBuyQty} Get ${bogoGetQty} Free.`
             : `"${product.name}" on offer at ${formatCurrency(offerPriceCents ?? 0)}.`,
       );
       setError('');
@@ -814,6 +824,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   const [offerPriceDrafts, setOfferPriceDrafts] = useState<Record<string, string>>({});
   const [switchingToPrice, setSwitchingToPrice] = useState<Set<string>>(new Set());
+  // BOGO draft editor state: per-product { buy, get } strings so admins can edit freely.
+  const [bogoDrafts, setBogoDrafts] = useState<Record<string, { buy: string; get: string }>>({});
+  const [editingBogoFor, setEditingBogoFor] = useState<string | null>(null);
+
+  function setBogoDraft(uniqueId: string, patch: Partial<{ buy: string; get: string }>) {
+    setBogoDrafts((c) => ({
+      ...c,
+      [uniqueId]: { buy: c[uniqueId]?.buy ?? '1', get: c[uniqueId]?.get ?? '1', ...patch },
+    }));
+  }
+  function openBogoEditor(product: Product) {
+    setBogoDraft(product.uniqueId, {
+      buy: String(product.bogoBuyQty ?? 1),
+      get: String(product.bogoGetQty ?? 1),
+    });
+    setEditingBogoFor(product.uniqueId);
+  }
+  async function applyBogo(product: Product) {
+    const draft = bogoDrafts[product.uniqueId] ?? { buy: '1', get: '1' };
+    const buy = Math.round(Number(draft.buy));
+    const get = Math.round(Number(draft.get));
+    if (!Number.isInteger(buy) || buy < 1 || !Number.isInteger(get) || get < 1) {
+      setError('Buy and Get quantities must be positive integers.');
+      return;
+    }
+    await handleToggleOffer(product, true, null, 'bogo', buy, get);
+    setEditingBogoFor(null);
+  }
 
   function setOfferPriceDraft(uniqueId: string, value: string) {
     setOfferPriceDrafts((c) => ({ ...c, [uniqueId]: value }));
@@ -2883,8 +2921,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 const priceInput = draft !== undefined ? draft : currentOfferRupees;
                 const dirty = draft !== undefined && draft !== currentOfferRupees;
                 const isBogoOnServer = product.offerType === 'bogo';
+                const isEditingBogo = editingBogoFor === product.uniqueId;
+                const isSwitchingToPrice = switchingToPrice.has(product.uniqueId);
+                const bogoDraft = bogoDrafts[product.uniqueId] ?? {
+                  buy: String(product.bogoBuyQty ?? 1),
+                  get: String(product.bogoGetQty ?? 1),
+                };
+                // Price edit form shows when not BOGO, OR when switching from BOGO -> price
                 const showPriceForm =
-                  !isBogoOnServer || switchingToPrice.has(product.uniqueId);
+                  (!isBogoOnServer && !isEditingBogo) || isSwitchingToPrice;
                 return (
                   <article key={product.uniqueId} className="offer-card offer-card--active">
                     <div className="offer-card__thumb">
@@ -2897,7 +2942,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         Current: <strong>{formatCurrency(product.priceCents)}</strong>
                         {isBogoOnServer ? (
                           <span className="offer-card__tag offer-card__tag--bogo">
-                            Buy 1 Get 1 Free
+                            Buy {product.bogoBuyQty} Get {product.bogoGetQty} Free
                           </span>
                         ) : product.offerPriceCents != null ? (
                           <span className="offer-card__tag">
@@ -2915,20 +2960,67 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             value={priceInput}
                             onChange={(e) => setOfferPriceDraft(product.uniqueId, e.target.value)}
                             placeholder={`Less than ${product.priceCents / 100}`}
-                            autoFocus={switchingToPrice.has(product.uniqueId)}
+                            autoFocus={isSwitchingToPrice}
                           />
                         </label>
                       ) : null}
+                      {isEditingBogo ? (
+                        <div className="bogo-editor">
+                          <label className="bogo-editor__field">
+                            <span>Buy</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={bogoDraft.buy}
+                              onChange={(e) => setBogoDraft(product.uniqueId, { buy: e.target.value })}
+                              autoFocus
+                            />
+                          </label>
+                          <span className="bogo-editor__sep">Get</span>
+                          <label className="bogo-editor__field">
+                            <span>Free</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={bogoDraft.get}
+                              onChange={(e) => setBogoDraft(product.uniqueId, { get: e.target.value })}
+                            />
+                          </label>
+                          <span className="bogo-editor__preview">
+                            = Buy {bogoDraft.buy || '1'}, get {bogoDraft.get || '1'} free
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="offer-card__actions">
-                      {showPriceForm ? (
+                      {isEditingBogo ? (
+                        <>
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={togglingOfferId === product.uniqueId}
+                            onClick={() => void applyBogo(product)}
+                          >
+                            {togglingOfferId === product.uniqueId ? 'Saving…' : 'Save BOGO'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => setEditingBogoFor(null)}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : showPriceForm ? (
                         <>
                           <button
                             type="button"
                             className="primary-button"
                             disabled={
                               !priceInput ||
-                              (!dirty && !switchingToPrice.has(product.uniqueId))
+                              (!dirty && !isSwitchingToPrice)
                             }
                             onClick={async () => {
                               const rupees = Number(priceInput);
@@ -2950,11 +3042,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                               });
                             }}
                           >
-                            {switchingToPrice.has(product.uniqueId)
-                              ? 'Save offer price'
-                              : 'Update price'}
+                            {isSwitchingToPrice ? 'Save offer price' : 'Update price'}
                           </button>
-                          {switchingToPrice.has(product.uniqueId) ? (
+                          {isSwitchingToPrice ? (
                             <button
                               type="button"
                               className="ghost-button"
@@ -2973,27 +3063,36 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             <button
                               type="button"
                               className="ghost-button"
-                              onClick={() => handleToggleOffer(product, true, null, 'bogo')}
+                              onClick={() => openBogoEditor(product)}
                               disabled={togglingOfferId === product.uniqueId}
                             >
-                              {togglingOfferId === product.uniqueId ? 'Updating…' : 'Switch to Buy 1 Get 1'}
+                              Switch to Buy-Get offer
                             </button>
                           )}
                         </>
                       ) : (
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          onClick={() =>
-                            setSwitchingToPrice((s) => {
-                              const next = new Set(s);
-                              next.add(product.uniqueId);
-                              return next;
-                            })
-                          }
-                        >
-                          Switch to price offer
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => openBogoEditor(product)}
+                          >
+                            Edit BOGO
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              setSwitchingToPrice((s) => {
+                                const next = new Set(s);
+                                next.add(product.uniqueId);
+                                return next;
+                              })
+                            }
+                          >
+                            Switch to price offer
+                          </button>
+                        </>
                       )}
                       <button
                         type="button"
@@ -3026,6 +3125,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             <div className="offers-grid">
               {notOnOffer.map((product) => {
                 const draft = offerPriceDrafts[product.uniqueId] ?? '';
+                const isEditingBogo = editingBogoFor === product.uniqueId;
+                const bogoDraft = bogoDrafts[product.uniqueId] ?? { buy: '1', get: '1' };
                 return (
                   <article key={product.uniqueId} className="offer-card">
                     <div className="offer-card__thumb">
@@ -3037,43 +3138,95 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       <span className="offer-card__price">
                         {formatCurrency(product.priceCents)}
                       </span>
-                      <label className="offer-price-input">
-                        <span>Offer price (₹)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={draft}
-                          onChange={(e) => setOfferPriceDraft(product.uniqueId, e.target.value)}
-                          placeholder={`Less than ${product.priceCents / 100}`}
-                        />
-                      </label>
+                      {isEditingBogo ? (
+                        <div className="bogo-editor">
+                          <label className="bogo-editor__field">
+                            <span>Buy</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={bogoDraft.buy}
+                              onChange={(e) => setBogoDraft(product.uniqueId, { buy: e.target.value })}
+                              autoFocus
+                            />
+                          </label>
+                          <span className="bogo-editor__sep">Get</span>
+                          <label className="bogo-editor__field">
+                            <span>Free</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={bogoDraft.get}
+                              onChange={(e) => setBogoDraft(product.uniqueId, { get: e.target.value })}
+                            />
+                          </label>
+                          <span className="bogo-editor__preview">
+                            = Buy {bogoDraft.buy || '1'}, get {bogoDraft.get || '1'} free
+                          </span>
+                        </div>
+                      ) : (
+                        <label className="offer-price-input">
+                          <span>Offer price (₹)</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={draft}
+                            onChange={(e) => setOfferPriceDraft(product.uniqueId, e.target.value)}
+                            placeholder={`Less than ${product.priceCents / 100}`}
+                          />
+                        </label>
+                      )}
                     </div>
                     <div className="offer-card__actions">
-                      <button
-                        type="button"
-                        className="primary-button"
-                        disabled={!draft || togglingOfferId === product.uniqueId}
-                        onClick={() => {
-                          const rupees = Number(draft);
-                          if (!Number.isFinite(rupees) || rupees < 0) {
-                            setError('Enter a valid offer price.');
-                            return;
-                          }
-                          handleToggleOffer(product, true, Math.round(rupees * 100), 'price');
-                          setOfferPriceDraft(product.uniqueId, '');
-                        }}
-                      >
-                        {togglingOfferId === product.uniqueId ? 'Adding…' : 'Add at offer price'}
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => handleToggleOffer(product, true, null, 'bogo')}
-                        disabled={togglingOfferId === product.uniqueId}
-                      >
-                        {togglingOfferId === product.uniqueId ? 'Adding…' : 'Buy 1 Get 1 Free'}
-                      </button>
+                      {isEditingBogo ? (
+                        <>
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={togglingOfferId === product.uniqueId}
+                            onClick={() => void applyBogo(product)}
+                          >
+                            {togglingOfferId === product.uniqueId ? 'Adding…' : 'Add BOGO offer'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => setEditingBogoFor(null)}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="primary-button"
+                            disabled={!draft || togglingOfferId === product.uniqueId}
+                            onClick={() => {
+                              const rupees = Number(draft);
+                              if (!Number.isFinite(rupees) || rupees < 0) {
+                                setError('Enter a valid offer price.');
+                                return;
+                              }
+                              handleToggleOffer(product, true, Math.round(rupees * 100), 'price');
+                              setOfferPriceDraft(product.uniqueId, '');
+                            }}
+                          >
+                            {togglingOfferId === product.uniqueId ? 'Adding…' : 'Add at offer price'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => openBogoEditor(product)}
+                            disabled={togglingOfferId === product.uniqueId}
+                          >
+                            Buy-Get offer
+                          </button>
+                        </>
+                      )}
                     </div>
                   </article>
                 );

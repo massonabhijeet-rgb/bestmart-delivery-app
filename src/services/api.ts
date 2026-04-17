@@ -89,6 +89,8 @@ export interface Product {
   isOnOffer: boolean;
   offerPriceCents: number | null;
   offerType: 'price' | 'bogo';
+  bogoBuyQty: number;
+  bogoGetQty: number;
   createdDate: string;
   updatedDate: string;
 }
@@ -367,11 +369,13 @@ export async function apiToggleProductOffer(
   uniqueId: string,
   isOnOffer: boolean,
   offerPriceCents: number | null = null,
-  offerType: 'price' | 'bogo' = 'price'
+  offerType: 'price' | 'bogo' = 'price',
+  bogoBuyQty: number = 1,
+  bogoGetQty: number = 1,
 ) {
   const data = await request<{ product: Product }>(`/products/${uniqueId}/offer`, {
     method: 'PATCH',
-    body: JSON.stringify({ isOnOffer, offerPriceCents, offerType }),
+    body: JSON.stringify({ isOnOffer, offerPriceCents, offerType, bogoBuyQty, bogoGetQty }),
   });
   return data.product;
 }
