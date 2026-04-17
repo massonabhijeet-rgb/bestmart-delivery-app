@@ -45,9 +45,9 @@ function readRoute(): Route {
 
 function PageLoader() {
   return (
-    <div className="app-loading">
-      <div className="app-loading__orb" />
-      <p>Loading...</p>
+    <div className="page-loader">
+      <div className="page-loader__orb" />
+      <p>Loading…</p>
     </div>
   );
 }
@@ -126,11 +126,15 @@ function App() {
     setRoute(next);
   }
 
-  if (loading) {
+  // While the initial auth check is in flight we don't block the whole
+  // page — just render the route as anonymous and let Storefront show
+  // its own loader. This prevents a second, differently-styled loader
+  // from flashing on top of the storefront's initial-load spinner.
+  if (loading && (route.view === 'dashboard' || route.view === 'my-orders' || route.view === 'rider')) {
     return (
       <div className="app-loading">
         <div className="app-loading__orb" />
-        <p>Loading BestMart...</p>
+        <p>Loading…</p>
       </div>
     );
   }

@@ -118,17 +118,33 @@ p {
 /* ═══════════════════════════════════════════
    APP LOADING
 ═══════════════════════════════════════════ */
-.app-loading {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  gap: var(--sp-4);
-  background:
-    radial-gradient(circle at center, rgba(30, 136, 229, 0.15), transparent 30%),
-    linear-gradient(180deg, #EDF2FF 0%, #DDEAFF 100%);
+.app-loading,
+.page-loader,
+.store-loading {
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: var(--c-ink-3);
+  padding: var(--sp-6) var(--sp-4);
+  background: transparent;
+}
+.app-loading { min-height: 100vh; }
+.page-loader { min-height: 100vh; }
+
+.app-loading p,
+.page-loader p,
+.store-loading p {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .app-loading__orb,
+.page-loader__orb,
 .store-loading__orb,
 .busy-overlay__spinner {
   width: 56px;
@@ -145,20 +161,8 @@ p {
           mask: radial-gradient(circle at center, transparent 22px, #000 23px);
 }
 
-.app-loading__orb {
-  width: 72px;
-  height: 72px;
-  -webkit-mask: radial-gradient(circle at center, transparent 28px, #000 29px);
-          mask: radial-gradient(circle at center, transparent 28px, #000 29px);
-}
-
 @keyframes bm-spin {
   to { transform: rotate(360deg); }
-}
-
-.app-loading p {
-  font-weight: 600;
-  color: var(--c-ink-2);
 }
 
 /* ═══════════════════════════════════════════
@@ -4123,27 +4127,6 @@ textarea {
   .coupon-banners__row { grid-template-columns: 1fr; }
   .coupon-banner__discount-num { font-size: 2.1rem; }
 }
-
-/* ─────────────────────────────────────
-   Storefront initial loader
-   ───────────────────────────────────── */
-.store-loading {
-  min-height: 60vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  color: var(--c-ink-3);
-  padding: var(--sp-6) var(--sp-4);
-}
-.store-loading p {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-/* (store-loading__orb uses the unified spinner defined near .app-loading__orb) */
 
 /* ─────────────────────────────────────
    Weather-based picks (landing page)
