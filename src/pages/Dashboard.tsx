@@ -754,22 +754,55 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   // ── Bulk import helpers ──────────────────────────────────────────────────
 
-  function downloadBulkTemplate() {
-    const categoryList = categories.map((c) => c.name).join(', ');
-    const hint = `# HOW TO USE: Fill rows below the headers. category must exactly match one of: ${categoryList}. price/originalPrice in rupees (e.g. 199). isActive: TRUE or FALSE.`;
-    const headers = ['name', 'category', 'unitLabel', 'description', 'price', 'originalPrice', 'stockQuantity', 'badge', 'imageUrl', 'isActive'];
-    const example = ['Amul Fresh Milk', categories[0]?.name ?? 'Dairy', '1 L pouch', 'Fresh toned milk, chilled daily.', '64', '', '50', 'Daily', '', 'TRUE'];
-    const rows = [
-      [hint],
-      headers,
-      example,
+  async function downloadBulkTemplate() {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Inventory');
+
+    const headers = ['name', 'category', 'unitLabel', 'description', 'price', 'originalPrice', 'stockQuantity', 'badge'];
+    ws.addRow(headers);
+
+    // Header styling
+    ws.getRow(1).eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7F7F5' } };
+      cell.alignment = { vertical: 'middle' };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFB0B8C4' } } };
+    });
+
+    // Column widths
+    ws.columns = [
+      { width: 28 }, // name
+      { width: 22 }, // category
+      { width: 16 }, // unitLabel
+      { width: 42 }, // description
+      { width: 10 }, // price
+      { width: 14 }, // originalPrice
+      { width: 14 }, // stockQuantity
+      { width: 14 }, // badge
     ];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+
+    // Dropdown for category — rows 2 to 1000
+    const categoryNames = categories.map((c) => c.name);
+    const listFormula = `"${categoryNames.join(',')}"`;
+    for (let r = 2; r <= 1000; r++) {
+      ws.getCell(`B${r}`).dataValidation = {
+        type: 'list',
+        allowBlank: true,
+        formulae: [listFormula],
+        showErrorMessage: true,
+        errorStyle: 'error',
+        errorTitle: 'Invalid category',
+        error: 'Pick a category from the dropdown list.',
+      };
+    }
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'bestmart-inventory-template.csv';
+    a.download = 'bestmart-inventory-template.xlsx';
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -798,75 +831,101 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     });
   }
 
-  function handleBulkFile(file: File) {
+  function buildParsedRows(allRows: string[][]): BulkProductRow[] {
+    const dataRows = allRows.filter((r) => !(r[0] ?? '').startsWith('#'));
+    if (dataRows.length < 2) return [];
+    const [headerRow, ...bodyRows] = dataRows;
+    const col = (name: string) => headerRow.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase());
+    const iName = col('name'), iCat = col('category'), iUnit = col('unitlabel'),
+      iDesc = col('description'), iPrice = col('price'), iOriginal = col('originalprice'),
+      iStock = col('stockquantity'), iBadge = col('badge');
+
+    if ([iName, iCat, iUnit, iDesc, iPrice, iStock].some((i) => i === -1)) {
+      setError('File is missing required columns. Please download and use the latest template.');
+      return [];
+    }
+
+    return bodyRows.map((row, idx) => {
+      const errs: string[] = [];
+      const name = (row[iName] ?? '').trim();
+      const categoryName = (row[iCat] ?? '').trim();
+      const unitLabel = (row[iUnit] ?? '').trim();
+      const description = (row[iDesc] ?? '').trim();
+      const priceRaw = parseFloat(row[iPrice] ?? '');
+      const originalRaw = row[iOriginal] ? parseFloat(row[iOriginal]) : null;
+      const stockRaw = parseInt(row[iStock] ?? '', 10);
+      const badge = (row[iBadge] ?? '').trim() || null;
+
+      if (!name) errs.push('Name is required');
+      if (!categoryName) errs.push('Category is required');
+      if (!unitLabel) errs.push('Unit label is required');
+      if (!description) errs.push('Description is required');
+      if (!Number.isFinite(priceRaw) || priceRaw < 0) errs.push('Price must be a positive number');
+      if (originalRaw !== null && (!Number.isFinite(originalRaw) || originalRaw < 0)) errs.push('Original price must be a positive number');
+      if (!Number.isFinite(stockRaw) || stockRaw < 0) errs.push('Stock quantity must be a non-negative integer');
+
+      const matchedCat = categories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase());
+      if (categoryName && !matchedCat) errs.push(`Category "${categoryName}" not found`);
+
+      return {
+        rowNum: idx + 2,
+        name,
+        categoryName,
+        categoryId: matchedCat?.id ?? null,
+        unitLabel,
+        description,
+        priceCents: Math.round((priceRaw || 0) * 100),
+        originalPriceCents: originalRaw !== null ? Math.round(originalRaw * 100) : null,
+        stockQuantity: stockRaw || 0,
+        badge,
+        imageUrl: null,
+        isActive: true,
+        errors: errs,
+      };
+    }).filter((r) => r.name || r.categoryName || r.unitLabel);
+  }
+
+  async function handleBulkFile(file: File) {
     setBulkResult(null);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const allRows = parseCSV(text);
-      // Skip comment rows (starting with #) and find header row
-      const dataRows = allRows.filter((r) => !r[0]?.startsWith('#'));
-      if (dataRows.length < 2) {
-        setError('CSV has no data rows. Download the template and fill it in.');
+    try {
+      const isXlsx = /\.xlsx$/i.test(file.name) || file.type.includes('spreadsheet');
+      let allRows: string[][] = [];
+
+      if (isXlsx) {
+        const ExcelJS = (await import('exceljs')).default;
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(await file.arrayBuffer());
+        const ws = wb.worksheets[0];
+        if (!ws) {
+          setError('Excel file has no worksheets.');
+          return;
+        }
+        ws.eachRow({ includeEmpty: false }, (row) => {
+          const cells: string[] = [];
+          const rowValues = row.values as Array<unknown>;
+          for (let i = 1; i < rowValues.length; i++) {
+            const v = rowValues[i];
+            if (v == null) cells.push('');
+            else if (typeof v === 'object' && v !== null && 'text' in v) cells.push(String((v as { text: string }).text ?? ''));
+            else if (typeof v === 'object' && v !== null && 'result' in v) cells.push(String((v as { result: unknown }).result ?? ''));
+            else cells.push(String(v));
+          }
+          allRows.push(cells);
+        });
+      } else {
+        const text = await file.text();
+        allRows = parseCSV(text);
+      }
+
+      const parsed = buildParsedRows(allRows);
+      if (parsed.length === 0) {
+        setError('No data rows found. Download the template and fill it in.');
         return;
       }
-      const [headerRow, ...bodyRows] = dataRows;
-      const col = (name: string) => headerRow.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase());
-      const iName = col('name'), iCat = col('category'), iUnit = col('unitlabel'),
-        iDesc = col('description'), iPrice = col('price'), iOriginal = col('originalprice'),
-        iStock = col('stockquantity'), iBadge = col('badge'), iImgUrl = col('imageurl'),
-        iActive = col('isactive');
-
-      if ([iName, iCat, iUnit, iDesc, iPrice, iStock].some((i) => i === -1)) {
-        setError('CSV is missing required columns. Please use the downloaded template.');
-        return;
-      }
-
-      const parsed: BulkProductRow[] = bodyRows.map((row, idx) => {
-        const errs: string[] = [];
-        const name = row[iName]?.trim() ?? '';
-        const categoryName = row[iCat]?.trim() ?? '';
-        const unitLabel = row[iUnit]?.trim() ?? '';
-        const description = row[iDesc]?.trim() ?? '';
-        const priceRaw = parseFloat(row[iPrice] ?? '');
-        const originalRaw = row[iOriginal] ? parseFloat(row[iOriginal]) : null;
-        const stockRaw = parseInt(row[iStock] ?? '', 10);
-        const badge = row[iBadge]?.trim() || null;
-        const imageUrl = row[iImgUrl]?.trim() || null;
-        const isActiveRaw = row[iActive]?.trim().toUpperCase();
-        const isActive = isActiveRaw === '' || isActiveRaw === undefined || isActiveRaw === 'TRUE';
-
-        if (!name) errs.push('Name is required');
-        if (!categoryName) errs.push('Category is required');
-        if (!unitLabel) errs.push('Unit label is required');
-        if (!description) errs.push('Description is required');
-        if (!Number.isFinite(priceRaw) || priceRaw < 0) errs.push('Price must be a positive number');
-        if (originalRaw !== null && (!Number.isFinite(originalRaw) || originalRaw < 0)) errs.push('Original price must be a positive number');
-        if (!Number.isFinite(stockRaw) || stockRaw < 0) errs.push('Stock quantity must be a non-negative integer');
-
-        const matchedCat = categories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase());
-        if (categoryName && !matchedCat) errs.push(`Category "${categoryName}" not found`);
-
-        return {
-          rowNum: idx + 2,
-          name,
-          categoryName,
-          categoryId: matchedCat?.id ?? null,
-          unitLabel,
-          description,
-          priceCents: Math.round((priceRaw || 0) * 100),
-          originalPriceCents: originalRaw !== null ? Math.round(originalRaw * 100) : null,
-          stockQuantity: stockRaw || 0,
-          badge,
-          imageUrl,
-          isActive,
-          errors: errs,
-        };
-      }).filter((r) => r.name || r.categoryName || r.unitLabel);
-
       setBulkRows(parsed);
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      setError(err instanceof Error ? `Could not read file: ${err.message}` : 'Could not read file');
+    }
   }
 
   async function handleBulkImport() {
@@ -1637,21 +1696,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <div className="bulk-step__body">
                     <span className="bulk-step__title">Download blank template</span>
                     <span className="bulk-step__desc">
-                      A CSV pre-filled with headers and one example row. Open in Excel, Google Sheets, or Numbers.
+                      An Excel file with headers and a dropdown list of your categories. Open in Excel, Google Sheets, or Numbers.
                     </span>
-                    <button type="button" className="bulk-step__btn" onClick={downloadBulkTemplate}>
+                    <button type="button" className="bulk-step__btn" onClick={() => { void downloadBulkTemplate(); }}>
                       <svg viewBox="0 0 20 20" fill="none">
                         <path d="M10 3v10M6 13l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
                         <path d="M3 17h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
                       </svg>
-                      Download template.csv
+                      Download template.xlsx
                     </button>
-                    <div className="bulk-step__hint">
-                      Available categories:&nbsp;
-                      <span className="bulk-step__cats">
-                        {categories.map((c) => c.name).join(' · ')}
-                      </span>
-                    </div>
                   </div>
                 </div>
 
@@ -1661,22 +1714,22 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <div className="bulk-step__body">
                     <span className="bulk-step__title">Upload filled template</span>
                     <span className="bulk-step__desc">
-                      Select your completed CSV file. We'll validate every row before importing.
+                      Select your completed Excel (.xlsx) or CSV file. We'll validate every row before importing.
                     </span>
                     <label className="bulk-drop-zone">
                       <svg viewBox="0 0 24 24" fill="none">
                         <path d="M12 4v12M8 12l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
                         <path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
                       </svg>
-                      <span className="bulk-drop-zone__label">Click to choose a CSV file</span>
-                      <span className="bulk-drop-zone__sub">or drag and drop</span>
+                      <span className="bulk-drop-zone__label">Click to choose a file</span>
+                      <span className="bulk-drop-zone__sub">or drag and drop — .xlsx or .csv</span>
                       <input
                         type="file"
-                        accept=".csv,text/csv"
+                        accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
                         style={{ display: 'none' }}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
-                          if (file) handleBulkFile(file);
+                          if (file) void handleBulkFile(file);
                           e.target.value = '';
                         }}
                       />
