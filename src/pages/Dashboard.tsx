@@ -30,8 +30,12 @@ import {
   apiListSlowMovers,
   apiSalesReport,
   apiUpdateAppSettings,
+  apiListCoupons,
+  apiCreateCoupon,
+  apiUpdateCoupon,
+  apiDeleteCoupon,
 } from '../services/api';
-import type { BulkImageUploadResult, SalesReport, SlowMoverSuggestion } from '../services/api';
+import type { BulkImageUploadResult, Coupon, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -107,7 +111,7 @@ const defaultProductForm: ProductFormState = {
   isActive: true,
 };
 
-type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'team';
+type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'team';
 
 function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
@@ -175,6 +179,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [historySearch, setHistorySearch] = useState('');
   const [historySort, setHistorySort] = useState<'date_desc' | 'date_asc' | 'total_desc' | 'total_asc'>('date_desc');
   const [historyExpanded, setHistoryExpanded] = useState<string | null>(null);
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [couponsLoading, setCouponsLoading] = useState(false);
+  const [editingCoupon, setEditingCoupon] = useState<Coupon | null>(null);
+  const [showCouponForm, setShowCouponForm] = useState(false);
+  const [couponForm, setCouponForm] = useState<{
+    code: string;
+    description: string;
+    discountType: 'percent' | 'flat';
+    discountValueRupees: string;
+    maxDiscountRupees: string;
+    minSubtotalRupees: string;
+    maxUsesPerUser: string;
+    maxTotalUses: string;
+    isActive: boolean;
+    validUntil: string;
+  }>({
+    code: '',
+    description: '',
+    discountType: 'percent',
+    discountValueRupees: '10',
+    maxDiscountRupees: '',
+    minSubtotalRupees: '0',
+    maxUsesPerUser: '1',
+    maxTotalUses: '',
+    isActive: true,
+    validUntil: '',
+  });
+  const [savingCoupon, setSavingCoupon] = useState(false);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -1071,6 +1103,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     { key: 'inventory', label: 'Inventory' },
     ...(canManageCatalog ? [{ key: 'categories' as DashTab, label: 'Categories' }] : []),
     ...(canManageCatalog ? [{ key: 'offers' as DashTab, label: "Today's Offers" }] : []),
+    ...(canManageTeam ? [{ key: 'coupons' as DashTab, label: 'Coupons' }] : []),
     ...(canManageTeam ? [{ key: 'team' as DashTab, label: 'Team' }] : []),
   ];
 
@@ -1138,6 +1171,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         {activeTab === 'inventory' && renderInventory()}
         {activeTab === 'categories' && renderCategories()}
         {activeTab === 'offers' && renderOffers()}
+        {activeTab === 'coupons' && renderCoupons()}
         {activeTab === 'team' && renderTeam()}
       </main>
 
@@ -3560,6 +3594,319 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               )}
             </div>
           </>
+        )}
+      </div>
+    );
+  }
+
+  // ── Coupons ────────────────────────────────────────────────────────
+  const loadCoupons = useCallback(async () => {
+    if (!canManageTeam) return;
+    setCouponsLoading(true);
+    try {
+      const list = await apiListCoupons();
+      setCoupons(list);
+    } catch (err) {
+      console.warn('Failed to load coupons', err);
+    } finally {
+      setCouponsLoading(false);
+    }
+  }, [canManageTeam]);
+
+  useEffect(() => {
+    if (activeTab === 'coupons' && canManageTeam) void loadCoupons();
+  }, [activeTab, canManageTeam, loadCoupons]);
+
+  function openNewCouponForm() {
+    setEditingCoupon(null);
+    setCouponForm({
+      code: '',
+      description: '',
+      discountType: 'percent',
+      discountValueRupees: '10',
+      maxDiscountRupees: '',
+      minSubtotalRupees: '0',
+      maxUsesPerUser: '1',
+      maxTotalUses: '',
+      isActive: true,
+      validUntil: '',
+    });
+    setShowCouponForm(true);
+  }
+
+  function openEditCouponForm(c: Coupon) {
+    setEditingCoupon(c);
+    setCouponForm({
+      code: c.code,
+      description: c.description,
+      discountType: c.discountType,
+      discountValueRupees:
+        c.discountType === 'flat' ? String(c.discountValue / 100) : String(c.discountValue),
+      maxDiscountRupees: c.maxDiscountCents != null ? String(c.maxDiscountCents / 100) : '',
+      minSubtotalRupees: String(c.minSubtotalCents / 100),
+      maxUsesPerUser: String(c.maxUsesPerUser),
+      maxTotalUses: c.maxTotalUses != null ? String(c.maxTotalUses) : '',
+      isActive: c.isActive,
+      validUntil: c.validUntil ? c.validUntil.slice(0, 10) : '',
+    });
+    setShowCouponForm(true);
+  }
+
+  async function handleSaveCoupon() {
+    const code = couponForm.code.trim().toUpperCase();
+    const value = Number(couponForm.discountValueRupees);
+    const maxUsesPerUser = Number(couponForm.maxUsesPerUser);
+    if (!code) { setError('Coupon code is required.'); return; }
+    if (!Number.isFinite(value) || value <= 0) { setError('Discount value must be > 0.'); return; }
+    if (couponForm.discountType === 'percent' && value > 100) { setError('Percent discount can\'t exceed 100.'); return; }
+    if (!Number.isInteger(maxUsesPerUser) || maxUsesPerUser < 1) {
+      setError('Per-user usage limit (N) must be at least 1.');
+      return;
+    }
+    setSavingCoupon(true);
+    try {
+      const payload: Partial<Coupon> = {
+        code,
+        description: couponForm.description.trim(),
+        discountType: couponForm.discountType,
+        discountValue: couponForm.discountType === 'flat' ? Math.round(value * 100) : Math.round(value),
+        maxDiscountCents: couponForm.maxDiscountRupees
+          ? Math.round(Number(couponForm.maxDiscountRupees) * 100)
+          : null,
+        minSubtotalCents: Math.round(Number(couponForm.minSubtotalRupees || '0') * 100),
+        maxUsesPerUser,
+        maxTotalUses: couponForm.maxTotalUses ? Math.round(Number(couponForm.maxTotalUses)) : null,
+        isActive: couponForm.isActive,
+        validUntil: couponForm.validUntil
+          ? new Date(`${couponForm.validUntil}T23:59:59`).toISOString()
+          : null,
+      };
+      if (editingCoupon) {
+        await apiUpdateCoupon(editingCoupon.id, payload);
+        setNotice(`Coupon ${code} updated.`);
+      } else {
+        await apiCreateCoupon(payload);
+        setNotice(`Coupon ${code} created.`);
+      }
+      setError('');
+      setShowCouponForm(false);
+      setEditingCoupon(null);
+      await loadCoupons();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save coupon');
+    } finally {
+      setSavingCoupon(false);
+    }
+  }
+
+  async function handleDeleteCoupon(c: Coupon) {
+    const ok = await confirm({
+      title: `Delete coupon "${c.code}"?`,
+      message: c.totalRedemptions > 0
+        ? `This coupon has been used ${c.totalRedemptions} time(s). Deleting it will not affect existing orders, but no one will be able to use it again.`
+        : 'This action cannot be undone.',
+      confirmLabel: 'Delete coupon',
+      cancelLabel: 'Keep',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await apiDeleteCoupon(c.id);
+      setNotice(`Coupon ${c.code} deleted.`);
+      setError('');
+      await loadCoupons();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete coupon');
+    }
+  }
+
+  function renderCoupons() {
+    if (!canManageTeam) {
+      return <div className="section-box"><div className="empty-state">Only admins can manage coupons.</div></div>;
+    }
+    return (
+      <div className="section-box">
+        <div className="section-box__head">
+          <div>
+            <h2>Coupons</h2>
+            <p>Create promo codes that customers can redeem at checkout.</p>
+          </div>
+          <button type="button" className="primary-button" onClick={openNewCouponForm}>
+            + New Coupon
+          </button>
+        </div>
+
+        {showCouponForm && (
+          <div className="coupon-form">
+            <div className="coupon-form__field">
+              <span>Code</span>
+              <input
+                value={couponForm.code}
+                onChange={(e) => setCouponForm((c) => ({ ...c, code: e.target.value.toUpperCase() }))}
+                placeholder="WELCOME10"
+                maxLength={40}
+                style={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}
+              />
+            </div>
+            <div className="coupon-form__field">
+              <span>Discount type</span>
+              <select
+                value={couponForm.discountType}
+                onChange={(e) => setCouponForm((c) => ({ ...c, discountType: e.target.value as 'percent' | 'flat' }))}
+              >
+                <option value="percent">Percent (%)</option>
+                <option value="flat">Flat amount (₹)</option>
+              </select>
+            </div>
+            <div className="coupon-form__field">
+              <span>{couponForm.discountType === 'percent' ? 'Discount %' : 'Discount ₹'}</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={couponForm.discountValueRupees}
+                onChange={(e) => setCouponForm((c) => ({ ...c, discountValueRupees: e.target.value }))}
+              />
+            </div>
+            {couponForm.discountType === 'percent' && (
+              <div className="coupon-form__field">
+                <span>Max discount cap (₹)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={couponForm.maxDiscountRupees}
+                  onChange={(e) => setCouponForm((c) => ({ ...c, maxDiscountRupees: e.target.value }))}
+                  placeholder="No cap"
+                />
+                <span className="coupon-form__hint">Leave blank for no cap</span>
+              </div>
+            )}
+            <div className="coupon-form__field">
+              <span>Min order subtotal (₹)</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={couponForm.minSubtotalRupees}
+                onChange={(e) => setCouponForm((c) => ({ ...c, minSubtotalRupees: e.target.value }))}
+              />
+            </div>
+            <div className="coupon-form__field">
+              <span>Per-user uses (N)</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={couponForm.maxUsesPerUser}
+                onChange={(e) => setCouponForm((c) => ({ ...c, maxUsesPerUser: e.target.value }))}
+              />
+              <span className="coupon-form__hint">How many times each user can redeem</span>
+            </div>
+            <div className="coupon-form__field">
+              <span>Total uses cap</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={couponForm.maxTotalUses}
+                onChange={(e) => setCouponForm((c) => ({ ...c, maxTotalUses: e.target.value }))}
+                placeholder="Unlimited"
+              />
+              <span className="coupon-form__hint">Across all users — leave blank for unlimited</span>
+            </div>
+            <div className="coupon-form__field">
+              <span>Valid until</span>
+              <input
+                type="date"
+                value={couponForm.validUntil}
+                onChange={(e) => setCouponForm((c) => ({ ...c, validUntil: e.target.value }))}
+                min={new Date().toISOString().slice(0, 10)}
+              />
+              <span className="coupon-form__hint">Leave blank for no expiry</span>
+            </div>
+            <div className="coupon-form__field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                id="coupon-active"
+                checked={couponForm.isActive}
+                onChange={(e) => setCouponForm((c) => ({ ...c, isActive: e.target.checked }))}
+              />
+              <label htmlFor="coupon-active" style={{ fontSize: '0.9rem', color: 'var(--c-ink)' }}>
+                Active (customers can redeem)
+              </label>
+            </div>
+            <div className="coupon-form__field coupon-form__field--full">
+              <span>Description (optional)</span>
+              <textarea
+                value={couponForm.description}
+                onChange={(e) => setCouponForm((c) => ({ ...c, description: e.target.value }))}
+                placeholder="Internal note — shown to customers when applied"
+              />
+            </div>
+            <div className="coupon-form__actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => { setShowCouponForm(false); setEditingCoupon(null); }}
+                disabled={savingCoupon}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleSaveCoupon()}
+                disabled={savingCoupon}
+              >
+                {savingCoupon ? 'Saving…' : editingCoupon ? 'Save changes' : 'Create coupon'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {couponsLoading && coupons.length === 0 && (
+          <div className="empty-state" style={{ margin: 'var(--sp-5) var(--sp-6)' }}>Loading coupons…</div>
+        )}
+        {!couponsLoading && coupons.length === 0 && (
+          <div className="empty-state" style={{ margin: 'var(--sp-5) var(--sp-6)' }}>
+            No coupons yet. Click "+ New Coupon" to create one.
+          </div>
+        )}
+
+        {coupons.length > 0 && (
+          <div className="coupons-grid">
+            {coupons.map((c) => {
+              const expiresLabel = c.validUntil
+                ? `Expires ${new Date(c.validUntil).toLocaleDateString()}`
+                : 'No expiry';
+              const totalLabel = c.maxTotalUses != null
+                ? `${c.totalRedemptions} / ${c.maxTotalUses}`
+                : `${c.totalRedemptions}`;
+              const discountLabel = c.discountType === 'percent'
+                ? `${c.discountValue}%${c.maxDiscountCents != null ? ` (max ${formatCurrency(c.maxDiscountCents)})` : ''}`
+                : formatCurrency(c.discountValue);
+              return (
+                <article key={c.id} className={`coupon-card${c.isActive ? '' : ' coupon-card--inactive'}`}>
+                  <div className="coupon-card__head">
+                    <span className="coupon-card__code">{c.code}</span>
+                    <span className="coupon-card__discount">{discountLabel} off</span>
+                  </div>
+                  {c.description && <p className="coupon-card__desc">{c.description}</p>}
+                  <div className="coupon-card__meta">
+                    <span>Min order: <strong>{formatCurrency(c.minSubtotalCents)}</strong></span>
+                    <span>Per-user: <strong>{c.maxUsesPerUser}×</strong></span>
+                    <span>Total used: <strong>{totalLabel}</strong></span>
+                    <span>{expiresLabel}</span>
+                  </div>
+                  <div className="coupon-card__actions">
+                    <button type="button" className="ghost-button" onClick={() => openEditCouponForm(c)}>Edit</button>
+                    <button type="button" className="ghost-button ghost-button--danger" onClick={() => void handleDeleteCoupon(c)}>Delete</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         )}
       </div>
     );

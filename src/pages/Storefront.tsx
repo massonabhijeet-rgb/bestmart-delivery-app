@@ -7,7 +7,9 @@ import {
   apiGetProducts,
   apiListAddresses,
   apiListCategories,
+  apiPreviewCoupon,
 } from '../services/api';
+import type { CouponPreview } from '../services/api';
 import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
@@ -74,6 +76,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   } | null>(null);
   const [locationStatus, setLocationStatus] = useState<'idle' | 'capturing' | 'error'>('idle');
   const [locationError, setLocationError] = useState('');
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<CouponPreview | null>(null);
+  const [couponStatus, setCouponStatus] = useState<'idle' | 'applying' | 'error'>('idle');
+  const [couponError, setCouponError] = useState('');
 
   function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
     if (!('geolocation' in navigator) || !window.isSecureContext) {
@@ -278,8 +284,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         ? baseDeliveryFeeCents
         : 0;
   // Promo: 50% off up to ₹200 on orders above ₹500 (50000 cents).
-  const discountCents =
+  const promoDiscountCents =
     subtotalCents >= 50000 ? Math.min(Math.floor(subtotalCents / 2), 20000) : 0;
+  const couponDiscountCents = appliedCoupon ? Math.min(appliedCoupon.discountCents, subtotalCents - promoDiscountCents) : 0;
+  const discountCents = Math.min(promoDiscountCents + Math.max(couponDiscountCents, 0), subtotalCents);
   const totalCents = Math.max(subtotalCents + deliveryFeeCents - discountCents, 0);
   const trackUrl = latestOrder
     ? `${window.location.origin}${window.location.pathname}#track/${latestOrder.publicId}`
@@ -343,11 +351,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           })),
           deliveryLatitude: coords.latitude,
           deliveryLongitude: coords.longitude,
+          couponCode: appliedCoupon?.code ?? null,
         });
       });
 
       setLatestOrder(order);
       setCart({});
+      setAppliedCoupon(null);
+      setCouponInput('');
       setCheckoutForm((current) => ({
         ...current,
         deliveryNotes: '',
@@ -380,6 +391,51 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       setCancellingOrder(false);
     }
   }
+
+  async function handleApplyCoupon() {
+    const code = couponInput.trim();
+    if (!code) return;
+    if (subtotalCents <= 0) {
+      setCouponError('Add items to your cart first.');
+      setCouponStatus('error');
+      return;
+    }
+    setCouponStatus('applying');
+    setCouponError('');
+    try {
+      const preview = await apiPreviewCoupon(code, subtotalCents);
+      setAppliedCoupon(preview);
+      setCouponStatus('idle');
+    } catch (err) {
+      setAppliedCoupon(null);
+      setCouponError(err instanceof Error ? err.message : 'Could not apply coupon');
+      setCouponStatus('error');
+    }
+  }
+
+  function handleRemoveCoupon() {
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError('');
+    setCouponStatus('idle');
+  }
+
+  // Re-validate the coupon when subtotal changes so users see live feedback.
+  useEffect(() => {
+    if (!appliedCoupon) return;
+    if (subtotalCents <= 0) {
+      setAppliedCoupon(null);
+      return;
+    }
+    apiPreviewCoupon(appliedCoupon.code, subtotalCents)
+      .then((p) => setAppliedCoupon(p))
+      .catch(() => {
+        setAppliedCoupon(null);
+        setCouponError('Coupon no longer applies to this cart.');
+        setCouponStatus('error');
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subtotalCents]);
 
   const latestCancellable = Boolean(
     latestOrder && ['placed', 'confirmed', 'packing'].includes(latestOrder.status),
@@ -968,6 +1024,43 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               ) : null}
             </div>
 
+            {/* Coupon */}
+            <div className="coupon-block">
+              {appliedCoupon ? (
+                <div className="coupon-block__applied">
+                  <div>
+                    <strong>Coupon {appliedCoupon.code} applied</strong>
+                    <p>You're saving {formatCurrency(appliedCoupon.discountCents)}.</p>
+                  </div>
+                  <button type="button" className="ghost-button" onClick={handleRemoveCoupon}>
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <label className="coupon-block__row">
+                    <input
+                      type="text"
+                      value={couponInput}
+                      onChange={(e) => { setCouponInput(e.target.value); if (couponError) setCouponError(''); }}
+                      placeholder="Have a coupon code?"
+                      autoCapitalize="characters"
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleApplyCoupon(); } }}
+                    />
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void handleApplyCoupon()}
+                      disabled={!couponInput.trim() || couponStatus === 'applying' || subtotalCents <= 0}
+                    >
+                      {couponStatus === 'applying' ? 'Applying…' : 'Apply'}
+                    </button>
+                  </label>
+                  {couponError && <span className="coupon-block__error">{couponError}</span>}
+                </>
+              )}
+            </div>
+
             <div className="totals-card">
               <div>
                 <span>Subtotal</span>
@@ -977,10 +1070,16 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 <span>Delivery</span>
                 <strong>{deliveryFeeCents ? formatCurrency(deliveryFeeCents) : 'Free'}</strong>
               </div>
-              {discountCents > 0 ? (
+              {promoDiscountCents > 0 ? (
                 <div className="totals-card__discount">
                   <span>50% off promo</span>
-                  <strong>- {formatCurrency(discountCents)}</strong>
+                  <strong>- {formatCurrency(promoDiscountCents)}</strong>
+                </div>
+              ) : null}
+              {couponDiscountCents > 0 && appliedCoupon ? (
+                <div className="totals-card__discount">
+                  <span>Coupon {appliedCoupon.code}</span>
+                  <strong>- {formatCurrency(couponDiscountCents)}</strong>
                 </div>
               ) : null}
               <div className="totals-card__grand">

@@ -400,12 +400,75 @@ export async function apiCreateOrder(payload: {
   items: Array<{ productId: string; quantity: number }>;
   deliveryLatitude: number;
   deliveryLongitude: number;
+  couponCode?: string | null;
 }) {
   const data = await request<{ order: Order }>('/orders', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   return data.order;
+}
+
+export type CouponDiscountType = 'percent' | 'flat';
+
+export interface Coupon {
+  id: number;
+  companyId: number;
+  code: string;
+  description: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  maxDiscountCents: number | null;
+  minSubtotalCents: number;
+  maxUsesPerUser: number;
+  maxTotalUses: number | null;
+  isActive: boolean;
+  validFrom: string;
+  validUntil: string | null;
+  createdDate: string;
+  updatedDate: string;
+  totalRedemptions: number;
+}
+
+export interface CouponPreview {
+  code: string;
+  description: string;
+  discountCents: number;
+  discountType: CouponDiscountType;
+  discountValue: number;
+}
+
+export async function apiListCoupons() {
+  const data = await request<{ coupons: Coupon[] }>('/coupons');
+  return data.coupons;
+}
+
+export async function apiCreateCoupon(payload: Partial<Coupon>) {
+  const data = await request<{ coupon: Coupon }>('/coupons', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return data.coupon;
+}
+
+export async function apiUpdateCoupon(id: number, payload: Partial<Coupon>) {
+  const data = await request<{ coupon: Coupon }>(`/coupons/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  return data.coupon;
+}
+
+export async function apiDeleteCoupon(id: number) {
+  await request<{ ok: boolean }>(`/coupons/${id}`, { method: 'DELETE' });
+}
+
+export async function apiPreviewCoupon(code: string, subtotalCents: number) {
+  const data = await request<CouponPreview>('/coupons/preview', {
+    method: 'POST',
+    body: JSON.stringify({ code, subtotalCents }),
+  });
+  return data;
 }
 
 export async function apiListMyOrders() {

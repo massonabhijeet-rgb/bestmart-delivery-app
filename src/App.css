@@ -3961,6 +3961,174 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Coupon block (storefront checkout)
+   ───────────────────────────────────── */
+.coupon-block {
+  border: 1.5px dashed color-mix(in srgb, var(--c-teal, #0d9488) 40%, var(--c-border));
+  background: color-mix(in srgb, var(--c-teal, #0d9488) 4%, var(--c-surface));
+  border-radius: 10px;
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.coupon-block__row {
+  display: flex;
+  gap: 8px;
+}
+.coupon-block__row input {
+  flex: 1;
+  height: 40px;
+  padding: 0 0.75rem;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 8px;
+  background: var(--c-surface);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.coupon-block__row input:focus {
+  outline: none;
+  border-color: var(--c-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
+.coupon-block__error {
+  font-size: 0.82rem;
+  color: var(--c-danger, #ef4444);
+}
+.coupon-block__applied {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.coupon-block__applied strong { color: var(--c-teal, #0d9488); display: block; }
+.coupon-block__applied p { margin: 2px 0 0; font-size: 0.82rem; color: var(--c-ink-3); }
+
+/* ─────────────────────────────────────
+   Admin Coupons tab
+   ───────────────────────────────────── */
+.coupons-toolbar {
+  padding: var(--sp-4) var(--sp-6);
+  border-bottom: 1px solid var(--c-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.coupons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-6);
+}
+
+.coupon-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.coupon-card--inactive { opacity: 0.6; border-style: dashed; }
+.coupon-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.coupon-card__code {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--c-teal, #0d9488);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.coupon-card__discount {
+  font-weight: 700;
+  color: var(--c-ink);
+}
+.coupon-card__desc {
+  font-size: 0.82rem;
+  color: var(--c-ink-3);
+  margin: 0;
+}
+.coupon-card__meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 0.78rem;
+  color: var(--c-ink-2, var(--c-ink-3));
+}
+.coupon-card__meta span strong { color: var(--c-ink); }
+.coupon-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  border-top: 1px solid var(--c-border);
+  padding-top: var(--sp-2);
+}
+
+.coupon-form {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: var(--sp-4) var(--sp-5);
+  margin: var(--sp-4) var(--sp-6);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-3);
+}
+.coupon-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.coupon-form__field--full { grid-column: 1 / -1; }
+.coupon-form__field span {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--c-ink-3);
+  font-weight: 600;
+}
+.coupon-form__field input,
+.coupon-form__field select,
+.coupon-form__field textarea {
+  height: 40px;
+  padding: 0 0.7rem;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-size: 0.92rem;
+  font-family: inherit;
+}
+.coupon-form__field textarea { height: auto; padding: 0.55rem 0.7rem; min-height: 60px; }
+.coupon-form__field input:focus,
+.coupon-form__field select:focus,
+.coupon-form__field textarea:focus {
+  outline: none;
+  border-color: var(--c-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
+.coupon-form__hint {
+  font-size: 0.72rem;
+  color: var(--c-ink-3);
+}
+.coupon-form__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ─────────────────────────────────────
    Global busy overlay (blocks all clicks)
    ───────────────────────────────────── */
 .busy-overlay {

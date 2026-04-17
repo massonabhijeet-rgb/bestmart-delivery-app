@@ -65,6 +65,7 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       items,
       deliveryLatitude,
       deliveryLongitude,
+      couponCode,
     } = req.body as {
       customerName?: string;
       customerPhone?: string;
@@ -76,6 +77,7 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       items?: Array<{ productId: string; quantity: number }>;
       deliveryLatitude?: number | null;
       deliveryLongitude?: number | null;
+      couponCode?: string | null;
     };
 
     const validLat =
@@ -127,6 +129,7 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       deliveryLatitude: deliveryLatitude as number,
       deliveryLongitude: deliveryLongitude as number,
       createdByUserId: req.user?.id ?? null,
+      couponCode: couponCode ?? null,
     });
 
     if (req.user?.id) {

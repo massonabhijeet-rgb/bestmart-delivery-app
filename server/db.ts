@@ -154,6 +154,7 @@ interface CreateOrderInput {
   deliveryLatitude?: number | null;
   deliveryLongitude?: number | null;
   createdByUserId?: number | null;
+  couponCode?: string | null;
 }
 
 function toSlug(input: string) {
@@ -216,7 +217,7 @@ function mapCategory(row: {
   companyId: number;
   name: string;
   slug: string;
-  hasImage: boolean;
+  imageUrl: string | null;
   createdDate: string;
   updatedDate: string;
 }): CategoryRecord {
@@ -430,6 +431,46 @@ async function createTables(client: PoolClient) {
     ON CONFLICT (user_id, full_name, phone, delivery_address)
     DO UPDATE SET
       last_used_date = GREATEST(user_addresses.last_used_date, EXCLUDED.last_used_date);
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS coupons (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      code VARCHAR(40) NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      discount_type VARCHAR(10) NOT NULL CHECK (discount_type IN ('percent', 'flat')),
+      discount_value INTEGER NOT NULL CHECK (discount_value > 0),
+      max_discount_cents INTEGER,
+      min_subtotal_cents INTEGER NOT NULL DEFAULT 0,
+      max_uses_per_user INTEGER NOT NULL DEFAULT 1 CHECK (max_uses_per_user >= 1),
+      max_total_uses INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      valid_until TIMESTAMPTZ,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_coupons_company_code
+      ON coupons (company_id, LOWER(code));
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS coupon_redemptions (
+      id SERIAL PRIMARY KEY,
+      coupon_id INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      discount_cents INTEGER NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_user ON coupon_redemptions (user_id, coupon_id);
+    CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_coupon ON coupon_redemptions (coupon_id);
   `);
 
   await client.query(`
@@ -977,6 +1018,240 @@ export async function updateAppSettings(
     );
   }
   return getAppSettings(companyId);
+}
+
+// ── Coupons ──────────────────────────────────────────────────────────
+export type CouponDiscountType = 'percent' | 'flat';
+
+export interface CouponRecord {
+  id: number;
+  companyId: number;
+  code: string;
+  description: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  maxDiscountCents: number | null;
+  minSubtotalCents: number;
+  maxUsesPerUser: number;
+  maxTotalUses: number | null;
+  isActive: boolean;
+  validFrom: string;
+  validUntil: string | null;
+  createdDate: string;
+  updatedDate: string;
+  totalRedemptions: number;
+}
+
+const COUPON_SELECT = `
+  c.id,
+  c.company_id AS "companyId",
+  c.code,
+  c.description,
+  c.discount_type AS "discountType",
+  c.discount_value AS "discountValue",
+  c.max_discount_cents AS "maxDiscountCents",
+  c.min_subtotal_cents AS "minSubtotalCents",
+  c.max_uses_per_user AS "maxUsesPerUser",
+  c.max_total_uses AS "maxTotalUses",
+  c.is_active AS "isActive",
+  c.valid_from AS "validFrom",
+  c.valid_until AS "validUntil",
+  c.created_date AS "createdDate",
+  c.updated_date AS "updatedDate",
+  COALESCE((SELECT COUNT(*)::int FROM coupon_redemptions r WHERE r.coupon_id = c.id), 0) AS "totalRedemptions"
+`;
+
+export async function listCoupons(companyId: number): Promise<CouponRecord[]> {
+  const result = await pool.query<CouponRecord>(
+    `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.company_id = $1 ORDER BY c.created_date DESC;`,
+    [companyId]
+  );
+  return result.rows;
+}
+
+export interface CouponInput {
+  code: string;
+  description?: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  maxDiscountCents?: number | null;
+  minSubtotalCents?: number;
+  maxUsesPerUser: number;
+  maxTotalUses?: number | null;
+  isActive?: boolean;
+  validFrom?: string | null;
+  validUntil?: string | null;
+}
+
+export async function createCoupon(companyId: number, input: CouponInput): Promise<CouponRecord> {
+  const result = await pool.query<CouponRecord>(
+    `
+      INSERT INTO coupons (
+        company_id, code, description, discount_type, discount_value,
+        max_discount_cents, min_subtotal_cents, max_uses_per_user, max_total_uses,
+        is_active, valid_from, valid_until
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12)
+      RETURNING ${COUPON_SELECT.replace(/c\./g, '')};
+    `,
+    [
+      companyId,
+      input.code.trim(),
+      input.description ?? '',
+      input.discountType,
+      input.discountValue,
+      input.maxDiscountCents ?? null,
+      input.minSubtotalCents ?? 0,
+      input.maxUsesPerUser,
+      input.maxTotalUses ?? null,
+      input.isActive ?? true,
+      input.validFrom ?? null,
+      input.validUntil ?? null,
+    ]
+  );
+  // The RETURNING substitution above is best-effort — re-read from the canonical view.
+  const created = await pool.query<CouponRecord>(
+    `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.id = $1;`,
+    [(result.rows[0] as unknown as { id: number }).id]
+  );
+  return created.rows[0];
+}
+
+export async function updateCoupon(
+  companyId: number,
+  id: number,
+  input: Partial<CouponInput>
+): Promise<CouponRecord | null> {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  const push = (col: string, value: unknown) => {
+    fields.push(`${col} = $${++i}`);
+    values.push(value);
+  };
+  if (input.code != null) push('code', input.code.trim());
+  if (input.description != null) push('description', input.description);
+  if (input.discountType != null) push('discount_type', input.discountType);
+  if (input.discountValue != null) push('discount_value', input.discountValue);
+  if (input.maxDiscountCents !== undefined) push('max_discount_cents', input.maxDiscountCents);
+  if (input.minSubtotalCents != null) push('min_subtotal_cents', input.minSubtotalCents);
+  if (input.maxUsesPerUser != null) push('max_uses_per_user', input.maxUsesPerUser);
+  if (input.maxTotalUses !== undefined) push('max_total_uses', input.maxTotalUses);
+  if (input.isActive != null) push('is_active', input.isActive);
+  if (input.validFrom !== undefined) push('valid_from', input.validFrom);
+  if (input.validUntil !== undefined) push('valid_until', input.validUntil);
+  if (fields.length === 0) {
+    const existing = await pool.query<CouponRecord>(
+      `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.id = $1 AND c.company_id = $2;`,
+      [id, companyId]
+    );
+    return existing.rows[0] ?? null;
+  }
+  fields.push(`updated_date = NOW()`);
+  values.unshift(id, companyId);
+  await pool.query(
+    `UPDATE coupons SET ${fields.join(', ')} WHERE id = $1 AND company_id = $2;`,
+    values
+  );
+  const result = await pool.query<CouponRecord>(
+    `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.id = $1 AND c.company_id = $2;`,
+    [id, companyId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteCoupon(companyId: number, id: number): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM coupons WHERE id = $1 AND company_id = $2;`,
+    [id, companyId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export interface CouponValidationOk {
+  ok: true;
+  coupon: CouponRecord;
+  discountCents: number;
+}
+export interface CouponValidationErr {
+  ok: false;
+  error: string;
+}
+
+export async function validateCoupon(
+  companyId: number,
+  userId: number | null,
+  code: string,
+  subtotalCents: number,
+): Promise<CouponValidationOk | CouponValidationErr> {
+  const result = await pool.query<CouponRecord>(
+    `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.company_id = $1 AND LOWER(c.code) = LOWER($2) LIMIT 1;`,
+    [companyId, code.trim()]
+  );
+  const coupon = result.rows[0];
+  if (!coupon) return { ok: false, error: 'Coupon not found.' };
+  if (!coupon.isActive) return { ok: false, error: 'This coupon is no longer active.' };
+
+  const now = Date.now();
+  if (new Date(coupon.validFrom).getTime() > now) {
+    return { ok: false, error: 'This coupon is not valid yet.' };
+  }
+  if (coupon.validUntil && new Date(coupon.validUntil).getTime() < now) {
+    return { ok: false, error: 'This coupon has expired.' };
+  }
+  if (subtotalCents < coupon.minSubtotalCents) {
+    return {
+      ok: false,
+      error: `Minimum order of ₹${(coupon.minSubtotalCents / 100).toFixed(0)} required.`,
+    };
+  }
+
+  if (coupon.maxTotalUses != null && coupon.totalRedemptions >= coupon.maxTotalUses) {
+    return { ok: false, error: 'This coupon has reached its global usage limit.' };
+  }
+
+  if (userId != null) {
+    const usage = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM coupon_redemptions WHERE coupon_id = $1 AND user_id = $2;`,
+      [coupon.id, userId]
+    );
+    const used = Number(usage.rows[0]?.count ?? '0');
+    if (used >= coupon.maxUsesPerUser) {
+      return {
+        ok: false,
+        error: `You've already used this coupon ${used} time${used === 1 ? '' : 's'} (limit: ${coupon.maxUsesPerUser}).`,
+      };
+    }
+  } else {
+    return { ok: false, error: 'Please sign in to use a coupon.' };
+  }
+
+  let discountCents = 0;
+  if (coupon.discountType === 'flat') {
+    discountCents = coupon.discountValue;
+  } else {
+    discountCents = Math.floor((subtotalCents * coupon.discountValue) / 100);
+    if (coupon.maxDiscountCents != null) {
+      discountCents = Math.min(discountCents, coupon.maxDiscountCents);
+    }
+  }
+  discountCents = Math.min(discountCents, subtotalCents);
+  if (discountCents <= 0) return { ok: false, error: 'Coupon yields no discount on this order.' };
+
+  return { ok: true, coupon, discountCents };
+}
+
+export async function recordCouponRedemption(
+  client: PoolClient,
+  couponId: number,
+  userId: number | null,
+  orderId: number,
+  discountCents: number,
+) {
+  await client.query(
+    `INSERT INTO coupon_redemptions (coupon_id, user_id, order_id, discount_cents) VALUES ($1, $2, $3, $4);`,
+    [couponId, userId, orderId, discountCents]
+  );
 }
 
 export async function getDefaultCompanyId() {
@@ -1853,8 +2128,26 @@ export async function createOrder(input: CreateOrderInput) {
     const deliveryFeeCents =
       subtotalCents >= settings.freeDeliveryThresholdCents ? 0 : settings.deliveryFeeCents;
     // Promo: 50% off up to ₹200 on orders above ₹500 (50000 cents subtotal threshold).
-    const discountCents =
+    const promoDiscountCents =
       subtotalCents >= 50000 ? Math.min(Math.floor(subtotalCents / 2), 20000) : 0;
+
+    let couponDiscountCents = 0;
+    let appliedCoupon: CouponRecord | null = null;
+    if (input.couponCode && input.couponCode.trim()) {
+      const validation = await validateCoupon(
+        input.companyId,
+        input.createdByUserId ?? null,
+        input.couponCode,
+        subtotalCents,
+      );
+      if (!validation.ok) {
+        throw new Error(validation.error);
+      }
+      appliedCoupon = validation.coupon;
+      couponDiscountCents = validation.discountCents;
+    }
+
+    const discountCents = Math.min(promoDiscountCents + couponDiscountCents, subtotalCents);
     const totalCents = Math.max(subtotalCents + deliveryFeeCents - discountCents, 0);
     const publicId = makeTrackingCode();
 
@@ -1959,6 +2252,16 @@ export async function createOrder(input: CreateOrderInput) {
           WHERE id = $1;
         `,
         [item.productId, item.quantity]
+      );
+    }
+
+    if (appliedCoupon && couponDiscountCents > 0) {
+      await recordCouponRedemption(
+        client,
+        appliedCoupon.id,
+        input.createdByUserId ?? null,
+        order.id,
+        couponDiscountCents,
       );
     }
 
