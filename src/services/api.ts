@@ -1,4 +1,23 @@
+import { popBusy, pushBusy } from '../components/BusyOverlay';
+
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
+function busyLabelFor(method: string, endpoint: string): string {
+  const ep = endpoint.toLowerCase();
+  if (ep.includes('upload') || ep.includes('image')) return 'Uploading…';
+  if (ep.includes('bulk-upload-images') || ep.includes('bulk-upload')) return 'Uploading images…';
+  if (ep.includes('login')) return 'Signing in…';
+  if (ep.includes('signup') || ep.includes('register')) return 'Creating account…';
+  if (ep.includes('orders') && method === 'POST') return 'Placing order…';
+  if (ep.includes('cancel')) return 'Cancelling…';
+  if (ep.includes('status')) return 'Updating status…';
+  if (ep.includes('offer')) return 'Updating offer…';
+  if (ep.includes('settings')) return 'Saving settings…';
+  if (method === 'DELETE') return 'Deleting…';
+  if (method === 'POST') return 'Saving…';
+  if (method === 'PATCH' || method === 'PUT') return 'Saving…';
+  return 'Working…';
+}
 
 export type UserRole = 'admin' | 'editor' | 'viewer' | 'rider';
 export type OrderStatus =
@@ -161,12 +180,22 @@ async function request<T>(endpoint: string, options: RequestInit = {}) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const method = (options.method ?? 'GET').toUpperCase();
+  const showBusy = method !== 'GET';
+  if (showBusy) pushBusy(busyLabelFor(method, endpoint));
 
-  const text = await response.text();
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers,
+    });
+    text = await response.text();
+  } finally {
+    if (showBusy) popBusy();
+  }
+
   const data = text ? (JSON.parse(text) as T & { error?: string }) : ({} as T);
 
   if (!response.ok) {

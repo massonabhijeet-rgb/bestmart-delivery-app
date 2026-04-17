@@ -5,6 +5,7 @@ import { playOrderAlert, unlockAudio } from '../lib/sound';
 import { useOrderSocket } from '../hooks/useOrderSocket';
 import type { RiderLocation } from '../hooks/useOrderSocket';
 import { confirm, pickRider } from '../components/ConfirmDialog';
+import { withBusy } from '../components/BusyOverlay';
 import {
   apiAddProduct,
   apiCreateCategory,
@@ -524,12 +525,19 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         imageUrl: productForm.imageUrl || null,
         isActive: productForm.isActive,
       };
-      const savedProduct = editingId
-        ? await apiUpdateProduct(editingId, payload)
-        : await apiAddProduct(payload);
-      if (productImage) {
-        await apiUploadProductImage(savedProduct.uniqueId, productImage);
-      }
+      const savedProduct = await withBusy(
+        editingId ? 'Saving product…' : 'Creating product…',
+        async () => {
+          const result = editingId
+            ? await apiUpdateProduct(editingId, payload)
+            : await apiAddProduct(payload);
+          if (productImage) {
+            await apiUploadProductImage(result.uniqueId, productImage);
+          }
+          return result;
+        },
+      );
+      void savedProduct;
       setNotice(editingId ? 'Product updated.' : 'Product created.');
       closeProductEditor();
       await loadDashboard();
@@ -1027,26 +1035,28 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setBulkProgress(0);
     const errors: string[] = [];
     let done = 0;
-    for (const row of valid) {
-      try {
-        await apiAddProduct({
-          name: row.name,
-          categoryId: row.categoryId!,
-          unitLabel: row.unitLabel,
-          description: row.description,
-          priceCents: row.priceCents,
-          originalPriceCents: row.originalPriceCents,
-          stockQuantity: row.stockQuantity,
-          badge: row.badge,
-          imageUrl: row.imageUrl,
-          isActive: row.isActive,
-        });
-        done++;
-      } catch (err) {
-        errors.push(`Row ${row.rowNum} (${row.name}): ${err instanceof Error ? err.message : 'Failed'}`);
+    await withBusy(`Importing ${valid.length} products…`, async () => {
+      for (const row of valid) {
+        try {
+          await apiAddProduct({
+            name: row.name,
+            categoryId: row.categoryId!,
+            unitLabel: row.unitLabel,
+            description: row.description,
+            priceCents: row.priceCents,
+            originalPriceCents: row.originalPriceCents,
+            stockQuantity: row.stockQuantity,
+            badge: row.badge,
+            imageUrl: row.imageUrl,
+            isActive: row.isActive,
+          });
+          done++;
+        } catch (err) {
+          errors.push(`Row ${row.rowNum} (${row.name}): ${err instanceof Error ? err.message : 'Failed'}`);
+        }
+        setBulkProgress(Math.round(((done + errors.length) / valid.length) * 100));
       }
-      setBulkProgress(Math.round(((done + errors.length) / valid.length) * 100));
-    }
+    });
     setBulkResult({ done, failed: errors.length, errors });
     setBulkImporting(false);
     setBulkRows([]);

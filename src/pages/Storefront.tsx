@@ -11,6 +11,7 @@ import {
 import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
+import { withBusy } from '../components/BusyOverlay';
 import type { Category, CompanyInfo, Order, Product, SavedAddress, User } from '../services/api';
 
 interface StorefrontProps {
@@ -313,36 +314,36 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     setError('');
 
     try {
-      let coords = liveLocation
-        ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
-        : null;
-      if (!coords) {
-        try {
-          coords = await captureLocation();
-        } catch {
-          coords = null;
+      const order = await withBusy('Placing your order…', async () => {
+        let coords = liveLocation
+          ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
+          : null;
+        if (!coords) {
+          try {
+            coords = await captureLocation();
+          } catch {
+            coords = null;
+          }
         }
-      }
-      if (!coords) {
-        setError(
-          'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
-        );
-        setPlacingOrder(false);
-        return;
-      }
+        if (!coords) {
+          throw new Error(
+            'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
+          );
+        }
 
-      const order = await apiCreateOrder({
-        customerName: checkoutForm.customerName,
-        customerPhone: checkoutForm.customerPhone,
-        deliveryAddress: checkoutForm.deliveryAddress,
-        deliveryNotes: checkoutForm.deliveryNotes,
-        paymentMethod: checkoutForm.paymentMethod,
-        items: cartItems.map((item) => ({
-          productId: item.product.uniqueId,
-          quantity: item.quantity,
-        })),
-        deliveryLatitude: coords.latitude,
-        deliveryLongitude: coords.longitude,
+        return apiCreateOrder({
+          customerName: checkoutForm.customerName,
+          customerPhone: checkoutForm.customerPhone,
+          deliveryAddress: checkoutForm.deliveryAddress,
+          deliveryNotes: checkoutForm.deliveryNotes,
+          paymentMethod: checkoutForm.paymentMethod,
+          items: cartItems.map((item) => ({
+            productId: item.product.uniqueId,
+            quantity: item.quantity,
+          })),
+          deliveryLatitude: coords.latitude,
+          deliveryLongitude: coords.longitude,
+        });
       });
 
       setLatestOrder(order);

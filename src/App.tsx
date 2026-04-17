@@ -1,5 +1,6 @@
 import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
 import { ConfirmHost, RiderPickerHost } from './components/ConfirmDialog';
+import { BusyOverlay } from './components/BusyOverlay';
 import { apiGetMe, apiLogout } from './services/api';
 import type { User } from './services/api';
 import './App.css';
@@ -213,6 +214,7 @@ function AppWithHost() {
       <App />
       <ConfirmHost />
       <RiderPickerHost />
+      <BusyOverlay />
     </>
   );
 }
