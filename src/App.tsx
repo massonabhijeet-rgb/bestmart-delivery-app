@@ -16,29 +16,29 @@ type Route =
   | { view: 'store' }
   | { view: 'login' }
   | { view: 'dashboard' }
+  | { view: 'rider' }
   | { view: 'my-orders' }
   | { view: 'track'; code: string };
 
 function readRoute(): Route {
-  const hash = window.location.hash;
-
-  if (hash.startsWith('#track/')) {
-    return { view: 'track', code: decodeURIComponent(hash.replace('#track/', '')) };
-  }
-  if (hash === '#login') {
-    return { view: 'login' };
-  }
-  if (hash === '#dashboard') {
-    return { view: 'dashboard' };
-  }
-  if (hash === '#my-orders') {
-    return { view: 'my-orders' };
-  }
-
   const pathParts = window.location.pathname.split('/').filter(Boolean);
+  if (pathParts[0] === 'admin') return { view: 'dashboard' };
+  if (pathParts[0] === 'rider') return { view: 'rider' };
+  if (pathParts[0] === 'my-orders') return { view: 'my-orders' };
+  if (pathParts[0] === 'login') return { view: 'login' };
   if (pathParts[0] === 'track' && pathParts[1]) {
     return { view: 'track', code: decodeURIComponent(pathParts[1]) };
   }
+
+  // Legacy hash routes
+  const hash = window.location.hash;
+  if (hash.startsWith('#track/')) {
+    return { view: 'track', code: decodeURIComponent(hash.replace('#track/', '')) };
+  }
+  if (hash === '#login') return { view: 'login' };
+  if (hash === '#dashboard') return { view: 'dashboard' };
+  if (hash === '#rider') return { view: 'rider' };
+  if (hash === '#my-orders') return { view: 'my-orders' };
 
   return { view: 'store' };
 }
@@ -106,11 +106,24 @@ function App() {
   }, []);
 
   function navigate(next: Route) {
-    if (next.view === 'track') {
-      window.location.hash = `#track/${encodeURIComponent(next.code)}`;
+    let path = '/';
+    if (next.view === 'track') path = `/track/${encodeURIComponent(next.code)}`;
+    else if (next.view === 'dashboard') path = '/admin';
+    else if (next.view === 'rider') path = '/rider';
+    else if (next.view === 'my-orders') path = '/my-orders';
+    else if (next.view === 'login') path = '/login';
+
+    if (window.location.pathname === path && !window.location.hash) {
+      // Same URL — just refresh route state.
+      setRoute(next);
       return;
     }
-    window.location.hash = next.view === 'store' ? '' : `#${next.view}`;
+    window.history.pushState({}, '', path);
+    // Clear any legacy hash so subsequent reads pick the path route.
+    if (window.location.hash) {
+      window.history.replaceState({}, '', path);
+    }
+    setRoute(next);
   }
 
   if (loading) {
@@ -167,24 +180,39 @@ function App() {
   // Riders are routed to their own home as soon as they sign in.
   if (user && user.role === 'rider') {
     return (
-      <Suspense fallback={<PageLoader />}>
-        <RiderHome
-          user={user}
-          onLogout={() => {
-            setUser(null);
-            apiLogout();
-            navigate({ view: 'store' });
-          }}
-        />
-      </Suspense>
+      <>
+        <Suspense fallback={<PageLoader />}>
+          <RiderHome
+            user={user}
+            onLogout={() => {
+              setUser(null);
+              apiLogout();
+              navigate({ view: 'store' });
+            }}
+          />
+        </Suspense>
+        {loginModal}
+      </>
     );
   }
 
-  // Anonymous users hitting #dashboard or #my-orders bounce to the store
-  // with the login popup open, so they sign in then continue.
-  if (!user && (route.view === 'dashboard' || route.view === 'my-orders' || route.view === 'login')) {
+  // Signed in but not a rider trying to reach /rider → bounce to store.
+  if (user && route.view === 'rider') {
+    navigate({ view: 'store' });
+    return <PageLoader />;
+  }
+
+  // Anonymous users hitting protected routes: open login popup and stay on
+  // the URL so the address bar still reflects the intent. After login,
+  // role-based routing above takes over.
+  if (
+    !user &&
+    (route.view === 'dashboard' ||
+      route.view === 'rider' ||
+      route.view === 'my-orders' ||
+      route.view === 'login')
+  ) {
     if (!loginModalOpen) setLoginModalOpen(true);
-    if (route.view !== 'store') navigate({ view: 'store' });
   }
 
   // Signed-in admin/editor screens.
