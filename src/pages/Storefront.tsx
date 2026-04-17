@@ -24,6 +24,11 @@ import {
   pickProductsForMood,
   type WeatherMood,
 } from '../lib/weatherPicks';
+import {
+  CHECKOUT_MOOD_COPY,
+  moodFromHour,
+  pickCheckoutTreats,
+} from '../lib/checkoutPicks';
 import type { Category, CompanyInfo, Order, Product, SavedAddress, User } from '../services/api';
 
 interface StorefrontProps {
@@ -278,6 +283,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const moodPicks = useMemo(
     () => pickProductsForMood(products.filter((p) => p.isActive && p.stockQuantity > 0), mood, 12),
     [products, mood],
+  );
+
+  const checkoutMood = useMemo(() => moodFromHour(new Date().getHours()), []);
+  const checkoutPicks = useMemo(
+    () => pickCheckoutTreats(products, checkoutMood, cart, 8),
+    [products, checkoutMood, cart],
   );
 
   // Daily essentials: products from the staple-grocery categories.
@@ -1210,6 +1221,58 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </div>
             )}
           </div>
+
+          {cartItems.length > 0 && checkoutPicks.length > 0 && (
+            <div className={`checkout-treats checkout-treats--${checkoutMood}`}>
+              <div className="checkout-treats__head">
+                <span className="checkout-treats__emoji" aria-hidden>
+                  {CHECKOUT_MOOD_COPY[checkoutMood].emoji}
+                </span>
+                <div>
+                  <span className="checkout-treats__eyebrow">
+                    {CHECKOUT_MOOD_COPY[checkoutMood].eyebrow}
+                  </span>
+                  <h3 className="checkout-treats__title">
+                    {CHECKOUT_MOOD_COPY[checkoutMood].title}
+                  </h3>
+                  <p className="checkout-treats__subtitle">
+                    {CHECKOUT_MOOD_COPY[checkoutMood].subtitle}
+                  </p>
+                </div>
+              </div>
+              <div className="checkout-treats__row">
+                {checkoutPicks.map((product) => (
+                  <article key={product.uniqueId} className="checkout-treat">
+                    <div className="checkout-treat__thumb">
+                      {product.imageUrl && (
+                        <img
+                          src={product.imageUrl}
+                          alt={product.name}
+                          loading="lazy"
+                          className="checkout-treat__thumb-img"
+                        />
+                      )}
+                    </div>
+                    <div className="checkout-treat__body">
+                      <span className="checkout-treat__name">{product.name}</span>
+                      <span className="checkout-treat__meta">{product.unitLabel}</span>
+                      <div className="checkout-treat__foot">
+                        <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                        <button
+                          type="button"
+                          className="checkout-treat__add"
+                          onClick={() => updateQuantity(product.uniqueId, 1)}
+                          aria-label={`Add ${product.name}`}
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
 
           <form className="checkout-form" onSubmit={handlePlaceOrder}>
             {user && savedAddresses.length > 0 ? (
