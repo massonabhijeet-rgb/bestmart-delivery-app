@@ -1121,7 +1121,7 @@ export interface CouponInput {
 }
 
 export async function createCoupon(companyId: number, input: CouponInput): Promise<CouponRecord> {
-  const result = await pool.query<CouponRecord>(
+  const inserted = await pool.query<{ id: number }>(
     `
       INSERT INTO coupons (
         company_id, code, description, discount_type, discount_value,
@@ -1129,7 +1129,7 @@ export async function createCoupon(companyId: number, input: CouponInput): Promi
         is_active, valid_from, valid_until
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12)
-      RETURNING ${COUPON_SELECT.replace(/c\./g, '')};
+      RETURNING id;
     `,
     [
       companyId,
@@ -1146,10 +1146,11 @@ export async function createCoupon(companyId: number, input: CouponInput): Promi
       input.validUntil ?? null,
     ]
   );
-  // The RETURNING substitution above is best-effort — re-read from the canonical view.
+  const newId = inserted.rows[0]?.id;
+  if (!newId) throw new Error('Failed to create coupon');
   const created = await pool.query<CouponRecord>(
     `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.id = $1;`,
-    [(result.rows[0] as unknown as { id: number }).id]
+    [newId]
   );
   return created.rows[0];
 }
