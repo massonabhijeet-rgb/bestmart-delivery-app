@@ -1208,6 +1208,149 @@ export async function listProducts(companyId: number, includeInactive = false) {
   return result.rows.map(mapProduct);
 }
 
+export interface SlowMoverSuggestion {
+  uniqueId: string;
+  name: string;
+  category: string | null;
+  unitLabel: string;
+  priceCents: number;
+  stockQuantity: number;
+  imageUrl: string | null;
+  unitsSold30d: number;
+  unitsSoldAllTime: number;
+  daysSinceCreated: number;
+  daysSinceLastSold: number | null;
+  reason: 'no_sales_ever' | 'no_sales_30d' | 'low_sales_30d' | 'overstocked';
+  reasonLabel: string;
+  score: number;
+  suggestedOfferPriceCents: number;
+  suggestedDiscountPercent: number;
+}
+
+export async function listSlowMovers(companyId: number): Promise<SlowMoverSuggestion[]> {
+  const result = await pool.query<{
+    uniqueId: string;
+    name: string;
+    category: string | null;
+    unitLabel: string;
+    priceCents: number;
+    stockQuantity: number;
+    imageUrl: string | null;
+    createdDate: string;
+    unitsSold30d: string;
+    unitsSoldAllTime: string;
+    lastSoldAt: string | null;
+  }>(
+    `
+      SELECT
+        p.unique_id AS "uniqueId",
+        p.name,
+        c.name AS "category",
+        p.unit_label AS "unitLabel",
+        p.price_cents AS "priceCents",
+        p.stock_quantity AS "stockQuantity",
+        p.image_url AS "imageUrl",
+        p.created_date AS "createdDate",
+        COALESCE(SUM(CASE
+          WHEN o.created_date >= NOW() - INTERVAL '30 days'
+            AND o.status <> 'cancelled'
+          THEN oi.quantity ELSE 0
+        END), 0)::text AS "unitsSold30d",
+        COALESCE(SUM(CASE
+          WHEN o.status <> 'cancelled'
+          THEN oi.quantity ELSE 0
+        END), 0)::text AS "unitsSoldAllTime",
+        MAX(CASE WHEN o.status <> 'cancelled' THEN o.created_date END) AS "lastSoldAt"
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN order_items oi ON oi.product_id = p.id
+      LEFT JOIN orders o ON o.id = oi.order_id AND o.company_id = p.company_id
+      WHERE p.company_id = $1
+        AND p.is_active = TRUE
+        AND p.is_on_offer = FALSE
+        AND p.stock_quantity > 0
+        AND p.created_date <= NOW() - INTERVAL '14 days'
+      GROUP BY p.id, c.name
+      ORDER BY p.created_date ASC;
+    `,
+    [companyId]
+  );
+
+  const now = Date.now();
+
+  const suggestions: SlowMoverSuggestion[] = [];
+  for (const row of result.rows) {
+    const unitsSold30d = Number(row.unitsSold30d);
+    const unitsSoldAllTime = Number(row.unitsSoldAllTime);
+    const createdMs = new Date(row.createdDate).getTime();
+    const daysSinceCreated = Math.floor((now - createdMs) / (1000 * 60 * 60 * 24));
+    const daysSinceLastSold = row.lastSoldAt
+      ? Math.floor((now - new Date(row.lastSoldAt).getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+
+    let reason: SlowMoverSuggestion['reason'] | null = null;
+    let reasonLabel = '';
+    let suggestedDiscountPercent = 10;
+
+    if (unitsSoldAllTime === 0 && daysSinceCreated >= 30) {
+      reason = 'no_sales_ever';
+      reasonLabel = `Never sold in ${daysSinceCreated} days`;
+      suggestedDiscountPercent = 20;
+    } else if (unitsSold30d === 0 && daysSinceLastSold !== null && daysSinceLastSold >= 30) {
+      reason = 'no_sales_30d';
+      reasonLabel = `No sales in last ${daysSinceLastSold} days`;
+      suggestedDiscountPercent = 15;
+    } else if (unitsSold30d === 0 && daysSinceCreated >= 14) {
+      reason = 'no_sales_30d';
+      reasonLabel = `No sales in last 30 days`;
+      suggestedDiscountPercent = 15;
+    } else if (unitsSold30d <= 2 && row.stockQuantity >= 20) {
+      reason = 'overstocked';
+      reasonLabel = `Only ${unitsSold30d} sold, ${row.stockQuantity} in stock`;
+      suggestedDiscountPercent = 10;
+    } else if (unitsSold30d <= 2 && daysSinceCreated >= 30) {
+      reason = 'low_sales_30d';
+      reasonLabel = `Only ${unitsSold30d} sold in 30 days`;
+      suggestedDiscountPercent = 10;
+    } else {
+      continue;
+    }
+
+    // Higher score = more urgent. Weighs recency of sales, stock, and age.
+    const stockFactor = 1 + row.stockQuantity / 30;
+    const ageFactor = Math.min(daysSinceCreated / 30, 4);
+    const salesFactor = 1 / (unitsSold30d + 1);
+    const score = Math.round(stockFactor * ageFactor * salesFactor * 100);
+
+    const suggestedOfferPriceCents = Math.max(
+      100,
+      Math.round((row.priceCents * (100 - suggestedDiscountPercent)) / 100 / 100) * 100,
+    );
+
+    suggestions.push({
+      uniqueId: row.uniqueId,
+      name: row.name,
+      category: row.category,
+      unitLabel: row.unitLabel,
+      priceCents: row.priceCents,
+      stockQuantity: row.stockQuantity,
+      imageUrl: row.imageUrl,
+      unitsSold30d,
+      unitsSoldAllTime,
+      daysSinceCreated,
+      daysSinceLastSold,
+      reason,
+      reasonLabel,
+      score,
+      suggestedOfferPriceCents,
+      suggestedDiscountPercent,
+    });
+  }
+
+  suggestions.sort((a, b) => b.score - a.score);
+  return suggestions.slice(0, 20);
+}
+
 export async function getProductByUniqueId(uniqueId: string, companyId: number) {
   const result = await pool.query(
     `

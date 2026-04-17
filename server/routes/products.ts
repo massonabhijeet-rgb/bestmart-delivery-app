@@ -13,6 +13,7 @@ import {
   getDefaultCompanyId,
   getProductByUniqueId,
   listProducts,
+  listSlowMovers,
   setProductOffer,
   updateProduct,
   updateProductImage,
@@ -86,6 +87,24 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   await cacheSet(cacheKey, result, TTL.PRODUCTS);
   return res.json(result);
 });
+
+router.get(
+  '/slow-movers',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const suggestions = await listSlowMovers(req.user.companyId);
+      return res.json({ suggestions });
+    } catch (error) {
+      console.error('Slow movers error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 router.get('/:uniqueId', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());

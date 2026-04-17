@@ -279,6 +279,30 @@ export async function apiUploadCategoryImage(id: number, file: File) {
   return data.category;
 }
 
+export interface SlowMoverSuggestion {
+  uniqueId: string;
+  name: string;
+  category: string | null;
+  unitLabel: string;
+  priceCents: number;
+  stockQuantity: number;
+  imageUrl: string | null;
+  unitsSold30d: number;
+  unitsSoldAllTime: number;
+  daysSinceCreated: number;
+  daysSinceLastSold: number | null;
+  reason: 'no_sales_ever' | 'no_sales_30d' | 'low_sales_30d' | 'overstocked';
+  reasonLabel: string;
+  score: number;
+  suggestedOfferPriceCents: number;
+  suggestedDiscountPercent: number;
+}
+
+export async function apiListSlowMovers() {
+  const data = await request<{ suggestions: SlowMoverSuggestion[] }>('/products/slow-movers');
+  return data.suggestions;
+}
+
 export async function apiToggleProductOffer(
   uniqueId: string,
   isOnOffer: boolean,

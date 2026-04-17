@@ -26,8 +26,9 @@ import {
   apiUploadCategoryImage,
   apiUploadProductImage,
   apiBulkUploadProductImages,
+  apiListSlowMovers,
 } from '../services/api';
-import type { BulkImageUploadResult } from '../services/api';
+import type { BulkImageUploadResult, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -151,6 +152,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [inlineCategoryName, setInlineCategoryName] = useState('');
   const [creatingInlineCategory, setCreatingInlineCategory] = useState(false);
   const [showInlineCategoryInput, setShowInlineCategoryInput] = useState(false);
+  const [slowMovers, setSlowMovers] = useState<SlowMoverSuggestion[]>([]);
+  const [slowMoversLoading, setSlowMoversLoading] = useState(false);
+  const [dismissedSlowMovers, setDismissedSlowMovers] = useState<Set<string>>(new Set());
+  const [slowMoversCollapsed, setSlowMoversCollapsed] = useState(false);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -257,6 +262,23 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     void loadDashboard();
     void apiGetCompanyPublic().then(setCompanyInfo).catch(() => {});
   }, [loadDashboard]);
+
+  const loadSlowMovers = useCallback(async () => {
+    if (!canManageCatalog) return;
+    setSlowMoversLoading(true);
+    try {
+      const data = await apiListSlowMovers();
+      setSlowMovers(data);
+    } catch {
+      // silent — non-critical
+    } finally {
+      setSlowMoversLoading(false);
+    }
+  }, [canManageCatalog]);
+
+  useEffect(() => {
+    if (activeTab === 'offers' && canManageCatalog) void loadSlowMovers();
+  }, [activeTab, canManageCatalog, loadSlowMovers, products.length]);
 
   useEffect(() => {
     const handler = () => {
@@ -2488,10 +2510,22 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     );
   }
 
+  async function applySlowMoverSuggestion(s: SlowMoverSuggestion) {
+    const product = products.find((p) => p.uniqueId === s.uniqueId);
+    if (!product) return;
+    await handleToggleOffer(product, true, s.suggestedOfferPriceCents, 'price');
+    setDismissedSlowMovers((prev) => new Set(prev).add(s.uniqueId));
+  }
+
+  function dismissSlowMover(uniqueId: string) {
+    setDismissedSlowMovers((prev) => new Set(prev).add(uniqueId));
+  }
+
   function renderOffers() {
     const { onOffer, notOnOffer } = filteredOffers;
     const totalOnOffer = products.filter((p) => p.isOnOffer).length;
     const totalNotOnOffer = products.filter((p) => !p.isOnOffer).length;
+    const visibleSuggestions = slowMovers.filter((s) => !dismissedSlowMovers.has(s.uniqueId));
 
     return (
       <div className="section-box">
@@ -2504,6 +2538,101 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </p>
           </div>
         </div>
+
+        {/* Slow-mover suggestions */}
+        {canManageCatalog && (visibleSuggestions.length > 0 || slowMoversLoading) && (
+          <div className="slow-movers">
+            <div className="slow-movers__head">
+              <div className="slow-movers__title-wrap">
+                <span className="slow-movers__icon" aria-hidden>💡</span>
+                <div>
+                  <h3 className="slow-movers__title">Needs attention</h3>
+                  <p className="slow-movers__sub">
+                    {slowMoversLoading
+                      ? 'Analysing sales…'
+                      : `${visibleSuggestions.length} product${visibleSuggestions.length === 1 ? '' : 's'} selling slowly — consider putting them on offer.`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghost-button slow-movers__toggle"
+                onClick={() => setSlowMoversCollapsed((v) => !v)}
+              >
+                {slowMoversCollapsed ? 'Show' : 'Hide'}
+              </button>
+            </div>
+            {!slowMoversCollapsed && visibleSuggestions.length > 0 && (
+              <div className="slow-movers__grid">
+                {visibleSuggestions.map((s) => {
+                  const applying = togglingOfferId === s.uniqueId;
+                  return (
+                    <article key={s.uniqueId} className="slow-mover-card">
+                      <div className="slow-mover-card__thumb">
+                        {s.imageUrl ? (
+                          <img src={s.imageUrl} alt={s.name} loading="lazy" />
+                        ) : (
+                          <div className="slow-mover-card__thumb-ph" />
+                        )}
+                      </div>
+                      <div className="slow-mover-card__body">
+                        <div className="slow-mover-card__head">
+                          <span className="slow-mover-card__name">{s.name}</span>
+                          <span className="slow-mover-card__meta">
+                            {s.category ?? 'Uncategorised'} · {s.unitLabel}
+                          </span>
+                        </div>
+                        <div className="slow-mover-card__stats">
+                          <span className={`slow-mover-card__tag slow-mover-card__tag--${s.reason}`}>
+                            {s.reasonLabel}
+                          </span>
+                          <span className="slow-mover-card__stat">
+                            <strong>{s.stockQuantity}</strong> in stock
+                          </span>
+                          <span className="slow-mover-card__stat">
+                            <strong>{s.unitsSold30d}</strong> sold / 30d
+                          </span>
+                        </div>
+                        <div className="slow-mover-card__cta">
+                          <div className="slow-mover-card__price">
+                            <span className="slow-mover-card__price-old">
+                              {formatCurrency(s.priceCents)}
+                            </span>
+                            <span className="slow-mover-card__arrow">→</span>
+                            <span className="slow-mover-card__price-new">
+                              {formatCurrency(s.suggestedOfferPriceCents)}
+                            </span>
+                            <span className="slow-mover-card__discount">
+                              −{s.suggestedDiscountPercent}%
+                            </span>
+                          </div>
+                          <div className="slow-mover-card__actions">
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => dismissSlowMover(s.uniqueId)}
+                              disabled={applying}
+                            >
+                              Dismiss
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-button"
+                              onClick={() => void applySlowMoverSuggestion(s)}
+                              disabled={applying}
+                            >
+                              {applying ? 'Applying…' : `Apply ${s.suggestedDiscountPercent}% off`}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search bar */}
         <div className="offers-search-bar">
