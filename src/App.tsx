@@ -1,12 +1,12 @@
 import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
 import { ConfirmHost, RiderPickerHost } from './components/ConfirmDialog';
 import { BusyOverlay } from './components/BusyOverlay';
+import LoginPopup from './components/LoginPopup';
 import { apiGetMe, apiLogout } from './services/api';
 import type { User } from './services/api';
 import './App.css';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
-const Login = lazy(() => import('./pages/Login'));
 const RiderHome = lazy(() => import('./pages/RiderHome'));
 const Storefront = lazy(() => import('./pages/Storefront'));
 const TrackOrder = lazy(() => import('./pages/TrackOrder'));
@@ -136,32 +136,20 @@ function App() {
   }
 
   const loginModal = loginModalOpen ? (
-    <Suspense fallback={null}>
-      <div
-        className="login-modal"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => { if (e.target === e.currentTarget) setLoginModalOpen(false); }}
-      >
-        <div className="login-modal__inner">
-          <button
-            type="button"
-            className="login-modal__close"
-            onClick={() => setLoginModalOpen(false)}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-          <Login
-            onBackToStore={() => setLoginModalOpen(false)}
-            onLoginSuccess={(nextUser) => {
-              setUser(nextUser);
-              setLoginModalOpen(false);
-            }}
-          />
-        </div>
-      </div>
-    </Suspense>
+    <div
+      className="login-modal"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => { if (e.target === e.currentTarget) setLoginModalOpen(false); }}
+    >
+      <LoginPopup
+        onClose={() => setLoginModalOpen(false)}
+        onLoginSuccess={(nextUser) => {
+          setUser(nextUser);
+          setLoginModalOpen(false);
+        }}
+      />
+    </div>
   ) : null;
 
   // Tracking page works for anonymous + signed-in users.

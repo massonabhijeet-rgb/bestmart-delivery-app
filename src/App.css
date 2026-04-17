@@ -4129,7 +4129,7 @@ textarea {
 }
 
 /* ─────────────────────────────────────
-   Login modal (popup on storefront)
+   Login popup (compact)
    ───────────────────────────────────── */
 .login-modal {
   position: fixed;
@@ -4143,37 +4143,96 @@ textarea {
   padding: var(--sp-3);
   animation: pe-modal-fade 0.15s ease-out;
 }
-.login-modal__inner {
+
+.login-popup {
   position: relative;
   background: var(--c-surface, #fff);
   width: 100%;
-  max-width: 440px;
-  max-height: calc(100vh - var(--sp-6));
-  border-radius: 16px;
-  overflow: hidden auto;
+  max-width: 360px;
+  border-radius: 14px;
+  padding: 24px 22px 22px;
   box-shadow: 0 30px 70px -20px rgba(15, 23, 42, 0.5);
   animation: pe-modal-slide 0.18s ease-out;
 }
-.login-modal__close {
+
+.login-popup__close {
   position: absolute;
   top: 10px;
   right: 12px;
-  z-index: 1;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  border-radius: 50%;
-  width: 32px;
-  height: 32px;
+  background: transparent;
+  border: none;
+  width: 30px;
+  height: 30px;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.95rem;
+  color: var(--c-ink-3);
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.login-popup__close:hover { color: var(--c-ink); background: var(--c-bg); }
+
+.login-popup__head {
+  margin-bottom: 16px;
+}
+.login-popup__head h2 {
+  margin: 0 0 4px;
+  font-size: 1.2rem;
+  color: var(--c-ink);
+}
+.login-popup__head p {
+  margin: 0;
+  font-size: 0.82rem;
   color: var(--c-ink-3);
 }
-.login-modal__close:hover { color: var(--c-ink); }
-/* Inside the modal, hide any "back to store" button the Login renders. */
-.login-modal__inner .ghost-button { display: none; }
+
+.login-popup__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-popup__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.login-popup__field span {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-ink-3);
+}
+.login-popup__field input,
+.login-popup__field select {
+  height: 40px;
+  padding: 0 0.7rem;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-size: 0.92rem;
+  font-family: inherit;
+}
+.login-popup__field input:focus,
+.login-popup__field select:focus {
+  outline: none;
+  border-color: var(--c-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
+.login-popup__error {
+  font-size: 0.82rem;
+  color: var(--c-danger, #ef4444);
+  background: color-mix(in srgb, var(--c-danger, #ef4444) 8%, var(--c-surface));
+  border: 1px solid color-mix(in srgb, var(--c-danger, #ef4444) 25%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.login-popup__submit {
+  margin-top: 4px;
+  height: 42px;
+}
 
 /* ─────────────────────────────────────
    Global busy overlay (blocks all clicks)
