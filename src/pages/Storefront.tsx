@@ -17,6 +17,13 @@ import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import LazyMount from '../components/LazyMount';
+import {
+  MOOD_COPY,
+  fetchOpenMeteoMood,
+  moodFromIndiaCalendar,
+  pickProductsForMood,
+  type WeatherMood,
+} from '../lib/weatherPicks';
 import type { Category, CompanyInfo, Order, Product, SavedAddress, User } from '../services/api';
 
 interface StorefrontProps {
@@ -79,6 +86,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [couponError, setCouponError] = useState('');
   const [publicCoupons, setPublicCoupons] = useState<PublicCoupon[]>([]);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [mood, setMood] = useState<WeatherMood>(() => moodFromIndiaCalendar());
 
   function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
     if (!('geolocation' in navigator) || !window.isSecureContext) {
@@ -130,6 +138,24 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       });
     apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
   }, []);
+
+  // Fetch live weather to tailor the "perfect for today" picks. Prefers
+  // the delivery location if the user already shared it, then falls back
+  // to the company's store location if set. No extra geolocation prompt.
+  useEffect(() => {
+    const controller = new AbortController();
+    const lat =
+      liveLocation?.latitude ??
+      (company?.storeLatitude != null ? company.storeLatitude : null);
+    const lng =
+      liveLocation?.longitude ??
+      (company?.storeLongitude != null ? company.storeLongitude : null);
+    if (lat == null || lng == null) return () => controller.abort();
+    fetchOpenMeteoMood(lat, lng, controller.signal).then((next) => {
+      if (next) setMood(next);
+    });
+    return () => controller.abort();
+  }, [liveLocation?.latitude, liveLocation?.longitude, company?.storeLatitude, company?.storeLongitude]);
 
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -245,6 +271,11 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const offerProducts = useMemo(
     () => products.filter((p) => p.isOnOffer && p.isActive && p.stockQuantity > 0),
     [products]
+  );
+
+  const moodPicks = useMemo(
+    () => pickProductsForMood(products.filter((p) => p.isActive && p.stockQuantity > 0), mood, 12),
+    [products, mood],
   );
 
   // Daily essentials: products from the staple-grocery categories.
@@ -693,6 +724,69 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                     </article>
                   );
                 })}
+              </div>
+            </section>
+          )}
+
+          {moodPicks.length > 0 && (
+            <section className={`weather-picks weather-picks--${mood}`}>
+              <div className="weather-picks__head">
+                <span className="weather-picks__eyebrow">
+                  {MOOD_COPY[mood].emoji} {MOOD_COPY[mood].eyebrow}
+                </span>
+                <h2>{MOOD_COPY[mood].title}</h2>
+                <p>{MOOD_COPY[mood].subtitle}</p>
+              </div>
+              <div className="daily-essentials__row">
+                {moodPicks.map((product) => (
+                  <article key={product.uniqueId} className="daily-essential-card">
+                    <div className="daily-essential-card__thumb">
+                      {product.imageUrl && (
+                        <img
+                          src={product.imageUrl}
+                          alt={product.name}
+                          loading="lazy"
+                          className="daily-essential-card__thumb-img"
+                        />
+                      )}
+                    </div>
+                    <div className="daily-essential-card__body">
+                      <strong className="daily-essential-card__name">{product.name}</strong>
+                      <span className="daily-essential-card__meta">{product.unitLabel}</span>
+                      <div className="daily-essential-card__price-row">
+                        <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                        {product.originalPriceCents && product.originalPriceCents > effectivePriceCents(product) ? (
+                          <span className="daily-essential-card__strike">
+                            {formatCurrency(product.originalPriceCents)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {cart[product.uniqueId] ? (
+                        <div className="qty-stepper">
+                          <button
+                            type="button"
+                            onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)}
+                          >−</button>
+                          <span>{cart[product.uniqueId]}</span>
+                          <button
+                            type="button"
+                            disabled={cart[product.uniqueId] >= product.stockQuantity}
+                            onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)}
+                          >+</button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="daily-essential-card__add"
+                          disabled={product.stockQuantity <= 0}
+                          onClick={() => updateQuantity(product.uniqueId, 1)}
+                        >
+                          {product.stockQuantity <= 0 ? 'Sold out' : '+ Add'}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           )}

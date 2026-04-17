@@ -4105,6 +4105,67 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Weather-based picks (landing page)
+   ───────────────────────────────────── */
+.weather-picks {
+  margin: 0 0 var(--sp-6);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  border-radius: 16px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface, #fff);
+  position: relative;
+  overflow: hidden;
+}
+.weather-picks::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  background:
+    radial-gradient(circle at 95% 8%, var(--wp-accent, #fde68a) 0, transparent 45%),
+    radial-gradient(circle at 5% 110%, var(--wp-accent2, #fcd34d) 0, transparent 45%);
+  z-index: 0;
+}
+.weather-picks__head,
+.weather-picks .daily-essentials__row {
+  position: relative;
+  z-index: 1;
+}
+.weather-picks__head { margin-bottom: var(--sp-3); }
+.weather-picks__eyebrow {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  color: var(--c-ink);
+}
+.weather-picks__head h2 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+  color: var(--c-ink);
+  font-weight: 700;
+}
+.weather-picks__head p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--c-ink-3);
+}
+
+/* Mood-specific accent colours */
+.weather-picks--hot    { --wp-accent: #fcd34d; --wp-accent2: #fb923c; }
+.weather-picks--warm   { --wp-accent: #fde68a; --wp-accent2: #86efac; }
+.weather-picks--rainy  { --wp-accent: #93c5fd; --wp-accent2: #64748b; }
+.weather-picks--cool   { --wp-accent: #a7f3d0; --wp-accent2: #fde68a; }
+.weather-picks--cold   { --wp-accent: #bfdbfe; --wp-accent2: #c7d2fe; }
+
+/* ─────────────────────────────────────
    Daily essentials strip (landing page)
    ───────────────────────────────────── */
 .daily-essentials {
