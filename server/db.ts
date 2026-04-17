@@ -1280,7 +1280,7 @@ export async function listSlowMovers(companyId: number): Promise<SlowMoverSugges
         AND p.is_active = TRUE
         AND p.is_on_offer = FALSE
         AND p.stock_quantity > 0
-        AND p.created_date <= NOW() - INTERVAL '14 days'
+        AND p.created_date <= NOW() - INTERVAL '3 days'
       GROUP BY p.id, c.name
       ORDER BY p.created_date ASC;
     `,
@@ -1303,23 +1303,23 @@ export async function listSlowMovers(companyId: number): Promise<SlowMoverSugges
     let reasonLabel = '';
     let suggestedDiscountPercent = 10;
 
-    if (unitsSoldAllTime === 0 && daysSinceCreated >= 30) {
+    if (unitsSoldAllTime === 0 && daysSinceCreated >= 14) {
       reason = 'no_sales_ever';
       reasonLabel = `Never sold in ${daysSinceCreated} days`;
       suggestedDiscountPercent = 20;
-    } else if (unitsSold30d === 0 && daysSinceLastSold !== null && daysSinceLastSold >= 30) {
+    } else if (unitsSoldAllTime === 0) {
+      reason = 'no_sales_ever';
+      reasonLabel = `No sales yet`;
+      suggestedDiscountPercent = 15;
+    } else if (unitsSold30d === 0 && daysSinceLastSold !== null && daysSinceLastSold >= 14) {
       reason = 'no_sales_30d';
       reasonLabel = `No sales in last ${daysSinceLastSold} days`;
-      suggestedDiscountPercent = 15;
-    } else if (unitsSold30d === 0 && daysSinceCreated >= 14) {
-      reason = 'no_sales_30d';
-      reasonLabel = `No sales in last 30 days`;
       suggestedDiscountPercent = 15;
     } else if (unitsSold30d <= 2 && row.stockQuantity >= 20) {
       reason = 'overstocked';
       reasonLabel = `Only ${unitsSold30d} sold, ${row.stockQuantity} in stock`;
       suggestedDiscountPercent = 10;
-    } else if (unitsSold30d <= 2 && daysSinceCreated >= 30) {
+    } else if (unitsSold30d <= 2 && daysSinceCreated >= 14) {
       reason = 'low_sales_30d';
       reasonLabel = `Only ${unitsSold30d} sold in 30 days`;
       suggestedDiscountPercent = 10;

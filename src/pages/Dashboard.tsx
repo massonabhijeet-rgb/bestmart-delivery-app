@@ -269,8 +269,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     try {
       const data = await apiListSlowMovers();
       setSlowMovers(data);
-    } catch {
-      // silent — non-critical
+    } catch (err) {
+      console.warn('Failed to load slow-mover suggestions', err);
     } finally {
       setSlowMoversLoading(false);
     }
@@ -2540,7 +2540,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         </div>
 
         {/* Slow-mover suggestions */}
-        {canManageCatalog && (visibleSuggestions.length > 0 || slowMoversLoading) && (
+        {canManageCatalog && (
           <div className="slow-movers">
             <div className="slow-movers__head">
               <div className="slow-movers__title-wrap">
@@ -2550,17 +2550,30 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <p className="slow-movers__sub">
                     {slowMoversLoading
                       ? 'Analysing sales…'
-                      : `${visibleSuggestions.length} product${visibleSuggestions.length === 1 ? '' : 's'} selling slowly — consider putting them on offer.`}
+                      : visibleSuggestions.length === 0
+                        ? 'No slow movers right now — everything is selling well.'
+                        : `${visibleSuggestions.length} product${visibleSuggestions.length === 1 ? '' : 's'} selling slowly — consider putting them on offer.`}
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                className="ghost-button slow-movers__toggle"
-                onClick={() => setSlowMoversCollapsed((v) => !v)}
-              >
-                {slowMoversCollapsed ? 'Show' : 'Hide'}
-              </button>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => void loadSlowMovers()}
+                  disabled={slowMoversLoading}
+                  title="Recalculate suggestions"
+                >
+                  {slowMoversLoading ? '…' : '↻ Refresh'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button slow-movers__toggle"
+                  onClick={() => setSlowMoversCollapsed((v) => !v)}
+                >
+                  {slowMoversCollapsed ? 'Show' : 'Hide'}
+                </button>
+              </div>
             </div>
             {!slowMoversCollapsed && visibleSuggestions.length > 0 && (
               <div className="slow-movers__grid">
