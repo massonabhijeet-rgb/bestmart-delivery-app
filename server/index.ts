@@ -28,6 +28,8 @@ const allowedOrigins = [
   'http://localhost:5175',
   'http://localhost:5176',
   'http://localhost:5177',
+  'https://www.bestmart.co.in',
+  'https://bestmart.co.in',
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
 ];
 
