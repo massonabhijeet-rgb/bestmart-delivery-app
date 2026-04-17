@@ -1301,7 +1301,7 @@ textarea {
 .inv-search-row {
   display: flex;
   gap: var(--sp-3);
-  align-items: center;
+  align-items: stretch;
 }
 
 .inv-search-wrap {
@@ -1309,13 +1309,14 @@ textarea {
   flex: 1;
   display: flex;
   align-items: center;
+  min-height: 44px;
 }
 
 .inv-search-icon {
   position: absolute;
-  left: 10px;
-  width: 16px;
-  height: 16px;
+  left: 14px;
+  width: 18px;
+  height: 18px;
   color: var(--c-ink-3);
   pointer-events: none;
   flex-shrink: 0;
@@ -1323,62 +1324,104 @@ textarea {
 
 .inv-search {
   width: 100%;
-  padding: 0.5rem 2.5rem 0.5rem 2.25rem;
+  height: 44px;
+  padding: 0 3rem 0 2.75rem;
   border: 1.5px solid var(--c-border-strong);
-  border-radius: var(--r-md);
+  border-radius: 10px;
   background: var(--c-surface);
   color: var(--c-ink);
-  font-size: 0.875rem;
-  transition: border-color 0.15s;
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.2;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.inv-search::placeholder {
+  color: var(--c-ink-3);
+  font-weight: 400;
+}
+
+.inv-search:hover {
+  border-color: var(--c-ink-3);
 }
 
 .inv-search:focus {
   outline: none;
   border-color: var(--c-teal);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 15%, transparent);
+  background: var(--c-surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
+
+.inv-search-wrap:focus-within .inv-search-icon {
+  color: var(--c-teal);
 }
 
 .inv-search-clear {
   position: absolute;
-  right: 32px;
-  background: none;
+  right: 40px;
+  background: var(--c-bg);
   border: none;
   cursor: pointer;
   color: var(--c-ink-3);
-  font-size: 0.75rem;
-  padding: 2px 4px;
-  border-radius: 3px;
+  font-size: 0.8rem;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
   line-height: 1;
+  transition: background 0.15s, color 0.15s;
 }
 
-.inv-search-clear:hover { color: var(--c-ink); }
+.inv-search-clear:hover {
+  color: var(--c-ink);
+  background: var(--c-border);
+}
 
 .inv-search-kbd {
   position: absolute;
-  right: 8px;
-  font-family: monospace;
-  font-size: 0.7rem;
-  color: var(--c-ink-3);
+  right: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--c-ink-2, var(--c-ink-3));
   background: var(--c-bg);
   border: 1px solid var(--c-border);
-  border-radius: 3px;
-  padding: 1px 5px;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 7px;
   pointer-events: none;
+  line-height: 1.2;
 }
 
 .inv-sort {
   flex-shrink: 0;
-  padding: 0.5rem 0.75rem;
+  height: 44px;
+  padding: 0 2.25rem 0 0.9rem;
   border: 1.5px solid var(--c-border-strong);
-  border-radius: var(--r-md);
+  border-radius: 10px;
   background: var(--c-surface);
   color: var(--c-ink);
-  font-size: 0.875rem;
+  font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  min-width: 200px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3e%3cpath d='M5 8l5 5 5-5' stroke='%23667' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 18px;
 }
 
-.inv-sort:focus { outline: none; border-color: var(--c-teal); }
+.inv-sort:hover { border-color: var(--c-ink-3); }
+.inv-sort:focus {
+  outline: none;
+  border-color: var(--c-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
 .inv-sort:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .inv-filters {
