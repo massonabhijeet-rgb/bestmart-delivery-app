@@ -16,6 +16,7 @@ import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } fr
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
+import LazyMount from '../components/LazyMount';
 import type { Category, CompanyInfo, Order, Product, SavedAddress, User } from '../services/api';
 
 interface StorefrontProps {
@@ -245,6 +246,24 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     () => products.filter((p) => p.isOnOffer && p.isActive && p.stockQuantity > 0),
     [products]
   );
+
+  // Daily essentials: products from the staple-grocery categories.
+  const dailyEssentials = useMemo(() => {
+    const KEYWORDS = [
+      'dairy', 'bread', 'egg', 'milk',
+      'fruit', 'vegetable',
+      'atta', 'rice', 'dal',
+      'tea', 'coffee',
+    ];
+    return products
+      .filter((p) => p.isActive && p.stockQuantity > 0)
+      .filter((p) => {
+        const cat = (p.category ?? '').toLowerCase();
+        const name = p.name.toLowerCase();
+        return KEYWORDS.some((k) => cat.includes(k) || name.includes(k));
+      })
+      .slice(0, 12);
+  }, [products]);
 
   const filteredProducts = useMemo(() => {
     const term = deferredSearch.trim();
@@ -595,12 +614,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       </header>
 
       <div className="store-inner">
-      <div className="promo-strip">
-        <span className="promo-strip__badge">OFFER</span>
-        <span>
-          <strong>50% OFF up to ₹200</strong> on orders above ₹500. Auto-applied at checkout.
-        </span>
-      </div>
 
       {!isBrowsing ? (
         <>
@@ -684,7 +697,71 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             </section>
           )}
 
+          {dailyEssentials.length > 0 && (
+            <LazyMount placeholderHeight={320}>
+              <section className="daily-essentials">
+                <div className="daily-essentials__head">
+                  <span className="daily-essentials__eyebrow">🛒 Daily essentials</span>
+                  <h2>Buy these on repeat</h2>
+                  <p>The staples your kitchen runs on — one tap to add.</p>
+                </div>
+                <div className="daily-essentials__row">
+                  {dailyEssentials.map((product) => (
+                    <article key={product.uniqueId} className="daily-essential-card">
+                      <div className="daily-essential-card__thumb">
+                        {product.imageUrl && (
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            loading="lazy"
+                            className="daily-essential-card__thumb-img"
+                          />
+                        )}
+                      </div>
+                      <div className="daily-essential-card__body">
+                        <strong className="daily-essential-card__name">{product.name}</strong>
+                        <span className="daily-essential-card__meta">{product.unitLabel}</span>
+                        <div className="daily-essential-card__price-row">
+                          <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                          {product.originalPriceCents && product.originalPriceCents > effectivePriceCents(product) ? (
+                            <span className="daily-essential-card__strike">
+                              {formatCurrency(product.originalPriceCents)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {cart[product.uniqueId] ? (
+                          <div className="qty-stepper">
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)}
+                            >−</button>
+                            <span>{cart[product.uniqueId]}</span>
+                            <button
+                              type="button"
+                              disabled={cart[product.uniqueId] >= product.stockQuantity}
+                              onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)}
+                            >+</button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="daily-essential-card__add"
+                            disabled={product.stockQuantity <= 0}
+                            onClick={() => updateQuantity(product.uniqueId, 1)}
+                          >
+                            {product.stockQuantity <= 0 ? 'Sold out' : '+ Add'}
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </LazyMount>
+          )}
+
           {offerProducts.length > 0 ? (
+            <LazyMount placeholderHeight={360}>
             <section className="todays-offer">
               <div className="todays-offer__head">
                 <div>
@@ -755,8 +832,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 ))}
               </div>
             </section>
+            </LazyMount>
           ) : null}
 
+          <LazyMount placeholderHeight={260}>
           <section className="category-grid">
             {categoryTiles.map((tile) => (
               <button
@@ -772,7 +851,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </button>
             ))}
           </section>
+          </LazyMount>
 
+          <LazyMount placeholderHeight={400}>
           <footer className="home-footer">
             <div className="home-footer__top">
               <div className="home-footer__brand">
@@ -853,6 +934,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </span>
             </div>
           </footer>
+          </LazyMount>
         </>
       ) : null}
 

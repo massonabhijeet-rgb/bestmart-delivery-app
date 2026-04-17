@@ -4105,6 +4105,147 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Daily essentials strip (landing page)
+   ───────────────────────────────────── */
+.daily-essentials {
+  margin: 0 0 var(--sp-6);
+  padding: 0 var(--sp-4);
+}
+.daily-essentials__head {
+  margin-bottom: var(--sp-3);
+}
+.daily-essentials__eyebrow {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #d97706;
+  background: #fef3c7;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+}
+.daily-essentials__head h2 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+  color: var(--c-ink);
+  font-weight: 700;
+}
+.daily-essentials__head p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--c-ink-3);
+}
+
+.daily-essentials__row {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 8px;
+  margin: 0 calc(-1 * var(--sp-4));
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+.daily-essentials__row::-webkit-scrollbar { height: 6px; }
+.daily-essentials__row::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+
+.daily-essential-card {
+  flex: 0 0 170px;
+  scroll-snap-align: start;
+  background: var(--c-surface, #fff);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.daily-essential-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--c-teal, #0d9488);
+  box-shadow: 0 8px 18px -10px rgba(13, 148, 136, 0.3);
+}
+
+.daily-essential-card__thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--c-bg);
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+}
+.daily-essential-card__thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.daily-essential-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.daily-essential-card__name {
+  font-size: 0.88rem;
+  color: var(--c-ink);
+  font-weight: 600;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.daily-essential-card__meta {
+  font-size: 0.72rem;
+  color: var(--c-ink-3);
+}
+.daily-essential-card__price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+}
+.daily-essential-card__price-row strong {
+  font-size: 1rem;
+  color: var(--c-ink);
+}
+.daily-essential-card__strike {
+  font-size: 0.78rem;
+  color: var(--c-ink-3);
+  text-decoration: line-through;
+}
+.daily-essential-card__add {
+  margin-top: auto;
+  background: transparent;
+  border: 1.5px solid var(--c-teal, #0d9488);
+  color: var(--c-teal, #0d9488);
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 6px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.daily-essential-card__add:hover:not(:disabled) {
+  background: var(--c-teal, #0d9488);
+  color: #fff;
+}
+.daily-essential-card__add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .daily-essential-card { flex-basis: 140px; }
+}
+
+/* ─────────────────────────────────────
    Coupon block (storefront checkout)
    ───────────────────────────────────── */
 .coupon-block {
@@ -5687,35 +5828,6 @@ textarea {
 /* ─────────────────────────────────────
    Promo strip
    ───────────────────────────────────── */
-.promo-strip {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.6rem 1rem;
-  margin-bottom: var(--sp-5);
-  background: linear-gradient(90deg, #ffefcc 0%, #fff7e0 100%);
-  border: 1px solid #ffd98a;
-  color: #5c4202;
-  border-radius: 10px;
-  font-size: 0.9rem;
-}
-
-.promo-strip strong {
-  color: #3f2d00;
-}
-
-.promo-strip__badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.15rem 0.55rem;
-  background: #d97706;
-  color: #fff;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
 .totals-card__discount {
   display: flex;
   justify-content: space-between;
