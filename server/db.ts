@@ -1952,6 +1952,150 @@ export async function listOrders(companyId: number) {
   return Promise.all(result.rows.map((row: OrderRow) => mapOrder(row)));
 }
 
+export async function listOrdersForUser(userId: number, companyId: number) {
+  const result = await pool.query(
+    `
+      SELECT ${ORDER_SELECT_COLUMNS}
+      ${ORDER_FROM_CLAUSE}
+      WHERE o.company_id = $1 AND o.created_by_user_id = $2
+      ORDER BY o.created_date DESC;
+    `,
+    [companyId, userId]
+  );
+  return Promise.all(result.rows.map((row: OrderRow) => mapOrder(row)));
+}
+
+export interface SalesReport {
+  periodDays: number;
+  totalRevenueCents: number;
+  totalOrders: number;
+  totalItemsSold: number;
+  averageOrderCents: number;
+  dailyRevenue: Array<{ date: string; revenueCents: number; orders: number }>;
+  topProducts: Array<{
+    uniqueId: string | null;
+    name: string;
+    unitsSold: number;
+    revenueCents: number;
+  }>;
+  paymentBreakdown: Array<{ method: string; orders: number; revenueCents: number }>;
+}
+
+export async function getSalesReport(companyId: number, days: number): Promise<SalesReport> {
+  const totals = await pool.query<{
+    totalRevenueCents: string;
+    totalOrders: string;
+  }>(
+    `
+      SELECT
+        COALESCE(SUM(total_cents), 0)::text AS "totalRevenueCents",
+        COUNT(*)::text AS "totalOrders"
+      FROM orders
+      WHERE company_id = $1
+        AND status <> 'cancelled'
+        AND created_date >= NOW() - ($2 || ' days')::INTERVAL;
+    `,
+    [companyId, days]
+  );
+
+  const totalItems = await pool.query<{ totalItemsSold: string }>(
+    `
+      SELECT COALESCE(SUM(oi.quantity), 0)::text AS "totalItemsSold"
+      FROM order_items oi
+      INNER JOIN orders o ON o.id = oi.order_id
+      WHERE o.company_id = $1
+        AND o.status <> 'cancelled'
+        AND o.created_date >= NOW() - ($2 || ' days')::INTERVAL;
+    `,
+    [companyId, days]
+  );
+
+  const daily = await pool.query<{ date: string; revenueCents: string; orders: string }>(
+    `
+      SELECT
+        to_char(date_trunc('day', created_date AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
+        COALESCE(SUM(total_cents), 0)::text AS "revenueCents",
+        COUNT(*)::text AS orders
+      FROM orders
+      WHERE company_id = $1
+        AND status <> 'cancelled'
+        AND created_date >= NOW() - ($2 || ' days')::INTERVAL
+      GROUP BY 1
+      ORDER BY 1 ASC;
+    `,
+    [companyId, days]
+  );
+
+  const topProducts = await pool.query<{
+    uniqueId: string | null;
+    name: string;
+    unitsSold: string;
+    revenueCents: string;
+  }>(
+    `
+      SELECT
+        p.unique_id AS "uniqueId",
+        oi.product_name AS "name",
+        SUM(oi.quantity)::text AS "unitsSold",
+        SUM(oi.line_total_cents)::text AS "revenueCents"
+      FROM order_items oi
+      INNER JOIN orders o ON o.id = oi.order_id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.company_id = $1
+        AND o.status <> 'cancelled'
+        AND o.created_date >= NOW() - ($2 || ' days')::INTERVAL
+      GROUP BY p.unique_id, oi.product_name
+      ORDER BY SUM(oi.quantity) DESC
+      LIMIT 10;
+    `,
+    [companyId, days]
+  );
+
+  const payments = await pool.query<{ method: string; orders: string; revenueCents: string }>(
+    `
+      SELECT
+        payment_method AS method,
+        COUNT(*)::text AS orders,
+        COALESCE(SUM(total_cents), 0)::text AS "revenueCents"
+      FROM orders
+      WHERE company_id = $1
+        AND status <> 'cancelled'
+        AND created_date >= NOW() - ($2 || ' days')::INTERVAL
+      GROUP BY payment_method
+      ORDER BY SUM(total_cents) DESC;
+    `,
+    [companyId, days]
+  );
+
+  const totalRevenueCents = Number(totals.rows[0]?.totalRevenueCents ?? '0');
+  const totalOrders = Number(totals.rows[0]?.totalOrders ?? '0');
+  const totalItemsSold = Number(totalItems.rows[0]?.totalItemsSold ?? '0');
+
+  return {
+    periodDays: days,
+    totalRevenueCents,
+    totalOrders,
+    totalItemsSold,
+    averageOrderCents: totalOrders > 0 ? Math.round(totalRevenueCents / totalOrders) : 0,
+    dailyRevenue: daily.rows.map((r) => ({
+      date: r.date,
+      revenueCents: Number(r.revenueCents),
+      orders: Number(r.orders),
+    })),
+    topProducts: topProducts.rows.map((r) => ({
+      uniqueId: r.uniqueId,
+      name: r.name,
+      unitsSold: Number(r.unitsSold),
+      revenueCents: Number(r.revenueCents),
+    })),
+    paymentBreakdown: payments.rows.map((r) => ({
+      method: r.method,
+      orders: Number(r.orders),
+      revenueCents: Number(r.revenueCents),
+    })),
+  };
+}
+
 export async function updateOrderStatus(
   publicId: string,
   companyId: number,

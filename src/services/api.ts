@@ -346,20 +346,44 @@ export async function apiBulkUploadProductImages(files: File[]): Promise<BulkIma
 export async function apiCreateOrder(payload: {
   customerName: string;
   customerPhone: string;
-  customerEmail?: string;
   deliveryAddress: string;
   deliveryNotes?: string;
-  deliverySlot?: string;
   paymentMethod: string;
   items: Array<{ productId: string; quantity: number }>;
-  deliveryLatitude?: number | null;
-  deliveryLongitude?: number | null;
+  deliveryLatitude: number;
+  deliveryLongitude: number;
 }) {
   const data = await request<{ order: Order }>('/orders', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   return data.order;
+}
+
+export async function apiListMyOrders() {
+  const data = await request<{ orders: Order[] }>('/orders/my-orders');
+  return data.orders;
+}
+
+export interface SalesReport {
+  periodDays: number;
+  totalRevenueCents: number;
+  totalOrders: number;
+  totalItemsSold: number;
+  averageOrderCents: number;
+  dailyRevenue: Array<{ date: string; revenueCents: number; orders: number }>;
+  topProducts: Array<{
+    uniqueId: string | null;
+    name: string;
+    unitsSold: number;
+    revenueCents: number;
+  }>;
+  paymentBreakdown: Array<{ method: string; orders: number; revenueCents: number }>;
+}
+
+export async function apiSalesReport(days = 30) {
+  const data = await request<{ report: SalesReport }>(`/orders/sales-report?days=${days}`);
+  return data.report;
 }
 
 export async function apiTrackOrder(publicId: string) {

@@ -9,11 +9,13 @@ const Login = lazy(() => import('./pages/Login'));
 const RiderHome = lazy(() => import('./pages/RiderHome'));
 const Storefront = lazy(() => import('./pages/Storefront'));
 const TrackOrder = lazy(() => import('./pages/TrackOrder'));
+const MyOrders = lazy(() => import('./pages/MyOrders'));
 
 type Route =
   | { view: 'store' }
   | { view: 'login' }
   | { view: 'dashboard' }
+  | { view: 'my-orders' }
   | { view: 'track'; code: string };
 
 function readRoute(): Route {
@@ -27,6 +29,9 @@ function readRoute(): Route {
   }
   if (hash === '#dashboard') {
     return { view: 'dashboard' };
+  }
+  if (hash === '#my-orders') {
+    return { view: 'my-orders' };
   }
 
   const pathParts = window.location.pathname.split('/').filter(Boolean);
@@ -157,6 +162,17 @@ function App() {
     );
   }
 
+  if (user && route.view === 'my-orders') {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <MyOrders
+          onBackToStore={() => navigate({ view: 'store' })}
+          onTrack={(code) => navigate({ view: 'track', code })}
+        />
+      </Suspense>
+    );
+  }
+
   if (user && (route.view === 'dashboard' || route.view === 'login')) {
     return (
       <Suspense fallback={<PageLoader />}>
@@ -179,6 +195,7 @@ function App() {
         user={user}
         onOpenLogin={() => navigate({ view: 'login' })}
         onOpenDashboard={() => navigate({ view: 'dashboard' })}
+        onOpenMyOrders={() => navigate({ view: 'my-orders' })}
         onTrack={(code) => navigate({ view: 'track', code })}
         onLogout={() => {
           setUser(null);

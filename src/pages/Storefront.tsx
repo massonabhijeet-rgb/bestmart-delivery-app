@@ -17,6 +17,7 @@ interface StorefrontProps {
   user: User | null;
   onOpenLogin: () => void;
   onOpenDashboard: () => void;
+  onOpenMyOrders: () => void;
   onTrack: (code: string) => void;
   onLogout: () => void;
 }
@@ -24,10 +25,8 @@ interface StorefrontProps {
 interface CheckoutForm {
   customerName: string;
   customerPhone: string;
-  customerEmail: string;
   deliveryAddress: string;
   deliveryNotes: string;
-  deliverySlot: string;
   paymentMethod: string;
 }
 
@@ -41,7 +40,7 @@ const HOME_BANNERS: Array<{ title: string; accent: string }> = [
 
 const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
 
-function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: StorefrontProps) {
+function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrack, onLogout }: StorefrontProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [categoryRows, setCategoryRows] = useState<Category[]>([]);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
@@ -58,10 +57,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
   const [checkoutForm, setCheckoutForm] = useState<CheckoutForm>({
     customerName: '',
     customerPhone: '',
-    customerEmail: '',
     deliveryAddress: '',
     deliveryNotes: '',
-    deliverySlot: 'Express (2–4 hrs)',
     paymentMethod: 'cash_on_delivery',
   });
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
@@ -149,7 +146,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
             ...current,
             customerName: current.customerName || mostRecent.fullName,
             customerPhone: current.customerPhone || mostRecent.phone,
-            customerEmail: current.customerEmail || user.email,
             deliveryAddress: current.deliveryAddress || mostRecent.deliveryAddress,
             deliveryNotes: current.deliveryNotes || mostRecent.deliveryNotes || '',
           }));
@@ -158,7 +154,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
             ...current,
             customerName: current.customerName || user.fullName || '',
             customerPhone: current.customerPhone || user.phone || '',
-            customerEmail: current.customerEmail || user.email,
           }));
         }
       })
@@ -168,7 +163,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
           ...current,
           customerName: current.customerName || user.fullName || '',
           customerPhone: current.customerPhone || user.phone || '',
-          customerEmail: current.customerEmail || user.email,
         }));
       });
     return () => {
@@ -316,23 +310,32 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
         ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
         : null;
       if (!coords) {
-        coords = await captureLocation();
+        try {
+          coords = await captureLocation();
+        } catch {
+          coords = null;
+        }
+      }
+      if (!coords) {
+        setError(
+          'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
+        );
+        setPlacingOrder(false);
+        return;
       }
 
       const order = await apiCreateOrder({
         customerName: checkoutForm.customerName,
         customerPhone: checkoutForm.customerPhone,
-        customerEmail: checkoutForm.customerEmail,
         deliveryAddress: checkoutForm.deliveryAddress,
         deliveryNotes: checkoutForm.deliveryNotes,
-        deliverySlot: checkoutForm.deliverySlot,
         paymentMethod: checkoutForm.paymentMethod,
         items: cartItems.map((item) => ({
           productId: item.product.uniqueId,
           quantity: item.quantity,
         })),
-        deliveryLatitude: coords?.latitude ?? null,
-        deliveryLongitude: coords?.longitude ?? null,
+        deliveryLatitude: coords.latitude,
+        deliveryLongitude: coords.longitude,
       });
 
       setLatestOrder(order);
@@ -453,6 +456,13 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
                   Dashboard
                 </button>
               )}
+              <button
+                type="button"
+                className="store-topbar__btn"
+                onClick={onOpenMyOrders}
+              >
+                My Orders
+              </button>
               <span className="store-topbar__user" title={user.email}>
                 {user.fullName || user.email}
               </span>
@@ -888,18 +898,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
             </label>
 
             <label>
-              <span>Email</span>
-              <input
-                type="email"
-                value={checkoutForm.customerEmail}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, customerEmail: event.target.value }))
-                }
-                placeholder="Optional"
-              />
-            </label>
-
-            <label>
               <span>Delivery address</span>
               <textarea
                 value={checkoutForm.deliveryAddress}
@@ -911,36 +909,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
               />
             </label>
 
-            <div className="inline-field-group">
-              <label>
-                <span>Slot</span>
-                <select
-                  value={checkoutForm.deliverySlot}
-                  onChange={(event) =>
-                    setCheckoutForm((current) => ({ ...current, deliverySlot: event.target.value }))
-                  }
-                >
-                  <option>Express (2–4 hrs)</option>
-                  <option>Today evening (6–9 PM)</option>
-                  <option>Tomorrow morning (9 AM–1 PM)</option>
-                  <option>Tomorrow evening (4–8 PM)</option>
-                </select>
-              </label>
-
-              <label>
-                <span>Payment</span>
-                <select
-                  value={checkoutForm.paymentMethod}
-                  onChange={(event) =>
-                    setCheckoutForm((current) => ({ ...current, paymentMethod: event.target.value }))
-                  }
-                >
-                  <option value="cash_on_delivery">Cash on delivery</option>
-                  <option value="upi">UPI</option>
-                  <option value="card_on_delivery">Card on delivery</option>
-                </select>
-              </label>
-            </div>
+            <label>
+              <span>Payment</span>
+              <select
+                value={checkoutForm.paymentMethod}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, paymentMethod: event.target.value }))
+                }
+              >
+                <option value="cash_on_delivery">Cash on delivery</option>
+                <option value="upi">UPI</option>
+                <option value="card_on_delivery">Card on delivery</option>
+              </select>
+            </label>
 
             <label>
               <span>Delivery notes</span>
@@ -953,18 +934,18 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
               />
             </label>
 
-            <div className="location-block">
+            <div className={`location-block${!liveLocation ? ' location-block--required' : ''}`}>
               <div>
-                <strong>Share live location</strong>
+                <strong>Share live location <span style={{ color: 'var(--c-danger, #ef4444)' }}>*</span></strong>
                 <p>
                   {liveLocation
                     ? `Captured (~${liveLocation.latitude.toFixed(5)}, ${liveLocation.longitude.toFixed(5)})`
-                    : 'Helps the rider find you faster.'}
+                    : 'Required — riders need your exact location to deliver.'}
                 </p>
               </div>
               <button
                 type="button"
-                className="secondary-button"
+                className={liveLocation ? 'secondary-button' : 'primary-button'}
                 onClick={handleShareLocation}
                 disabled={locationStatus === 'capturing'}
               >
@@ -972,7 +953,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
                   ? 'Getting location…'
                   : liveLocation
                     ? 'Update location'
-                    : 'Share location'}
+                    : 'Use my current location'}
               </button>
               {locationStatus === 'error' && locationError ? (
                 <span className="location-block__error">{locationError}</span>
@@ -1014,13 +995,15 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: S
             ) : null}
             <button
               className="primary-button primary-button--wide"
-              disabled={placingOrder || cartItems.length === 0 || !user}
+              disabled={placingOrder || cartItems.length === 0 || !user || !liveLocation}
             >
               {placingOrder
                 ? 'Placing order...'
                 : !user
                   ? 'Log in to Place Order'
-                  : 'Place Order'}
+                  : !liveLocation
+                    ? 'Share location to continue'
+                    : 'Place Order'}
             </button>
           </form>
         </aside>

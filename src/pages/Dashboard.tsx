@@ -27,8 +27,9 @@ import {
   apiUploadProductImage,
   apiBulkUploadProductImages,
   apiListSlowMovers,
+  apiSalesReport,
 } from '../services/api';
-import type { BulkImageUploadResult, SlowMoverSuggestion } from '../services/api';
+import type { BulkImageUploadResult, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -104,7 +105,7 @@ const defaultProductForm: ProductFormState = {
   isActive: true,
 };
 
-type DashTab = 'overview' | 'orders' | 'inventory' | 'categories' | 'offers' | 'team';
+type DashTab = 'overview' | 'orders' | 'sales' | 'inventory' | 'categories' | 'offers' | 'team';
 
 function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
@@ -156,6 +157,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [slowMoversLoading, setSlowMoversLoading] = useState(false);
   const [dismissedSlowMovers, setDismissedSlowMovers] = useState<Set<string>>(new Set());
   const [slowMoversCollapsed, setSlowMoversCollapsed] = useState(false);
+  const [salesReport, setSalesReport] = useState<SalesReport | null>(null);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [salesRange, setSalesRange] = useState<7 | 30 | 90>(30);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -279,6 +283,23 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   useEffect(() => {
     if (activeTab === 'offers' && canManageCatalog) void loadSlowMovers();
   }, [activeTab, canManageCatalog, loadSlowMovers, products.length]);
+
+  const loadSalesReport = useCallback(async (days: 7 | 30 | 90) => {
+    if (!canManageTeam) return;
+    setSalesLoading(true);
+    try {
+      const data = await apiSalesReport(days);
+      setSalesReport(data);
+    } catch (err) {
+      console.warn('Failed to load sales report', err);
+    } finally {
+      setSalesLoading(false);
+    }
+  }, [canManageTeam]);
+
+  useEffect(() => {
+    if (activeTab === 'sales' && canManageTeam) void loadSalesReport(salesRange);
+  }, [activeTab, canManageTeam, loadSalesReport, salesRange]);
 
   useEffect(() => {
     const handler = () => {
@@ -986,6 +1007,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const tabs: Array<{ key: DashTab; label: string; badge?: number }> = [
     { key: 'overview', label: 'Overview' },
     { key: 'orders', label: orders.length > 0 ? `Orders (${orders.length})` : 'Orders', badge: unseenCount },
+    ...(canManageTeam ? [{ key: 'sales' as DashTab, label: 'Sales' }] : []),
     { key: 'inventory', label: 'Inventory' },
     ...(canManageCatalog ? [{ key: 'categories' as DashTab, label: 'Categories' }] : []),
     ...(canManageCatalog ? [{ key: 'offers' as DashTab, label: "Today's Offers" }] : []),
@@ -1051,6 +1073,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       <main className="dash-content">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'orders' && renderOrders()}
+        {activeTab === 'sales' && renderSales()}
         {activeTab === 'inventory' && renderInventory()}
         {activeTab === 'categories' && renderCategories()}
         {activeTab === 'offers' && renderOffers()}
@@ -1277,6 +1300,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               {orderCounts.out_for_delivery} on the way
             </p>
           </div>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={exportOrdersCsv}
+            disabled={orders.length === 0}
+            title="Export all orders to CSV"
+          >
+            ⬇ Export CSV
+          </button>
         </div>
 
         <div className="order-toolbar">
@@ -2900,6 +2932,229 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </div>
           )}
         </div>
+      </div>
+    );
+  }
+
+  // ── CSV export helpers ─────────────────────────────────────────────
+  function downloadCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
+    const esc = (v: string | number | null | undefined) => {
+      const s = v == null ? '' : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const csv = rows.map((r) => r.map(esc).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportOrdersCsv() {
+    const headers = [
+      'Order ID', 'Status', 'Customer', 'Phone', 'Address', 'Payment',
+      'Subtotal', 'Delivery Fee', 'Discount', 'Total', 'Rider',
+      'Placed at', 'Last updated', 'Items',
+    ];
+    const rows: Array<Array<string | number | null>> = [headers];
+    for (const o of orders) {
+      const items = o.items?.map((it) => `${it.quantity}× ${it.productName}`).join(' | ') ?? '';
+      rows.push([
+        o.publicId,
+        o.status,
+        o.customerName,
+        o.customerPhone,
+        o.deliveryAddress,
+        o.paymentMethod,
+        (o.subtotalCents / 100).toFixed(2),
+        (o.deliveryFeeCents / 100).toFixed(2),
+        (o.discountCents / 100).toFixed(2),
+        (o.totalCents / 100).toFixed(2),
+        o.assignedRider ?? '',
+        o.createdDate,
+        o.updatedDate,
+        items,
+      ]);
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(`bestmart-orders-${stamp}.csv`, rows);
+  }
+
+  function exportSalesCsv() {
+    if (!salesReport) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const summary: Array<Array<string | number>> = [
+      ['Period (days)', salesReport.periodDays],
+      ['Total revenue (₹)', (salesReport.totalRevenueCents / 100).toFixed(2)],
+      ['Total orders', salesReport.totalOrders],
+      ['Total items sold', salesReport.totalItemsSold],
+      ['Average order value (₹)', (salesReport.averageOrderCents / 100).toFixed(2)],
+      [],
+      ['Daily revenue'],
+      ['Date', 'Orders', 'Revenue (₹)'],
+      ...salesReport.dailyRevenue.map((d) => [d.date, d.orders, (d.revenueCents / 100).toFixed(2)]),
+      [],
+      ['Top products'],
+      ['Rank', 'Product', 'Units sold', 'Revenue (₹)'],
+      ...salesReport.topProducts.map((p, i) => [i + 1, p.name, p.unitsSold, (p.revenueCents / 100).toFixed(2)]),
+      [],
+      ['Payment breakdown'],
+      ['Method', 'Orders', 'Revenue (₹)'],
+      ...salesReport.paymentBreakdown.map((p) => [p.method, p.orders, (p.revenueCents / 100).toFixed(2)]),
+    ];
+    downloadCsv(`bestmart-sales-${salesReport.periodDays}d-${stamp}.csv`, summary);
+  }
+
+  function renderSales() {
+    if (!canManageTeam) {
+      return <div className="section-box"><div className="empty-state">Only admins can view sales reports.</div></div>;
+    }
+    const report = salesReport;
+    const maxDaily = report
+      ? Math.max(1, ...report.dailyRevenue.map((d) => d.revenueCents))
+      : 1;
+
+    return (
+      <div className="section-box">
+        <div className="section-box__head">
+          <div>
+            <h2>Sales</h2>
+            <p>Revenue, volume, and top products over the selected period.</p>
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
+            <div className="sales-range">
+              {([7, 30, 90] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={`chip${salesRange === d ? ' chip--active' : ''}`}
+                  onClick={() => setSalesRange(d)}
+                  disabled={salesLoading}
+                >
+                  Last {d} days
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => void loadSalesReport(salesRange)}
+              disabled={salesLoading}
+            >
+              {salesLoading ? '…' : '↻ Refresh'}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={exportSalesCsv}
+              disabled={!report || salesLoading}
+            >
+              ⬇ Export CSV
+            </button>
+          </div>
+        </div>
+
+        {!report && salesLoading && (
+          <div className="empty-state">Loading sales report…</div>
+        )}
+
+        {report && (
+          <>
+            <div className="sales-kpis">
+              <div className="sales-kpi">
+                <span className="sales-kpi__label">Revenue</span>
+                <span className="sales-kpi__value">{formatCurrency(report.totalRevenueCents)}</span>
+              </div>
+              <div className="sales-kpi">
+                <span className="sales-kpi__label">Orders</span>
+                <span className="sales-kpi__value">{report.totalOrders}</span>
+              </div>
+              <div className="sales-kpi">
+                <span className="sales-kpi__label">Items sold</span>
+                <span className="sales-kpi__value">{report.totalItemsSold}</span>
+              </div>
+              <div className="sales-kpi">
+                <span className="sales-kpi__label">Avg order</span>
+                <span className="sales-kpi__value">{formatCurrency(report.averageOrderCents)}</span>
+              </div>
+            </div>
+
+            <div className="sales-section">
+              <h3 className="sales-section__title">Daily revenue</h3>
+              {report.dailyRevenue.length === 0 ? (
+                <p className="empty-state">No sales in this period.</p>
+              ) : (
+                <div className="sales-chart">
+                  {report.dailyRevenue.map((d) => (
+                    <div key={d.date} className="sales-chart__col" title={`${d.date}: ${formatCurrency(d.revenueCents)} (${d.orders} orders)`}>
+                      <div
+                        className="sales-chart__bar"
+                        style={{ height: `${(d.revenueCents / maxDaily) * 100}%` }}
+                      />
+                      <span className="sales-chart__date">{d.date.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="sales-section">
+              <h3 className="sales-section__title">Top products</h3>
+              {report.topProducts.length === 0 ? (
+                <p className="empty-state">No products sold in this period.</p>
+              ) : (
+                <table className="sales-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 40 }}>#</th>
+                      <th>Product</th>
+                      <th style={{ width: 120 }}>Units sold</th>
+                      <th style={{ width: 160 }}>Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.topProducts.map((p, i) => (
+                      <tr key={`${p.uniqueId ?? 'anon'}-${i}`}>
+                        <td>{i + 1}</td>
+                        <td>{p.name}</td>
+                        <td>{p.unitsSold}</td>
+                        <td>{formatCurrency(p.revenueCents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="sales-section">
+              <h3 className="sales-section__title">Payment mix</h3>
+              {report.paymentBreakdown.length === 0 ? (
+                <p className="empty-state">No payments recorded.</p>
+              ) : (
+                <table className="sales-table">
+                  <thead>
+                    <tr>
+                      <th>Method</th>
+                      <th style={{ width: 120 }}>Orders</th>
+                      <th style={{ width: 160 }}>Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.paymentBreakdown.map((p) => (
+                      <tr key={p.method}>
+                        <td>{labelizeStatus(p.method)}</td>
+                        <td>{p.orders}</td>
+                        <td>{formatCurrency(p.revenueCents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
       </div>
     );
   }

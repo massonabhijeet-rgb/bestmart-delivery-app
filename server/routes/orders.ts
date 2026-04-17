@@ -6,7 +6,9 @@ import {
   getDefaultCompanyId,
   getDashboardSummary,
   getOrderByPublicId,
+  getSalesReport,
   listOrders,
+  listOrdersForUser,
   updateOrderStatus,
   updateUserProfileIfEmpty,
   upsertUserAddress,
@@ -102,6 +104,12 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       return res.status(400).json({ error: 'Missing required order fields' });
     }
 
+    if (!validLat || !validLng) {
+      return res.status(400).json({
+        error: 'Please share your delivery location so the rider can find you.',
+      });
+    }
+
     const order = await createOrder({
       companyId,
       customerName,
@@ -116,8 +124,8 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
         quantity: Number(item.quantity),
       })),
       geoLabel: getGeoLabel(req.headers['x-forwarded-for']?.toString() || req.socket.remoteAddress),
-      deliveryLatitude: validLat ? deliveryLatitude : null,
-      deliveryLongitude: validLng ? deliveryLongitude : null,
+      deliveryLatitude: deliveryLatitude as number,
+      deliveryLongitude: deliveryLongitude as number,
       createdByUserId: req.user?.id ?? null,
     });
 
@@ -128,8 +136,8 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
         phone: customerPhone,
         deliveryAddress,
         deliveryNotes: deliveryNotes ?? null,
-        latitude: validLat ? deliveryLatitude : null,
-        longitude: validLng ? deliveryLongitude : null,
+        latitude: deliveryLatitude as number,
+        longitude: deliveryLongitude as number,
       });
     }
 
@@ -170,6 +178,38 @@ router.get('/summary', authenticateToken, async (req: AuthenticatedRequest, res)
   await cacheSet(cacheKey, result, TTL.ORDERS_SUMMARY);
   return res.json(result);
 });
+
+router.get('/my-orders', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const orders = await listOrdersForUser(req.user.id, req.user.companyId);
+    return res.json({ orders });
+  } catch (error) {
+    console.error('List my-orders error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get(
+  '/sales-report',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+      const days = Math.min(Math.max(Number(req.query.days ?? 30), 1), 365);
+      const report = await getSalesReport(req.user.companyId, days);
+      return res.json({ report });
+    } catch (error) {
+      console.error('Sales report error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   if (!req.user) {
