@@ -3600,7 +3600,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }
 
   // ── Coupons ────────────────────────────────────────────────────────
-  const loadCoupons = useCallback(async () => {
+  async function loadCoupons() {
     if (!canManageTeam) return;
     setCouponsLoading(true);
     try {
@@ -3611,11 +3611,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     } finally {
       setCouponsLoading(false);
     }
-  }, [canManageTeam]);
+  }
 
   useEffect(() => {
-    if (activeTab === 'coupons' && canManageTeam) void loadCoupons();
-  }, [activeTab, canManageTeam, loadCoupons]);
+    if (activeTab === 'coupons' && canManageTeam) {
+      loadCoupons();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, canManageTeam]);
 
   function openNewCouponForm() {
     setEditingCoupon(null);
