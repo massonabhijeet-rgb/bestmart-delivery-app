@@ -37,12 +37,6 @@ interface CheckoutForm {
 
 const CART_STORAGE_KEY = 'bestmart:cart';
 
-const HOME_BANNERS: Array<{ title: string; accent: string }> = [
-  { title: 'Cough syrups, pain relief sprays & more', accent: '#b8e6dc' },
-  { title: 'Food, treats, toys & more', accent: '#fce38a' },
-  { title: 'Get baby care essentials', accent: '#d9e4f5' },
-];
-
 const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
 
 function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrack, onLogout }: StorefrontProps) {
@@ -611,66 +605,84 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       {!isBrowsing ? (
         <>
           {publicCoupons.length > 0 && (
-            <section className="coupons-strip">
-              <div className="coupons-strip__head">
-                <h2>Available coupons</h2>
-                <p>Tap a coupon to copy the code, then apply it at checkout.</p>
+            <section className="coupon-banners">
+              <div className="coupon-banners__head">
+                <span className="coupon-banners__eyebrow">🎟  Limited-time offers</span>
+                <h2>Save more with coupon codes</h2>
+                <p>Tap a coupon to copy the code — apply it at checkout to claim the discount.</p>
               </div>
-              <div className="coupons-strip__row">
-                {publicCoupons.map((c) => {
-                  const discountLabel = c.discountType === 'percent'
-                    ? `${c.discountValue}% OFF`
-                    : `₹${(c.discountValue / 100).toFixed(0)} OFF`;
+              <div className="coupon-banners__row">
+                {publicCoupons.map((c, idx) => {
+                  const palettes = [
+                    { from: '#0d9488', to: '#0f766e', ink: '#fff' },
+                    { from: '#f59e0b', to: '#d97706', ink: '#1f1300' },
+                    { from: '#6366f1', to: '#4f46e5', ink: '#fff' },
+                    { from: '#ec4899', to: '#db2777', ink: '#fff' },
+                    { from: '#0ea5e9', to: '#0369a1', ink: '#fff' },
+                  ];
+                  const palette = palettes[idx % palettes.length];
+                  const discountBig = c.discountType === 'percent'
+                    ? `${c.discountValue}%`
+                    : `₹${(c.discountValue / 100).toFixed(0)}`;
                   const minLabel = c.minSubtotalCents > 0
-                    ? `Min ₹${(c.minSubtotalCents / 100).toFixed(0)}`
-                    : null;
+                    ? `Min order ₹${(c.minSubtotalCents / 100).toFixed(0)}`
+                    : 'No minimum';
                   const capLabel = c.discountType === 'percent' && c.maxDiscountCents != null
                     ? `Up to ₹${(c.maxDiscountCents / 100).toFixed(0)}`
                     : null;
                   const expiryLabel = c.validUntil
-                    ? `Until ${new Date(c.validUntil).toLocaleDateString()}`
-                    : null;
+                    ? `Valid until ${new Date(c.validUntil).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+                    : 'No expiry';
                   const isCopied = copiedCode === c.code;
                   return (
-                    <article key={c.code} className="coupon-tile">
-                      <div className="coupon-tile__discount">{discountLabel}</div>
-                      <div className="coupon-tile__body">
-                        <div className="coupon-tile__code">{c.code}</div>
-                        {c.description && <p className="coupon-tile__desc">{c.description}</p>}
-                        <div className="coupon-tile__meta">
-                          {minLabel && <span>{minLabel}</span>}
-                          {capLabel && <span>{capLabel}</span>}
-                          {expiryLabel && <span>{expiryLabel}</span>}
+                    <article
+                      key={c.code}
+                      className="coupon-banner"
+                      style={{
+                        background: `linear-gradient(135deg, ${palette.from} 0%, ${palette.to} 100%)`,
+                        color: palette.ink,
+                      }}
+                    >
+                      <div className="coupon-banner__decor" aria-hidden />
+                      <div className="coupon-banner__main">
+                        <div className="coupon-banner__discount">
+                          <span className="coupon-banner__discount-num">{discountBig}</span>
+                          <span className="coupon-banner__discount-label">
+                            {c.discountType === 'percent' ? 'OFF' : 'OFF'}
+                          </span>
+                        </div>
+                        <div className="coupon-banner__info">
+                          {c.description ? (
+                            <p className="coupon-banner__desc">{c.description}</p>
+                          ) : (
+                            <p className="coupon-banner__desc">Save big on your next order.</p>
+                          )}
+                          <div className="coupon-banner__meta">
+                            <span>{minLabel}</span>
+                            {capLabel && <span>{capLabel}</span>}
+                            <span>{expiryLabel}</span>
+                          </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className="coupon-tile__copy"
-                        onClick={() => handleCopyCoupon(c.code)}
-                      >
-                        {isCopied ? '✓ Copied' : 'Copy code'}
-                      </button>
+                      <div className="coupon-banner__foot">
+                        <div className="coupon-banner__code-wrap">
+                          <span className="coupon-banner__code-label">Code</span>
+                          <span className="coupon-banner__code">{c.code}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="coupon-banner__copy"
+                          onClick={() => handleCopyCoupon(c.code)}
+                        >
+                          {isCopied ? '✓ Copied!' : 'Copy code'}
+                        </button>
+                      </div>
                     </article>
                   );
                 })}
               </div>
             </section>
           )}
-
-          <section className="home-banners">
-            {HOME_BANNERS.map((banner) => (
-              <article
-                key={banner.title}
-                className="home-banner"
-                style={{ background: banner.accent }}
-              >
-                <div className="home-banner__copy">
-                  <p>{banner.title}</p>
-                  <button type="button" className="home-banner__cta">Order Now</button>
-                </div>
-              </article>
-            ))}
-          </section>
 
           {offerProducts.length > 0 ? (
             <section className="todays-offer">
