@@ -128,12 +128,32 @@ p {
     linear-gradient(180deg, #EDF2FF 0%, #DDEAFF 100%);
 }
 
+.app-loading__orb,
+.store-loading__orb,
+.busy-overlay__spinner {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none !important;
+  background:
+    conic-gradient(from 180deg at 50% 50%,
+      var(--c-teal, #0d9488) 0deg,
+      color-mix(in srgb, var(--c-teal, #0d9488) 30%, transparent) 270deg,
+      transparent 360deg) !important;
+  animation: bm-spin 0.9s linear infinite !important;
+  -webkit-mask: radial-gradient(circle at center, transparent 22px, #000 23px);
+          mask: radial-gradient(circle at center, transparent 22px, #000 23px);
+}
+
 .app-loading__orb {
-  width: 80px;
-  height: 80px;
-  border-radius: var(--r-full);
-  background: linear-gradient(135deg, var(--c-accent), var(--c-teal));
-  animation: pulse 1.8s infinite ease-in-out;
+  width: 72px;
+  height: 72px;
+  -webkit-mask: radial-gradient(circle at center, transparent 28px, #000 29px);
+          mask: radial-gradient(circle at center, transparent 28px, #000 29px);
+}
+
+@keyframes bm-spin {
+  to { transform: rotate(360deg); }
 }
 
 .app-loading p {
@@ -4123,23 +4143,7 @@ textarea {
   font-weight: 500;
   letter-spacing: 0.01em;
 }
-.store-loading__orb {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  position: relative;
-  background:
-    conic-gradient(from 180deg at 50% 50%,
-      var(--c-teal, #0d9488) 0deg,
-      color-mix(in srgb, var(--c-teal, #0d9488) 30%, transparent) 270deg,
-      transparent 360deg);
-  animation: store-loading-spin 0.9s linear infinite;
-  -webkit-mask: radial-gradient(circle at center, transparent 22px, #000 23px);
-          mask: radial-gradient(circle at center, transparent 22px, #000 23px);
-}
-@keyframes store-loading-spin {
-  to { transform: rotate(360deg); }
-}
+/* (store-loading__orb uses the unified spinner defined near .app-loading__orb) */
 
 /* ─────────────────────────────────────
    Weather-based picks (landing page)
@@ -4651,17 +4655,13 @@ textarea {
   from { transform: scale(0.92); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
+/* .busy-overlay__spinner sizing — unified style lives near .app-loading__orb */
 .busy-overlay__spinner {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 3px solid color-mix(in srgb, var(--c-teal, #0d9488) 25%, transparent);
-  border-top-color: var(--c-teal, #0d9488);
-  animation: busy-spin 0.8s linear infinite;
+  width: 32px !important;
+  height: 32px !important;
   flex-shrink: 0;
-}
-@keyframes busy-spin {
-  to { transform: rotate(360deg); }
+  -webkit-mask: radial-gradient(circle at center, transparent 12px, #000 13px) !important;
+          mask: radial-gradient(circle at center, transparent 12px, #000 13px) !important;
 }
 .busy-overlay__label {
   font-size: 0.95rem;
