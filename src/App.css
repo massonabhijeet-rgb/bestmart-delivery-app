@@ -3944,6 +3944,27 @@ textarea {
 }
 .coupon-banners__head {
   margin-bottom: var(--sp-4);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.coupon-banners__manage {
+  background: var(--c-teal, #0d9488);
+  color: #fff;
+  border: none;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.12s;
+}
+.coupon-banners__manage:hover {
+  background: color-mix(in srgb, var(--c-teal, #0d9488) 85%, #000);
+  transform: translateY(-1px);
 }
 .coupon-banners__eyebrow {
   display: inline-block;
@@ -4439,9 +4460,29 @@ textarea {
 .coupon-card__actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
   border-top: 1px solid var(--c-border);
   padding-top: var(--sp-2);
+}
+.coupon-card__actions .ghost-button {
+  font-weight: 600;
+  padding: 6px 14px;
+  border: 1.5px solid var(--c-border-strong);
+  background: var(--c-surface);
+}
+.coupon-card__actions .ghost-button:hover:not(:disabled) {
+  background: var(--c-bg);
+  border-color: var(--c-teal, #0d9488);
+  color: var(--c-teal, #0d9488);
+}
+.coupon-card__actions .ghost-button--danger {
+  border-color: color-mix(in srgb, var(--c-danger, #ef4444) 35%, transparent);
+  color: var(--c-danger, #ef4444);
+}
+.coupon-card__actions .ghost-button--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--c-danger, #ef4444) 8%, var(--c-surface));
+  border-color: var(--c-danger, #ef4444);
+  color: var(--c-danger, #ef4444);
 }
 
 .coupon-form {

@@ -658,9 +658,20 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           {publicCoupons.length > 0 && (
             <section className="coupon-banners">
               <div className="coupon-banners__head">
-                <span className="coupon-banners__eyebrow">🎟  Limited-time offers</span>
-                <h2>Save more with coupon codes</h2>
-                <p>Tap a coupon to copy the code — apply it at checkout to claim the discount.</p>
+                <div>
+                  <span className="coupon-banners__eyebrow">🎟  Limited-time offers</span>
+                  <h2>Save more with coupon codes</h2>
+                  <p>Tap a coupon to copy the code — apply it at checkout to claim the discount.</p>
+                </div>
+                {user?.role === 'admin' && (
+                  <button
+                    type="button"
+                    className="coupon-banners__manage"
+                    onClick={onOpenDashboard}
+                  >
+                    Manage coupons →
+                  </button>
+                )}
               </div>
               <div className="coupon-banners__row">
                 {publicCoupons.map((c, idx) => {
