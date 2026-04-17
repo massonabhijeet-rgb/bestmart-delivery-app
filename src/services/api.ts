@@ -169,6 +169,17 @@ function getToken() {
   return localStorage.getItem('token');
 }
 
+export class ApiError extends Error {
+  status: number;
+  data: Record<string, unknown>;
+  constructor(message: string, status: number, data: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers);
   const token = getToken();
@@ -199,7 +210,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}) {
   const data = text ? (JSON.parse(text) as T & { error?: string }) : ({} as T);
 
   if (!response.ok) {
-    throw new Error((data as { error?: string }).error || `Request failed (${response.status})`);
+    const message = (data as { error?: string }).error || `Request failed (${response.status})`;
+    throw new ApiError(message, response.status, data as Record<string, unknown>);
   }
 
   return data as T;

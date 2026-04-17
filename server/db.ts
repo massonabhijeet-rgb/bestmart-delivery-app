@@ -2141,7 +2141,9 @@ export async function createOrder(input: CreateOrderInput) {
         subtotalCents,
       );
       if (!validation.ok) {
-        throw new Error(validation.error);
+        // Tagged so the route handler can distinguish coupon failures
+        // and surface them in the coupon UI rather than as a generic order error.
+        throw new Error(`COUPON_INVALID:${validation.error}`);
       }
       appliedCoupon = validation.coupon;
       couponDiscountCents = validation.discountCents;

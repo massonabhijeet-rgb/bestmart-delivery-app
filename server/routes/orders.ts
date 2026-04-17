@@ -12,6 +12,7 @@ import {
   updateOrderStatus,
   updateUserProfileIfEmpty,
   upsertUserAddress,
+  validateCoupon,
 } from '../db.js';
 import {
   attachUserIfPresent,
@@ -112,6 +113,26 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       });
     }
 
+    // Pre-check the coupon (covers code-not-found, expired, inactive, and
+    // per-user / global usage limits) before we touch products. The actual
+    // discount and redemption are still computed inside createOrder, which
+    // re-validates atomically against the live subtotal.
+    if (couponCode && couponCode.trim()) {
+      // Estimate subtotal from the cart at the highest possible value so the
+      // min-subtotal check inside validateCoupon doesn't false-fail. The real
+      // subtotal check happens inside createOrder.
+      const estimateSubtotal = Number.MAX_SAFE_INTEGER;
+      const check = await validateCoupon(
+        companyId,
+        req.user?.id ?? null,
+        couponCode,
+        estimateSubtotal,
+      );
+      if (!check.ok) {
+        return res.status(400).json({ error: check.error, couponError: true });
+      }
+    }
+
     const order = await createOrder({
       companyId,
       customerName,
@@ -149,9 +170,14 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
 
     return res.status(201).json({ order });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Unable to place order at the moment';
-    return res.status(400).json({ error: message });
+    const raw = error instanceof Error ? error.message : 'Unable to place order at the moment';
+    if (raw.startsWith('COUPON_INVALID:')) {
+      return res.status(400).json({
+        error: raw.slice('COUPON_INVALID:'.length),
+        couponError: true,
+      });
+    }
+    return res.status(400).json({ error: raw });
   }
 });
 

@@ -8,6 +8,7 @@ import {
   apiListAddresses,
   apiListCategories,
   apiPreviewCoupon,
+  ApiError,
 } from '../services/api';
 import type { CouponPreview } from '../services/api';
 import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
@@ -309,7 +310,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   async function handlePlaceOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!user) {
-      setError('Please log in to place an order.');
       onOpenLogin();
       return;
     }
@@ -320,6 +320,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
     setPlacingOrder(true);
     setError('');
+    setCouponError('');
 
     try {
       const order = await withBusy('Placing your order…', async () => {
@@ -337,6 +338,22 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           throw new Error(
             'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
           );
+        }
+
+        // Re-validate the applied coupon right before placing the order so the
+        // user sees a clear coupon-area message if it's no longer eligible
+        // (per-user limit reached, expired, etc) since the apply click.
+        if (appliedCoupon) {
+          try {
+            const fresh = await apiPreviewCoupon(appliedCoupon.code, subtotalCents);
+            setAppliedCoupon(fresh);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Coupon is no longer valid.';
+            setAppliedCoupon(null);
+            setCouponError(msg);
+            setCouponStatus('error');
+            throw new Error('coupon_revalidation_failed');
+          }
         }
 
         return apiCreateOrder({
@@ -364,7 +381,17 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         deliveryNotes: '',
       }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to place your order');
+      // Re-validation failed — already surfaced in coupon UI; don't double-show.
+      if (err instanceof Error && err.message === 'coupon_revalidation_failed') {
+        setError('Your coupon is no longer valid. Update or remove it and try again.');
+      } else if (err instanceof ApiError && err.data?.couponError) {
+        setAppliedCoupon(null);
+        setCouponError(err.message);
+        setCouponStatus('error');
+        setError('Your coupon is no longer valid. Update or remove it and try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unable to place your order');
+      }
     } finally {
       setPlacingOrder(false);
     }

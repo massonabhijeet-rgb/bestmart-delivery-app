@@ -56,6 +56,7 @@ function App() {
   const [route, setRoute] = useState<Route>(() => readRoute());
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   useEffect(() => {
     const syncRoute = () => {
@@ -121,6 +122,36 @@ function App() {
     );
   }
 
+  const loginModal = loginModalOpen ? (
+    <Suspense fallback={null}>
+      <div
+        className="login-modal"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => { if (e.target === e.currentTarget) setLoginModalOpen(false); }}
+      >
+        <div className="login-modal__inner">
+          <button
+            type="button"
+            className="login-modal__close"
+            onClick={() => setLoginModalOpen(false)}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+          <Login
+            onBackToStore={() => setLoginModalOpen(false)}
+            onLoginSuccess={(nextUser) => {
+              setUser(nextUser);
+              setLoginModalOpen(false);
+            }}
+          />
+        </div>
+      </div>
+    </Suspense>
+  ) : null;
+
+  // Tracking page works for anonymous + signed-in users.
   if (route.view === 'track') {
     return (
       <Suspense fallback={<PageLoader />}>
@@ -133,21 +164,7 @@ function App() {
     );
   }
 
-  if (!user) {
-    const goToDashboardAfterLogin = route.view === 'dashboard';
-    return (
-      <Suspense fallback={<PageLoader />}>
-        <Login
-          onBackToStore={() => navigate({ view: 'store' })}
-          onLoginSuccess={(nextUser) => {
-            setUser(nextUser);
-            navigate({ view: goToDashboardAfterLogin ? 'dashboard' : 'store' });
-          }}
-        />
-      </Suspense>
-    );
-  }
-
+  // Riders are routed to their own home as soon as they sign in.
   if (user && user.role === 'rider') {
     return (
       <Suspense fallback={<PageLoader />}>
@@ -163,48 +180,68 @@ function App() {
     );
   }
 
+  // Anonymous users hitting #dashboard or #my-orders bounce to the store
+  // with the login popup open, so they sign in then continue.
+  if (!user && (route.view === 'dashboard' || route.view === 'my-orders' || route.view === 'login')) {
+    if (!loginModalOpen) setLoginModalOpen(true);
+    if (route.view !== 'store') navigate({ view: 'store' });
+  }
+
+  // Signed-in admin/editor screens.
   if (user && route.view === 'my-orders') {
     return (
-      <Suspense fallback={<PageLoader />}>
-        <MyOrders
-          onBackToStore={() => navigate({ view: 'store' })}
-          onTrack={(code) => navigate({ view: 'track', code })}
-        />
-      </Suspense>
+      <>
+        <Suspense fallback={<PageLoader />}>
+          <MyOrders
+            onBackToStore={() => navigate({ view: 'store' })}
+            onTrack={(code) => navigate({ view: 'track', code })}
+          />
+        </Suspense>
+        {loginModal}
+      </>
     );
   }
 
   if (user && (route.view === 'dashboard' || route.view === 'login')) {
     return (
+      <>
+        <Suspense fallback={<PageLoader />}>
+          <Dashboard
+            user={user}
+            onLogout={() => {
+              setUser(null);
+              apiLogout();
+              navigate({ view: 'store' });
+            }}
+            onOpenStore={() => navigate({ view: 'store' })}
+          />
+        </Suspense>
+        {loginModal}
+      </>
+    );
+  }
+
+  return (
+    <>
       <Suspense fallback={<PageLoader />}>
-        <Dashboard
+        <Storefront
           user={user}
+          onOpenLogin={() => setLoginModalOpen(true)}
+          onOpenDashboard={() => navigate({ view: 'dashboard' })}
+          onOpenMyOrders={() => {
+            if (user) navigate({ view: 'my-orders' });
+            else setLoginModalOpen(true);
+          }}
+          onTrack={(code) => navigate({ view: 'track', code })}
           onLogout={() => {
             setUser(null);
             apiLogout();
             navigate({ view: 'store' });
           }}
-          onOpenStore={() => navigate({ view: 'store' })}
         />
       </Suspense>
-    );
-  }
-
-  return (
-    <Suspense fallback={<PageLoader />}>
-      <Storefront
-        user={user}
-        onOpenLogin={() => navigate({ view: 'login' })}
-        onOpenDashboard={() => navigate({ view: 'dashboard' })}
-        onOpenMyOrders={() => navigate({ view: 'my-orders' })}
-        onTrack={(code) => navigate({ view: 'track', code })}
-        onLogout={() => {
-          setUser(null);
-          apiLogout();
-          navigate({ view: 'store' });
-        }}
-      />
-    </Suspense>
+      {loginModal}
+    </>
   );
 }
 
