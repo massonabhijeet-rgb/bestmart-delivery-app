@@ -92,11 +92,17 @@ export function moodFromWeather(tempC: number, weatherCode: number): WeatherMood
   return 'cold';
 }
 
-export async function fetchOpenMeteoMood(
+export interface WeatherSnapshot {
+  temperatureC: number;
+  weatherCode: number;
+  mood: WeatherMood;
+}
+
+export async function fetchOpenMeteoSnapshot(
   latitude: number,
   longitude: number,
   signal?: AbortSignal,
-): Promise<WeatherMood | null> {
+): Promise<WeatherSnapshot | null> {
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code&timezone=auto`;
     const res = await fetch(url, { signal });
@@ -107,10 +113,58 @@ export async function fetchOpenMeteoMood(
     const temp = data.current?.temperature_2m;
     const code = data.current?.weather_code;
     if (typeof temp !== 'number' || typeof code !== 'number') return null;
-    return moodFromWeather(temp, code);
+    return {
+      temperatureC: temp,
+      weatherCode: code,
+      mood: moodFromWeather(temp, code),
+    };
   } catch {
     return null;
   }
+}
+
+export async function fetchOpenMeteoMood(
+  latitude: number,
+  longitude: number,
+  signal?: AbortSignal,
+): Promise<WeatherMood | null> {
+  const snap = await fetchOpenMeteoSnapshot(latitude, longitude, signal);
+  return snap?.mood ?? null;
+}
+
+const WEATHER_CODE_LABELS: Record<number, { label: string; emoji: string }> = {
+  0: { label: 'Clear sky', emoji: '☀️' },
+  1: { label: 'Mainly clear', emoji: '🌤️' },
+  2: { label: 'Partly cloudy', emoji: '⛅' },
+  3: { label: 'Overcast', emoji: '☁️' },
+  45: { label: 'Foggy', emoji: '🌫️' },
+  48: { label: 'Depositing rime fog', emoji: '🌫️' },
+  51: { label: 'Light drizzle', emoji: '🌦️' },
+  53: { label: 'Drizzle', emoji: '🌦️' },
+  55: { label: 'Heavy drizzle', emoji: '🌦️' },
+  56: { label: 'Freezing drizzle', emoji: '🌨️' },
+  57: { label: 'Freezing drizzle', emoji: '🌨️' },
+  61: { label: 'Light rain', emoji: '🌧️' },
+  63: { label: 'Rain', emoji: '🌧️' },
+  65: { label: 'Heavy rain', emoji: '🌧️' },
+  66: { label: 'Freezing rain', emoji: '🌨️' },
+  67: { label: 'Freezing rain', emoji: '🌨️' },
+  71: { label: 'Light snow', emoji: '🌨️' },
+  73: { label: 'Snow', emoji: '🌨️' },
+  75: { label: 'Heavy snow', emoji: '❄️' },
+  77: { label: 'Snow grains', emoji: '🌨️' },
+  80: { label: 'Rain showers', emoji: '🌦️' },
+  81: { label: 'Rain showers', emoji: '🌦️' },
+  82: { label: 'Heavy rain showers', emoji: '🌧️' },
+  85: { label: 'Snow showers', emoji: '🌨️' },
+  86: { label: 'Heavy snow showers', emoji: '🌨️' },
+  95: { label: 'Thunderstorm', emoji: '⛈️' },
+  96: { label: 'Thunderstorm w/ hail', emoji: '⛈️' },
+  99: { label: 'Thunderstorm w/ hail', emoji: '⛈️' },
+};
+
+export function describeWeatherCode(code: number): { label: string; emoji: string } {
+  return WEATHER_CODE_LABELS[code] ?? { label: 'Current weather', emoji: '🌡️' };
 }
 
 /**

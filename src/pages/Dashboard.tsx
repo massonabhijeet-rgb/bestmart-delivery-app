@@ -7,6 +7,11 @@ import type { RiderLocation } from '../hooks/useOrderSocket';
 import { confirm, pickRider } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import {
+  describeWeatherCode,
+  fetchOpenMeteoSnapshot,
+  type WeatherSnapshot,
+} from '../lib/weatherPicks';
+import {
   apiAddProduct,
   apiCreateCategory,
   apiCreateUser,
@@ -225,6 +230,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [savingStoreLocation, setSavingStoreLocation] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  const [weatherSnap, setWeatherSnap] = useState<WeatherSnapshot | null>(null);
   const [riderLocations, setRiderLocations] = useState<Record<number, RiderLocation>>({});
 
   // Real-time WebSocket state
@@ -313,6 +320,24 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     void loadDashboard();
     void apiGetCompanyPublic().then(setCompanyInfo).catch(() => {});
   }, [loadDashboard]);
+
+  // Live clock — ticks every minute on the Overview tab.
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Fetch local weather using the company store coords (admin-set).
+  useEffect(() => {
+    const lat = companyInfo?.storeLatitude;
+    const lng = companyInfo?.storeLongitude;
+    if (lat == null || lng == null) return;
+    const controller = new AbortController();
+    fetchOpenMeteoSnapshot(lat, lng, controller.signal).then((snap) => {
+      if (snap) setWeatherSnap(snap);
+    });
+    return () => controller.abort();
+  }, [companyInfo?.storeLatitude, companyInfo?.storeLongitude]);
 
   const loadSlowMovers = useCallback(async () => {
     if (!canManageCatalog) return;
@@ -1258,8 +1283,174 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
      OVERVIEW
   ──────────────────────────────────────── */
   function renderOverview() {
+    const totalProducts = products.length;
+    const activeProducts = products.filter((p) => p.isActive).length;
+    const archivedProducts = totalProducts - activeProducts;
+    const outOfStock = products.filter((p) => p.isActive && p.stockQuantity <= 0).length;
+    const lowStock = products.filter((p) => p.isActive && p.stockQuantity > 0 && p.stockQuantity <= 5).length;
+    const onOfferCount = products.filter((p) => p.isActive && p.isOnOffer).length;
+    const totalUnits = products
+      .filter((p) => p.isActive)
+      .reduce((sum, p) => sum + (p.stockQuantity ?? 0), 0);
+    const inventoryValueCents = products
+      .filter((p) => p.isActive)
+      .reduce((sum, p) => sum + (p.priceCents ?? 0) * (p.stockQuantity ?? 0), 0);
+    const lowStockList = products
+      .filter((p) => p.isActive && p.stockQuantity <= 5)
+      .sort((a, b) => a.stockQuantity - b.stockQuantity)
+      .slice(0, 5);
+
+    const weatherInfo = weatherSnap ? describeWeatherCode(weatherSnap.weatherCode) : null;
+    const dayLabel = now.toLocaleDateString(undefined, {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    const timeLabel = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
     return (
       <>
+        {/* Live tile: time + weather + quick inventory snapshot */}
+        <div className="live-tile">
+          <div className="live-tile__time">
+            <span className="live-tile__time-day">{dayLabel}</span>
+            <strong className="live-tile__time-clock">{timeLabel}</strong>
+            <span className="live-tile__time-greet">
+              {(() => {
+                const h = now.getHours();
+                if (h < 5) return 'Late night shift';
+                if (h < 12) return 'Good morning';
+                if (h < 17) return 'Good afternoon';
+                if (h < 21) return 'Good evening';
+                return 'Closing in';
+              })()}
+              {user?.fullName ? `, ${user.fullName.split(' ')[0]}` : ''}
+            </span>
+          </div>
+
+          <div className="live-tile__weather">
+            {weatherSnap && weatherInfo ? (
+              <>
+                <span className="live-tile__weather-emoji" aria-hidden>{weatherInfo.emoji}</span>
+                <div>
+                  <strong className="live-tile__weather-temp">
+                    {Math.round(weatherSnap.temperatureC)}°C
+                  </strong>
+                  <span className="live-tile__weather-label">{weatherInfo.label}</span>
+                </div>
+              </>
+            ) : (
+              <div className="live-tile__weather-empty">
+                <span aria-hidden>🌡️</span>
+                <span>
+                  {companyInfo?.storeLatitude == null
+                    ? 'Set the store location below to see local weather.'
+                    : 'Loading weather…'}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="live-tile__metric">
+            <span className="live-tile__metric-label">Products in catalog</span>
+            <strong className="live-tile__metric-value">{totalProducts}</strong>
+            <span className="live-tile__metric-sub">{activeProducts} live · {archivedProducts} archived</span>
+          </div>
+
+          <div className="live-tile__metric">
+            <span className="live-tile__metric-label">Stock on shelf</span>
+            <strong className="live-tile__metric-value">{totalUnits.toLocaleString()}</strong>
+            <span className="live-tile__metric-sub">units across {activeProducts} live SKUs</span>
+          </div>
+
+          <div className="live-tile__metric">
+            <span className="live-tile__metric-label">Inventory value</span>
+            <strong className="live-tile__metric-value">{formatCurrency(inventoryValueCents)}</strong>
+            <span className="live-tile__metric-sub">at current sell prices</span>
+          </div>
+        </div>
+
+        {/* Inventory snapshot */}
+        <div className="section-box">
+          <div className="section-box__head">
+            <div>
+              <h2>Inventory snapshot</h2>
+              <p>Live counts pulled from your active catalog.</p>
+            </div>
+            <button type="button" className="ghost-button" onClick={() => setActiveTab('inventory')}>
+              Manage inventory →
+            </button>
+          </div>
+          <div className="inv-snapshot">
+            <button
+              type="button"
+              className="inv-snapshot__cell"
+              onClick={() => { setActiveTab('inventory'); setInventoryStatusFilter('active'); }}
+            >
+              <span className="inv-snapshot__label">Live</span>
+              <strong className="inv-snapshot__value">{activeProducts}</strong>
+            </button>
+            <button
+              type="button"
+              className={`inv-snapshot__cell${lowStock > 0 ? ' inv-snapshot__cell--warn' : ''}`}
+              onClick={() => { setActiveTab('inventory'); setInventoryStatusFilter('low_stock'); }}
+            >
+              <span className="inv-snapshot__label">Low stock</span>
+              <strong className="inv-snapshot__value">{lowStock}</strong>
+            </button>
+            <button
+              type="button"
+              className={`inv-snapshot__cell${outOfStock > 0 ? ' inv-snapshot__cell--danger' : ''}`}
+              onClick={() => { setActiveTab('inventory'); setInventoryStatusFilter('low_stock'); }}
+            >
+              <span className="inv-snapshot__label">Out of stock</span>
+              <strong className="inv-snapshot__value">{outOfStock}</strong>
+            </button>
+            <button
+              type="button"
+              className="inv-snapshot__cell"
+              onClick={() => { if (canManageCatalog) setActiveTab('offers'); }}
+            >
+              <span className="inv-snapshot__label">On offer</span>
+              <strong className="inv-snapshot__value">{onOfferCount}</strong>
+            </button>
+            <button
+              type="button"
+              className="inv-snapshot__cell"
+              onClick={() => { setActiveTab('inventory'); setInventoryStatusFilter('archived'); }}
+            >
+              <span className="inv-snapshot__label">Archived</span>
+              <strong className="inv-snapshot__value">{archivedProducts}</strong>
+            </button>
+            <button
+              type="button"
+              className="inv-snapshot__cell"
+              onClick={() => { if (canManageCatalog) setActiveTab('categories'); }}
+            >
+              <span className="inv-snapshot__label">Categories</span>
+              <strong className="inv-snapshot__value">{categories.length}</strong>
+            </button>
+          </div>
+
+          {lowStockList.length > 0 && (
+            <div className="inv-snapshot__list">
+              <h3 className="inv-snapshot__list-title">Needs restock soon</h3>
+              <ul>
+                {lowStockList.map((p) => (
+                  <li key={p.uniqueId}>
+                    <span className="inv-snapshot__list-name">{p.name}</span>
+                    <span className="inv-snapshot__list-meta">{p.unitLabel} · {p.category ?? 'Uncategorised'}</span>
+                    <span className={`inv-snapshot__list-stock${p.stockQuantity <= 0 ? ' inv-snapshot__list-stock--out' : ''}`}>
+                      {p.stockQuantity <= 0 ? 'Out of stock' : `${p.stockQuantity} left`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
         {/* Stat Cards */}
         <div className="stats-row">
           <div className="stat-card">
