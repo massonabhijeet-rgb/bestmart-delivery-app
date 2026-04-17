@@ -1,0 +1,1076 @@
+import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import {
+  apiCancelOrder,
+  apiCreateOrder,
+  apiGetCompanyPublic,
+  apiGetProducts,
+  apiListAddresses,
+  apiListCategories,
+} from '../services/api';
+import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
+import { fuzzyRank } from '../lib/fuzzySearch';
+import { confirm } from '../components/ConfirmDialog';
+import type { Category, CompanyInfo, Order, Product, SavedAddress, User } from '../services/api';
+
+interface StorefrontProps {
+  user: User | null;
+  onOpenLogin: () => void;
+  onOpenDashboard: () => void;
+  onTrack: (code: string) => void;
+  onLogout: () => void;
+}
+
+interface CheckoutForm {
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  deliveryAddress: string;
+  deliveryNotes: string;
+  deliverySlot: string;
+  paymentMethod: string;
+}
+
+const CART_STORAGE_KEY = 'bestmart:cart';
+
+const HOME_BANNERS: Array<{ title: string; accent: string }> = [
+  { title: 'Cough syrups, pain relief sprays & more', accent: '#b8e6dc' },
+  { title: 'Food, treats, toys & more', accent: '#fce38a' },
+  { title: 'Get baby care essentials', accent: '#d9e4f5' },
+];
+
+const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
+
+function Storefront({ user, onOpenLogin, onOpenDashboard, onTrack, onLogout }: StorefrontProps) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categoryRows, setCategoryRows] = useState<Category[]>([]);
+  const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('All');
+  const [cart, setCart] = useState<Record<string, number>>(() => {
+    const stored = localStorage.getItem(CART_STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as Record<string, number>) : {};
+  });
+  const [trackingCode, setTrackingCode] = useState('');
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [cancellingOrder, setCancellingOrder] = useState(false);
+  const [latestOrder, setLatestOrder] = useState<Order | null>(null);
+  const [checkoutForm, setCheckoutForm] = useState<CheckoutForm>({
+    customerName: '',
+    customerPhone: '',
+    customerEmail: '',
+    deliveryAddress: '',
+    deliveryNotes: '',
+    deliverySlot: 'Express (2–4 hrs)',
+    paymentMethod: 'cash_on_delivery',
+  });
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<'new' | number>('new');
+  const [forceCartView, setForceCartView] = useState(false);
+  const [error, setError] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const [liveLocation, setLiveLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    capturedAt: number;
+  } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'capturing' | 'error'>('idle');
+  const [locationError, setLocationError] = useState('');
+
+  function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
+    if (!('geolocation' in navigator) || !window.isSecureContext) {
+      setLocationStatus('error');
+      setLocationError(
+        !window.isSecureContext
+          ? 'Location requires HTTPS or localhost. Your browser blocked it.'
+          : 'Your browser does not support location sharing.',
+      );
+      return Promise.resolve(null);
+    }
+    setLocationStatus('capturing');
+    setLocationError('');
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+          setLiveLocation({ ...coords, capturedAt: Date.now() });
+          setLocationStatus('idle');
+          resolve(coords);
+        },
+        (err) => {
+          setLocationStatus('error');
+          setLocationError(
+            err.code === err.PERMISSION_DENIED
+              ? 'Location permission denied. The rider will use your address only.'
+              : 'Unable to get your location. The rider will use your address only.',
+          );
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      );
+    });
+  }
+
+  function handleShareLocation() {
+    void captureLocation();
+  }
+
+  useEffect(() => {
+    Promise.all([apiGetCompanyPublic(), apiGetProducts(), apiListCategories()])
+      .then(([companyData, productData, categoryData]) => {
+        setCompany(companyData);
+        setProducts(productData.filter((product) => product.isActive));
+        setCategoryRows(categoryData);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Unable to load BestMart');
+      });
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+  }, [cart]);
+
+  useEffect(() => {
+    if (!user) {
+      setSavedAddresses([]);
+      setSelectedAddressId('new');
+      return;
+    }
+    let cancelled = false;
+    apiListAddresses()
+      .then((addresses) => {
+        if (cancelled) return;
+        setSavedAddresses(addresses);
+        if (addresses.length > 0) {
+          const mostRecent = addresses[0];
+          setSelectedAddressId(mostRecent.id);
+          setCheckoutForm((current) => ({
+            ...current,
+            customerName: current.customerName || mostRecent.fullName,
+            customerPhone: current.customerPhone || mostRecent.phone,
+            customerEmail: current.customerEmail || user.email,
+            deliveryAddress: current.deliveryAddress || mostRecent.deliveryAddress,
+            deliveryNotes: current.deliveryNotes || mostRecent.deliveryNotes || '',
+          }));
+        } else {
+          setCheckoutForm((current) => ({
+            ...current,
+            customerName: current.customerName || user.fullName || '',
+            customerPhone: current.customerPhone || user.phone || '',
+            customerEmail: current.customerEmail || user.email,
+          }));
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCheckoutForm((current) => ({
+          ...current,
+          customerName: current.customerName || user.fullName || '',
+          customerPhone: current.customerPhone || user.phone || '',
+          customerEmail: current.customerEmail || user.email,
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  function handleSavedAddressPick(value: string) {
+    if (value === 'new') {
+      setSelectedAddressId('new');
+      setCheckoutForm((current) => ({
+        ...current,
+        customerName: user?.fullName ?? '',
+        customerPhone: user?.phone ?? '',
+        deliveryAddress: '',
+        deliveryNotes: '',
+      }));
+      return;
+    }
+    const id = Number(value);
+    const picked = savedAddresses.find((a) => a.id === id);
+    if (!picked) return;
+    setSelectedAddressId(id);
+    setCheckoutForm((current) => ({
+      ...current,
+      customerName: picked.fullName,
+      customerPhone: picked.phone,
+      deliveryAddress: picked.deliveryAddress,
+      deliveryNotes: picked.deliveryNotes ?? '',
+    }));
+  }
+
+  const productLookup = useMemo(() => {
+    return new Map(products.map((product) => [product.uniqueId, product]));
+  }, [products]);
+
+  useEffect(() => {
+    setCart((current) => {
+      let changed = false;
+      const next: Record<string, number> = {};
+
+      for (const [uniqueId, quantity] of Object.entries(current)) {
+        const product = productLookup.get(uniqueId);
+        if (!product || !product.isActive || product.stockQuantity <= 0) {
+          changed = true;
+          continue;
+        }
+
+        const clampedQuantity = Math.min(quantity, product.stockQuantity);
+        if (clampedQuantity !== quantity) {
+          changed = true;
+        }
+        if (clampedQuantity > 0) {
+          next[uniqueId] = clampedQuantity;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [productLookup]);
+
+  const categories = useMemo(() => {
+    return ['All', ...new Set(products.map((product) => product.category))];
+  }, [products]);
+
+  const categoryTiles = useMemo(() => {
+    return categoryRows.map((row) => ({
+      name: row.name,
+      imageUrl: row.imageUrl,
+    }));
+  }, [categoryRows]);
+
+  const offerProducts = useMemo(
+    () => products.filter((p) => p.isOnOffer && p.isActive && p.stockQuantity > 0),
+    [products]
+  );
+
+  const filteredProducts = useMemo(() => {
+    const term = deferredSearch.trim();
+    const byCategory = products.filter(
+      (product) => category === 'All' || product.category === category,
+    );
+    if (!term) return byCategory;
+    return fuzzyRank(term, byCategory, (product) => [
+      product.name,
+      product.category,
+      product.description,
+      product.badge,
+      product.unitLabel,
+    ]);
+  }, [products, category, deferredSearch]);
+
+  const cartItems = useMemo(() => {
+    return products
+      .filter((product) => cart[product.uniqueId] > 0)
+      .map((product) => ({
+        product,
+        quantity: cart[product.uniqueId],
+      }));
+  }, [products, cart]);
+
+  const subtotalCents = cartItems.reduce(
+    (sum, item) => sum + lineTotalCents(item.product, item.quantity),
+    0
+  );
+  const deliveryFeeCents = subtotalCents >= 150000 ? 0 : cartItems.length > 0 ? 4900 : 0;
+  // Promo: 50% off up to ₹200 on orders above ₹500 (50000 cents).
+  const discountCents =
+    subtotalCents >= 50000 ? Math.min(Math.floor(subtotalCents / 2), 20000) : 0;
+  const totalCents = Math.max(subtotalCents + deliveryFeeCents - discountCents, 0);
+  const trackUrl = latestOrder
+    ? `${window.location.origin}${window.location.pathname}#track/${latestOrder.publicId}`
+    : '';
+
+  function updateQuantity(uniqueId: string, nextQuantity: number) {
+    const product = productLookup.get(uniqueId);
+    setCart((current) => {
+      const next = { ...current };
+      if (!product || product.stockQuantity <= 0 || nextQuantity <= 0) {
+        delete next[uniqueId];
+      } else {
+        next[uniqueId] = Math.min(nextQuantity, product.stockQuantity);
+      }
+      return next;
+    });
+  }
+
+  async function handlePlaceOrder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!user) {
+      setError('Please log in to place an order.');
+      onOpenLogin();
+      return;
+    }
+    if (!cartItems.length) {
+      setError('Your cart is empty.');
+      return;
+    }
+
+    setPlacingOrder(true);
+    setError('');
+
+    try {
+      let coords = liveLocation
+        ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
+        : null;
+      if (!coords) {
+        coords = await captureLocation();
+      }
+
+      const order = await apiCreateOrder({
+        customerName: checkoutForm.customerName,
+        customerPhone: checkoutForm.customerPhone,
+        customerEmail: checkoutForm.customerEmail,
+        deliveryAddress: checkoutForm.deliveryAddress,
+        deliveryNotes: checkoutForm.deliveryNotes,
+        deliverySlot: checkoutForm.deliverySlot,
+        paymentMethod: checkoutForm.paymentMethod,
+        items: cartItems.map((item) => ({
+          productId: item.product.uniqueId,
+          quantity: item.quantity,
+        })),
+        deliveryLatitude: coords?.latitude ?? null,
+        deliveryLongitude: coords?.longitude ?? null,
+      });
+
+      setLatestOrder(order);
+      setCart({});
+      setCheckoutForm((current) => ({
+        ...current,
+        deliveryNotes: '',
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to place your order');
+    } finally {
+      setPlacingOrder(false);
+    }
+  }
+
+  async function handleCancelLatest() {
+    if (!latestOrder) return;
+    const confirmed = await confirm({
+      title: 'Cancel this order?',
+      message: `Order ${latestOrder.publicId} will be cancelled. This cannot be undone.`,
+      confirmLabel: 'Cancel Order',
+      cancelLabel: 'Keep Order',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setCancellingOrder(true);
+    setError('');
+    try {
+      const updated = await apiCancelOrder(latestOrder.publicId);
+      setLatestOrder(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to cancel order');
+    } finally {
+      setCancellingOrder(false);
+    }
+  }
+
+  const latestCancellable = Boolean(
+    latestOrder && ['placed', 'confirmed', 'packing'].includes(latestOrder.status),
+  );
+
+  const canTrackFromHero = Boolean(trackingCode.trim() || latestOrder?.publicId);
+  const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  const isBrowsing = category !== 'All' || Boolean(deferredSearch.trim()) || forceCartView;
+
+  function handleGoHome() {
+    setCategory('All');
+    setSearch('');
+    setForceCartView(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function handleOpenCart() {
+    setForceCartView(true);
+    setTimeout(() => {
+      const el = document.querySelector('.cart-panel');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  }
+
+  return (
+    <main className="store-shell">
+      {/* Sticky top bar — back | logo | address | search | login | cart */}
+      <header className="store-topbar store-topbar--v2">
+        {isBrowsing ? (
+          <button
+            type="button"
+            className="store-topbar__back"
+            onClick={handleGoHome}
+            aria-label="Back to home"
+            title="Back"
+          >
+            ← Back
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="store-topbar__brand"
+          onClick={handleGoHome}
+        >
+          <img src="/bestmart-logo.svg" alt="BestMart" className="store-topbar__logo" loading="eager" />
+        </button>
+
+        <div className="store-topbar__address" title={savedAddresses[0]?.deliveryAddress ?? ''}>
+          <strong>Delivery in 15 minutes</strong>
+          <span>
+            {savedAddresses[0]?.deliveryAddress ??
+              (user ? 'Add a delivery address at checkout' : 'Log in to save an address')}
+          </span>
+        </div>
+
+        <div className="store-topbar__search">
+          <span className="store-topbar__search-icon">⌕</span>
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder='Search "chocolate"'
+          />
+        </div>
+
+        <div className="store-topbar__actions">
+          <button
+            type="button"
+            className="store-topbar__btn"
+            disabled={!canTrackFromHero}
+            onClick={() => onTrack((trackingCode.trim() || latestOrder?.publicId || '').trim())}
+          >
+            Track
+          </button>
+          {user ? (
+            <>
+              {(user.role === 'admin' || user.role === 'editor') && (
+                <button
+                  type="button"
+                  className="store-topbar__btn"
+                  onClick={onOpenDashboard}
+                >
+                  Dashboard
+                </button>
+              )}
+              <span className="store-topbar__user" title={user.email}>
+                {user.fullName || user.email}
+              </span>
+              <button
+                type="button"
+                className="store-topbar__btn"
+                onClick={onLogout}
+              >
+                Log Out
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="store-topbar__btn"
+              onClick={onOpenLogin}
+            >
+              Login
+            </button>
+          )}
+          <button
+            type="button"
+            className="store-topbar__cart"
+            onClick={handleOpenCart}
+            disabled={cartCount === 0}
+            title={cartCount === 0 ? 'Your cart is empty' : 'Open cart'}
+          >
+            <span className="store-topbar__cart-icon">🛒</span>
+            {cartCount > 0 ? `My Cart (${cartCount})` : 'My Cart'}
+          </button>
+        </div>
+      </header>
+
+      <div className="store-inner">
+      <div className="promo-strip">
+        <span className="promo-strip__badge">OFFER</span>
+        <span>
+          <strong>50% OFF up to ₹200</strong> on orders above ₹500. Auto-applied at checkout.
+        </span>
+      </div>
+
+      {!isBrowsing ? (
+        <>
+          <section className="home-banners">
+            {HOME_BANNERS.map((banner) => (
+              <article
+                key={banner.title}
+                className="home-banner"
+                style={{ background: banner.accent }}
+              >
+                <div className="home-banner__copy">
+                  <p>{banner.title}</p>
+                  <button type="button" className="home-banner__cta">Order Now</button>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          {offerProducts.length > 0 ? (
+            <section className="todays-offer">
+              <div className="todays-offer__head">
+                <div>
+                  <span className="todays-offer__badge">TODAY'S OFFER</span>
+                  <h2>Hand-picked deals, just for today</h2>
+                </div>
+              </div>
+              <div className="todays-offer__grid">
+                {offerProducts.map((product) => (
+                  <article key={product.uniqueId} className="todays-offer__card">
+                    <div className="todays-offer__thumb">
+                      {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="todays-offer__thumb-img" />}
+                      <span className="todays-offer__flag">
+                        {isBogoProduct(product) ? 'Buy 1 Get 1' : 'Offer'}
+                      </span>
+                    </div>
+                    <div className="todays-offer__body">
+                      <strong>{product.name}</strong>
+                      <span className="todays-offer__meta">{product.unitLabel}</span>
+                      <div className="todays-offer__price-row">
+                        <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                        {isBogoProduct(product) ? (
+                          <span className="todays-offer__bogo">+1 FREE</span>
+                        ) : product.offerPriceCents != null &&
+                          product.offerPriceCents < product.priceCents ? (
+                          <span className="todays-offer__strike">
+                            {formatCurrency(product.priceCents)}
+                          </span>
+                        ) : product.originalPriceCents ? (
+                          <span className="todays-offer__strike">
+                            {formatCurrency(product.originalPriceCents)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {cart[product.uniqueId] ? (
+                        <div className="qty-stepper">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)
+                            }
+                          >
+                            -
+                          </button>
+                          <span>{cart[product.uniqueId]}</span>
+                          <button
+                            type="button"
+                            disabled={cart[product.uniqueId] >= product.stockQuantity}
+                            onClick={() =>
+                              updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)
+                            }
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={product.stockQuantity <= 0}
+                          onClick={() => updateQuantity(product.uniqueId, 1)}
+                        >
+                          {product.stockQuantity <= 0 ? 'Sold Out' : 'Add to cart'}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="category-grid">
+            {categoryTiles.map((tile) => (
+              <button
+                type="button"
+                key={tile.name}
+                className="category-tile"
+                onClick={() => setCategory(tile.name)}
+              >
+                <div className="category-tile__thumb">
+                  {tile.imageUrl && <img src={tile.imageUrl} alt={tile.name} loading="lazy" className="category-tile__thumb-img" />}
+                </div>
+                <span>{tile.name}</span>
+              </button>
+            ))}
+          </section>
+
+          <footer className="home-footer">
+            <div className="home-footer__top">
+              <div className="home-footer__brand">
+                <div className="home-footer__logo">
+                  <span className="home-footer__logo-mark">B</span>
+                  <span className="home-footer__logo-name">
+                    {company?.name ?? 'BestMart'}
+                  </span>
+                </div>
+                <p className="home-footer__tagline">
+                  Fresh groceries and daily essentials, delivered to your door in minutes.
+                </p>
+                <div className="home-footer__badges">
+                  <span className="home-footer__badge">
+                    <span className="home-footer__badge-dot" /> Fresh daily
+                  </span>
+                  <span className="home-footer__badge">
+                    <span className="home-footer__badge-dot" /> Fast delivery
+                  </span>
+                </div>
+              </div>
+
+              <div className="home-footer__col">
+                <h3>Shop</h3>
+                <ul>
+                  {FOOTER_USEFUL_LINKS.map((link) => (
+                    <li key={link}>
+                      <a href="#" className="home-footer__link">{link}</a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="home-footer__col">
+                <h3>Company</h3>
+                <ul>
+                  <li><a href="#" className="home-footer__link">About us</a></li>
+                  <li><a href="#" className="home-footer__link">Careers</a></li>
+                  <li><a href="#" className="home-footer__link">Terms &amp; Privacy</a></li>
+                </ul>
+              </div>
+
+              <div className="home-footer__col home-footer__col--contact">
+                <h3>Get in touch</h3>
+                <ul>
+                  <li>
+                    <a
+                      className="home-footer__contact"
+                      href={`mailto:${company?.supportEmail ?? 'support@bestmart.local'}`}
+                    >
+                      <span className="home-footer__contact-icon" aria-hidden>✉</span>
+                      <span>{company?.supportEmail ?? 'support@bestmart.local'}</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      className="home-footer__contact"
+                      href={`tel:${(company?.supportPhone ?? '1800-BESTMART').replace(/\s+/g, '')}`}
+                    >
+                      <span className="home-footer__contact-icon" aria-hidden>☎</span>
+                      <span>{company?.supportPhone ?? '1800-BESTMART'}</span>
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="home-footer__bottom">
+              <span className="home-footer__copyright">
+                © {new Date().getFullYear()} {company?.name ?? 'BestMart'}. All rights reserved.
+              </span>
+              <span className="home-footer__legal">
+                <a href="#" className="home-footer__link">Privacy</a>
+                <span aria-hidden>·</span>
+                <a href="#" className="home-footer__link">Terms</a>
+                <span aria-hidden>·</span>
+                <a href="#" className="home-footer__link">Help</a>
+              </span>
+            </div>
+          </footer>
+        </>
+      ) : null}
+
+      {error ? <div className="message message--error">{error}</div> : null}
+
+      {isBrowsing ? (
+      <section className="store-layout">
+        <div className="catalog-panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Catalog</p>
+              <h2>Shop fresh groceries and daily essentials.</h2>
+            </div>
+            <p>{filteredProducts.length} items ready for checkout</p>
+          </div>
+
+          <div className="product-grid">
+            {filteredProducts.map((product) => (
+              <article
+                className={
+                  product.stockQuantity <= 0 ? 'product-card product-card--sold-out' : 'product-card'
+                }
+                key={product.uniqueId}
+              >
+                <div className="product-card__media">
+                  {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="product-card__media-img" />}
+                  {product.badge || product.stockQuantity <= 5 ? (
+                    <div className="badge-stack">
+                      {product.badge ? <span className="badge">{product.badge}</span> : null}
+                      {product.stockQuantity <= 0 ? (
+                        <span className="badge badge--sold-out">Sold Out</span>
+                      ) : product.stockQuantity <= 5 ? (
+                        <span className="badge badge--low-stock">
+                          Only {product.stockQuantity} Left
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="product-card__body">
+                  <div className="product-card__meta">
+                    <span>{product.category}</span>
+                    <span>{product.unitLabel}</span>
+                  </div>
+                  <h3>{product.name}</h3>
+                  <p>{product.description}</p>
+                  <p
+                    className={
+                      product.stockQuantity <= 0
+                        ? 'product-card__stock product-card__stock--sold-out'
+                        : product.stockQuantity <= 5
+                          ? 'product-card__stock product-card__stock--low'
+                          : 'product-card__stock'
+                    }
+                  >
+                    {product.stockQuantity <= 0
+                      ? 'Currently unavailable'
+                      : product.stockQuantity <= 5
+                        ? `${product.stockQuantity} units left for fast checkout`
+                        : `${product.stockQuantity} units ready to dispatch`}
+                  </p>
+                </div>
+                <div className="product-card__footer">
+                  <div>
+                    <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                    {isBogoProduct(product) ? (
+                      <span className="product-card__bogo">Buy 1 Get 1 FREE</span>
+                    ) : product.isOnOffer && product.offerPriceCents != null ? (
+                      <span>{formatCurrency(product.priceCents)}</span>
+                    ) : product.originalPriceCents ? (
+                      <span>{formatCurrency(product.originalPriceCents)}</span>
+                    ) : null}
+                  </div>
+                  {cart[product.uniqueId] ? (
+                    <div className="qty-stepper">
+                      <button
+                        type="button"
+                        onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)}
+                      >
+                        -
+                      </button>
+                      <span>{cart[product.uniqueId]}</span>
+                      <button
+                        type="button"
+                        disabled={cart[product.uniqueId] >= product.stockQuantity}
+                        onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={product.stockQuantity <= 0}
+                      onClick={() => updateQuantity(product.uniqueId, 1)}
+                    >
+                      {product.stockQuantity <= 0 ? 'Sold Out' : 'Add'}
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <aside className="cart-panel">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Checkout</p>
+              <h2>Your cart</h2>
+            </div>
+            <p>{cartItems.length} line items</p>
+          </div>
+
+          <div className="cart-list">
+            {cartItems.length ? (
+              cartItems.map((item) => (
+                <article key={item.product.uniqueId} className="cart-row">
+                  <div className="cart-row__details">
+                    <strong>{item.product.name}</strong>
+                    <p>
+                      {item.quantity} x {formatCurrency(effectivePriceCents(item.product))}
+                      {' = '}
+                      <strong>{formatCurrency(lineTotalCents(item.product, item.quantity))}</strong>
+                    </p>
+                    {isBogoProduct(item.product) ? (
+                      <p className="cart-row__bogo">
+                        Buy 1 Get 1 FREE · paying for {Math.ceil(item.quantity / 2)} of {item.quantity}
+                      </p>
+                    ) : null}
+                    {item.product.stockQuantity <= 5 ? (
+                      <p className="cart-row__note">
+                        {item.product.stockQuantity <= 0
+                          ? 'Item is no longer available'
+                          : `Only ${item.product.stockQuantity} left in stock`}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="qty-stepper">
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(item.product.uniqueId, item.quantity - 1)}
+                    >
+                      -
+                    </button>
+                    <span>{item.quantity}</span>
+                    <button
+                      type="button"
+                      disabled={item.quantity >= item.product.stockQuantity}
+                      onClick={() => updateQuantity(item.product.uniqueId, item.quantity + 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <div className="empty-state">
+                Your cart is empty. Add groceries to get started. Free delivery on orders above {formatCurrency(150000)}.
+              </div>
+            )}
+          </div>
+
+          <form className="checkout-form" onSubmit={handlePlaceOrder}>
+            {user && savedAddresses.length > 0 ? (
+              <label>
+                <span>Saved addresses</span>
+                <select
+                  value={String(selectedAddressId)}
+                  onChange={(e) => handleSavedAddressPick(e.target.value)}
+                >
+                  {savedAddresses.map((addr) => (
+                    <option key={addr.id} value={String(addr.id)}>
+                      {addr.fullName} · {addr.phone} · {addr.deliveryAddress.slice(0, 40)}
+                      {addr.deliveryAddress.length > 40 ? '…' : ''}
+                    </option>
+                  ))}
+                  <option value="new">+ Use a different name/phone/address</option>
+                </select>
+              </label>
+            ) : null}
+
+            <label>
+              <span>Name</span>
+              <input
+                value={checkoutForm.customerName}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, customerName: event.target.value }))
+                }
+                placeholder="Customer name"
+                required
+              />
+            </label>
+
+            <label>
+              <span>Phone</span>
+              <input
+                value={checkoutForm.customerPhone}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, customerPhone: event.target.value }))
+                }
+                placeholder="+91 98xxx xxxxx"
+                required
+              />
+            </label>
+
+            <label>
+              <span>Email</span>
+              <input
+                type="email"
+                value={checkoutForm.customerEmail}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, customerEmail: event.target.value }))
+                }
+                placeholder="Optional"
+              />
+            </label>
+
+            <label>
+              <span>Delivery address</span>
+              <textarea
+                value={checkoutForm.deliveryAddress}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, deliveryAddress: event.target.value }))
+                }
+                placeholder="House / apartment / landmark"
+                required
+              />
+            </label>
+
+            <div className="inline-field-group">
+              <label>
+                <span>Slot</span>
+                <select
+                  value={checkoutForm.deliverySlot}
+                  onChange={(event) =>
+                    setCheckoutForm((current) => ({ ...current, deliverySlot: event.target.value }))
+                  }
+                >
+                  <option>Express (2–4 hrs)</option>
+                  <option>Today evening (6–9 PM)</option>
+                  <option>Tomorrow morning (9 AM–1 PM)</option>
+                  <option>Tomorrow evening (4–8 PM)</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Payment</span>
+                <select
+                  value={checkoutForm.paymentMethod}
+                  onChange={(event) =>
+                    setCheckoutForm((current) => ({ ...current, paymentMethod: event.target.value }))
+                  }
+                >
+                  <option value="cash_on_delivery">Cash on delivery</option>
+                  <option value="upi">UPI</option>
+                  <option value="card_on_delivery">Card on delivery</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              <span>Delivery notes</span>
+              <textarea
+                value={checkoutForm.deliveryNotes}
+                onChange={(event) =>
+                  setCheckoutForm((current) => ({ ...current, deliveryNotes: event.target.value }))
+                }
+                placeholder="Gate code, landmark, call before arrival"
+              />
+            </label>
+
+            <div className="location-block">
+              <div>
+                <strong>Share live location</strong>
+                <p>
+                  {liveLocation
+                    ? `Captured (~${liveLocation.latitude.toFixed(5)}, ${liveLocation.longitude.toFixed(5)})`
+                    : 'Helps the rider find you faster.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleShareLocation}
+                disabled={locationStatus === 'capturing'}
+              >
+                {locationStatus === 'capturing'
+                  ? 'Getting location…'
+                  : liveLocation
+                    ? 'Update location'
+                    : 'Share location'}
+              </button>
+              {locationStatus === 'error' && locationError ? (
+                <span className="location-block__error">{locationError}</span>
+              ) : null}
+            </div>
+
+            <div className="totals-card">
+              <div>
+                <span>Subtotal</span>
+                <strong>{formatCurrency(subtotalCents)}</strong>
+              </div>
+              <div>
+                <span>Delivery</span>
+                <strong>{deliveryFeeCents ? formatCurrency(deliveryFeeCents) : 'Free'}</strong>
+              </div>
+              {discountCents > 0 ? (
+                <div className="totals-card__discount">
+                  <span>50% off promo</span>
+                  <strong>- {formatCurrency(discountCents)}</strong>
+                </div>
+              ) : null}
+              <div className="totals-card__grand">
+                <span>Total</span>
+                <strong>{formatCurrency(totalCents)}</strong>
+              </div>
+            </div>
+
+            {!user ? (
+              <p className="message">
+                You need to log in before placing an order.{' '}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={onOpenLogin}
+                >
+                  Log in now
+                </button>
+              </p>
+            ) : null}
+            <button
+              className="primary-button primary-button--wide"
+              disabled={placingOrder || cartItems.length === 0 || !user}
+            >
+              {placingOrder
+                ? 'Placing order...'
+                : !user
+                  ? 'Log in to Place Order'
+                  : 'Place Order'}
+            </button>
+          </form>
+        </aside>
+      </section>
+      ) : null}
+
+      {latestOrder ? (
+        <section className="confirmation-card">
+          <div>
+            <p className="eyebrow">
+              {latestOrder.status === 'cancelled' ? 'Order Cancelled' : 'Order Confirmed'}
+            </p>
+            <h2>Tracking code: {latestOrder.publicId}</h2>
+            <p>
+              {latestOrder.status === 'cancelled'
+                ? 'This order has been cancelled.'
+                : 'Your order has been placed. Use the tracking code or QR to follow the delivery timeline.'}
+            </p>
+            <div className="confirmation-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => onTrack(latestOrder.publicId)}
+              >
+                Track This Order
+              </button>
+              {latestCancellable ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={cancellingOrder}
+                  onClick={handleCancelLatest}
+                >
+                  {cancellingOrder ? 'Cancelling...' : 'Cancel Order'}
+                </button>
+              ) : null}
+              <button type="button" className="ghost-button" onClick={() => setLatestOrder(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+          <div className="qr-card">
+            <QRCodeSVG value={trackUrl} size={132} includeMargin />
+            <span>{trackUrl}</span>
+          </div>
+        </section>
+      ) : null}
+      </div>
+    </main>
+  );
+}
+
+export default Storefront;
