@@ -147,6 +147,13 @@ function App() {
         onLoginSuccess={(nextUser) => {
           setUser(nextUser);
           setLoginModalOpen(false);
+          // Send each role to its own home after sign-in.
+          if (nextUser.role === 'admin' || nextUser.role === 'editor') {
+            navigate({ view: 'dashboard' });
+          } else if (nextUser.role === 'rider') {
+            navigate({ view: 'rider' });
+          }
+          // viewer / customer stay on whatever page they were browsing.
         }}
       />
     </div>
