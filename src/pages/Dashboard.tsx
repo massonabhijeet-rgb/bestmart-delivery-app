@@ -136,6 +136,21 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [bulkImageUploading, setBulkImageUploading] = useState(false);
   const [bulkImageResult, setBulkImageResult] = useState<BulkImageUploadResult | null>(null);
   const [bulkImageDragging, setBulkImageDragging] = useState(false);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
+  const [statusChangingId, setStatusChangingId] = useState<string | null>(null);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [savingCategoryId, setSavingCategoryId] = useState<number | null>(null);
+  const [deletingCategoryId, setDeletingCategoryId] = useState<number | null>(null);
+  const [togglingOfferId, setTogglingOfferId] = useState<string | null>(null);
+  const [uploadingCategoryImageId, setUploadingCategoryImageId] = useState<number | null>(null);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [showProductEditor, setShowProductEditor] = useState(false);
+  const [inlineCategoryName, setInlineCategoryName] = useState('');
+  const [creatingInlineCategory, setCreatingInlineCategory] = useState(false);
+  const [showInlineCategoryInput, setShowInlineCategoryInput] = useState(false);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -356,6 +371,36 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setProductForm(defaultProductForm);
     setProductImage(null);
     setProductImagePreview(null);
+    setShowInlineCategoryInput(false);
+    setInlineCategoryName('');
+  }
+
+  function closeProductEditor() {
+    setShowProductEditor(false);
+    resetProductEditor();
+  }
+
+  function openNewProductEditor() {
+    resetProductEditor();
+    setShowProductEditor(true);
+  }
+
+  async function handleCreateCategoryInline() {
+    const name = inlineCategoryName.trim();
+    if (!name) return;
+    setCreatingInlineCategory(true);
+    try {
+      const created = await apiCreateCategory(name);
+      setCategories((prev) => [...prev, created]);
+      setProductForm((c) => ({ ...c, categoryId: String(created.id) }));
+      setInlineCategoryName('');
+      setShowInlineCategoryInput(false);
+      setNotice(`Category "${name}" created.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create category');
+    } finally {
+      setCreatingInlineCategory(false);
+    }
   }
 
   function toggleOrder(publicId: string) {
@@ -367,6 +412,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!canManageCatalog) return;
     setNotice('');
     setError('');
+    setSavingProduct(true);
     try {
       if (!productForm.categoryId) {
         setError('Please select a category.');
@@ -393,20 +439,25 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         await apiUploadProductImage(savedProduct.uniqueId, productImage);
       }
       setNotice(editingId ? 'Product updated.' : 'Product created.');
-      resetProductEditor();
+      closeProductEditor();
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save product');
+    } finally {
+      setSavingProduct(false);
     }
   }
 
   async function handleArchive(uniqueId: string) {
+    setArchivingId(uniqueId);
     try {
       await apiDeleteProduct(uniqueId);
       setNotice('Product archived.');
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive product');
+    } finally {
+      setArchivingId(null);
     }
   }
 
@@ -419,16 +470,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       tone: 'danger',
     });
     if (!confirmed) return;
+    setCancellingOrderId(publicId);
     try {
       await apiUpdateOrderStatus(publicId, 'cancelled', riderDrafts[publicId] || null);
       setNotice(`Order ${publicId} cancelled. Customer has been notified.`);
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to cancel order');
+    } finally {
+      setCancellingOrderId(null);
     }
   }
 
   async function handleAssignRider(publicId: string, status: OrderStatus, riderUserId: number | null) {
+    setAssigningOrderId(publicId);
     try {
       await apiUpdateOrderStatus(publicId, status, riderUserId);
       setNotice(
@@ -439,6 +494,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to assign rider');
+    } finally {
+      setAssigningOrderId(null);
     }
   }
 
@@ -492,6 +549,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setRiderDrafts((c) => ({ ...c, [publicId]: chosen }));
     }
 
+    setStatusChangingId(publicId);
     try {
       await apiUpdateOrderStatus(publicId, status, riderIdForUpdate);
       setNotice(`Order ${publicId} updated.`);
@@ -508,6 +566,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update order');
+    } finally {
+      setStatusChangingId(null);
     }
   }
 
@@ -516,6 +576,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!canManageCatalog) return;
     const name = newCategoryName.trim();
     if (!name) return;
+    setCreatingCategory(true);
     try {
       await apiCreateCategory(name);
       setNotice(`Category "${name}" created.`);
@@ -523,12 +584,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create category');
+    } finally {
+      setCreatingCategory(false);
     }
   }
 
   async function handleSaveCategoryName(id: number) {
     const name = editingCategoryName.trim();
     if (!name) return;
+    setSavingCategoryId(id);
     try {
       await apiUpdateCategory(id, name);
       setNotice('Category updated.');
@@ -537,6 +601,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update category');
+    } finally {
+      setSavingCategoryId(null);
     }
   }
 
@@ -558,6 +624,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     });
     if (!confirmed) return;
 
+    setDeletingCategoryId(category.id);
     try {
       const result = await apiDeleteCategory(category.id);
       const parts: string[] = [`Category "${category.name}" deleted.`];
@@ -568,6 +635,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete category');
+    } finally {
+      setDeletingCategoryId(null);
     }
   }
 
@@ -587,6 +656,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         return;
       }
     }
+    setTogglingOfferId(product.uniqueId);
     try {
       const updated = await apiToggleProductOffer(
         product.uniqueId,
@@ -605,6 +675,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update offer');
+    } finally {
+      setTogglingOfferId(null);
     }
   }
 
@@ -618,6 +690,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   async function handleUploadCategoryImage(id: number) {
     const file = categoryImages[id];
     if (!file) return;
+    setUploadingCategoryImageId(id);
     try {
       await apiUploadCategoryImage(id, file);
       setNotice('Category image uploaded.');
@@ -625,12 +698,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to upload image');
+    } finally {
+      setUploadingCategoryImageId(null);
     }
   }
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canManageTeam) return;
+    setCreatingUser(true);
     try {
       await apiCreateUser(staffEmail, staffPassword, staffRole, {
         fullName: staffFullName.trim() || undefined,
@@ -645,6 +721,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create user');
+    } finally {
+      setCreatingUser(false);
     }
   }
 
@@ -1218,8 +1296,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         type="button"
                         className="order-row__advance"
                         onClick={() => handleStatusChange(order.publicId, nextAction.next)}
+                        disabled={statusChangingId === order.publicId}
                       >
-                        {nextAction.label}
+                        {statusChangingId === order.publicId ? 'Updating…' : nextAction.label}
                       </button>
                     </div>
                   ) : null}
@@ -1409,8 +1488,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                               type="button"
                               className="danger-button"
                               onClick={() => handleAdminCancel(order.publicId)}
+                              disabled={cancellingOrderId === order.publicId}
                             >
-                              Cancel Order
+                              {cancellingOrderId === order.publicId ? 'Cancelling…' : 'Cancel Order'}
                             </button>
                           )}
                       </div>
@@ -1430,34 +1510,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
      INVENTORY
   ──────────────────────────────────────── */
   function renderInventory() {
-    const inventoryListRef = { current: null as HTMLDivElement | null };
-    const backToList = () => {
-      resetProductEditor();
-      setTimeout(() => {
-        const el = document.querySelector('.inventory-list');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 30);
-    };
-    void inventoryListRef;
-
     return (
       <div className="section-box">
         <div className="section-box__head">
           <div>
-            <h2>
-              {canManageCatalog
-                ? editingId
-                  ? 'Editing product'
-                  : 'Inventory Editor'
-                : 'Inventory'}
-            </h2>
+            <h2>{canManageCatalog ? 'Inventory Editor' : 'Inventory'}</h2>
             <p>{products.length} products · {products.filter((p) => p.isActive).length} active</p>
           </div>
-          {canManageCatalog && editingId ? (
-            <button type="button" className="ghost-button" onClick={backToList}>
-              ← Back to list
-            </button>
-          ) : canManageCatalog ? (
+          {canManageCatalog ? (
             <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
               <button
                 type="button"
@@ -1473,7 +1533,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               >
                 {showBulkImagePanel ? '✕ Close' : '🖼 Bulk images'}
               </button>
-              <button type="button" className="ghost-button" onClick={resetProductEditor}>
+              <button type="button" className="primary-button" onClick={openNewProductEditor}>
                 + New Product
               </button>
             </div>
@@ -1728,18 +1788,27 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           </div>
         )}
 
-        {canManageCatalog ? (
-          <form className="pe-form" onSubmit={handleSaveProduct}>
+        {canManageCatalog && showProductEditor ? (
+          <div
+            className="pe-modal-overlay"
+            onClick={(e) => { if (e.target === e.currentTarget) closeProductEditor(); }}
+            role="dialog"
+            aria-modal="true"
+          >
+          <form className="pe-form pe-form--modal" onSubmit={handleSaveProduct}>
             <div className="pe-form__header">
               <div className="pe-form__title-wrap">
                 <span className="pe-form__eyebrow">{editingId ? 'Editing product' : 'New product'}</span>
                 <h3 className="pe-form__title">{editingId ? (productForm.name || 'Untitled') : 'Add to inventory'}</h3>
               </div>
-              {editingId && (
-                <button type="button" className="pe-form__discard" onClick={resetProductEditor}>
-                  Discard changes
-                </button>
-              )}
+              <button
+                type="button"
+                className="pe-form__discard"
+                onClick={closeProductEditor}
+                aria-label="Close"
+              >
+                ✕
+              </button>
             </div>
 
             <div className="pe-form__body">
@@ -1759,18 +1828,60 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   </label>
                   <div className="pe-row">
                     <label className="pe-field">
-                      <span className="pe-field__label">Category <em>*</em></span>
-                      <select
-                        className="pe-field__input"
-                        value={productForm.categoryId}
-                        onChange={(e) => setProductForm((c) => ({ ...c, categoryId: e.target.value }))}
-                        required
-                      >
-                        <option value="">Select category</option>
-                        {categories.map((cat) => (
-                          <option key={cat.id} value={String(cat.id)}>{cat.name}</option>
-                        ))}
-                      </select>
+                      <span className="pe-field__label">
+                        Category <em>*</em>
+                        {!showInlineCategoryInput && (
+                          <button
+                            type="button"
+                            className="pe-field__link"
+                            onClick={() => setShowInlineCategoryInput(true)}
+                          >
+                            + New category
+                          </button>
+                        )}
+                      </span>
+                      {showInlineCategoryInput ? (
+                        <div className="pe-inline-create">
+                          <input
+                            className="pe-field__input"
+                            value={inlineCategoryName}
+                            onChange={(e) => setInlineCategoryName(e.target.value)}
+                            placeholder="New category name"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); void handleCreateCategoryInline(); }
+                              if (e.key === 'Escape') { setShowInlineCategoryInput(false); setInlineCategoryName(''); }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="primary-button pe-inline-create__btn"
+                            disabled={!inlineCategoryName.trim() || creatingInlineCategory}
+                            onClick={() => void handleCreateCategoryInline()}
+                          >
+                            {creatingInlineCategory ? '…' : 'Add'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button pe-inline-create__btn"
+                            onClick={() => { setShowInlineCategoryInput(false); setInlineCategoryName(''); }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          className="pe-field__input"
+                          value={productForm.categoryId}
+                          onChange={(e) => setProductForm((c) => ({ ...c, categoryId: e.target.value }))}
+                          required
+                        >
+                          <option value="">Select category</option>
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={String(cat.id)}>{cat.name}</option>
+                          ))}
+                        </select>
+                      )}
                     </label>
                     <label className="pe-field">
                       <span className="pe-field__label">Unit label <em>*</em></span>
@@ -1935,21 +2046,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </div>
 
             <div className="pe-form__footer">
-              {editingId && (
-                <button type="button" className="ghost-button" onClick={resetProductEditor}>
-                  Cancel
-                </button>
-              )}
-              <button type="submit" className="primary-button pe-form__submit">
-                {editingId ? 'Save changes' : 'Create product'}
+              <button type="button" className="ghost-button" onClick={closeProductEditor}>
+                Cancel
+              </button>
+              <button type="submit" className="primary-button pe-form__submit" disabled={savingProduct}>
+                {savingProduct ? 'Saving…' : editingId ? 'Save changes' : 'Create product'}
               </button>
             </div>
           </form>
-        ) : (
+          </div>
+        ) : !canManageCatalog ? (
           <div className="empty-state">
             Viewer accounts can inspect inventory but cannot edit products.
           </div>
-        )}
+        ) : null}
 
         <div className="inventory-toolbar">
           {/* Search row */}
@@ -2144,7 +2254,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           isActive: product.isActive,
                         });
                         setProductImage(null);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                        setShowProductEditor(true);
                       }}
                     >
                       Edit
@@ -2153,8 +2263,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       type="button"
                       className="inv-card__btn inv-card__btn--danger"
                       onClick={() => handleArchive(product.uniqueId)}
+                      disabled={archivingId === product.uniqueId}
                     >
-                      Archive
+                      {archivingId === product.uniqueId ? 'Archiving…' : 'Archive'}
                     </button>
                   </div>
                 )}
@@ -2197,9 +2308,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             <button
               type="submit"
               className="primary-button"
-              disabled={!newCategoryName.trim()}
+              disabled={!newCategoryName.trim() || creatingCategory}
             >
-              Add Category
+              {creatingCategory ? 'Adding…' : 'Add Category'}
             </button>
           </form>
         )}
@@ -2246,8 +2357,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         type="button"
                         className="cat-card__upload-btn"
                         onClick={() => handleUploadCategoryImage(cat.id)}
+                        disabled={uploadingCategoryImageId === cat.id}
                       >
-                        Upload
+                        {uploadingCategoryImageId === cat.id ? 'Uploading…' : 'Upload'}
                       </button>
                     </div>
                   )}
@@ -2272,9 +2384,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           type="button"
                           className="cat-card__btn cat-card__btn--primary"
                           onClick={() => handleSaveCategoryName(cat.id)}
-                          disabled={!editingCategoryName.trim()}
+                          disabled={!editingCategoryName.trim() || savingCategoryId === cat.id}
                         >
-                          Save
+                          {savingCategoryId === cat.id ? 'Saving…' : 'Save'}
                         </button>
                         <button
                           type="button"
@@ -2308,8 +2420,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         className="cat-card__btn cat-card__btn--danger"
                         title={productCount > 0 ? `${productCount} product(s) will be affected` : 'Delete category'}
                         onClick={() => handleDeleteCategory(cat)}
+                        disabled={deletingCategoryId === cat.id}
                       >
-                        Delete
+                        {deletingCategoryId === cat.id ? 'Deleting…' : 'Delete'}
                       </button>
                     </div>
                   )}
@@ -2485,8 +2598,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                               type="button"
                               className="ghost-button"
                               onClick={() => handleToggleOffer(product, true, null, 'bogo')}
+                              disabled={togglingOfferId === product.uniqueId}
                             >
-                              Switch to Buy 1 Get 1
+                              {togglingOfferId === product.uniqueId ? 'Updating…' : 'Switch to Buy 1 Get 1'}
                             </button>
                           )}
                         </>
@@ -2509,8 +2623,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         type="button"
                         className="ghost-button ghost-button--danger"
                         onClick={() => handleToggleOffer(product, false)}
+                        disabled={togglingOfferId === product.uniqueId}
                       >
-                        Remove
+                        {togglingOfferId === product.uniqueId ? 'Removing…' : 'Remove'}
                       </button>
                     </div>
                   </article>
@@ -2562,7 +2677,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       <button
                         type="button"
                         className="primary-button"
-                        disabled={!draft}
+                        disabled={!draft || togglingOfferId === product.uniqueId}
                         onClick={() => {
                           const rupees = Number(draft);
                           if (!Number.isFinite(rupees) || rupees < 0) {
@@ -2573,14 +2688,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           setOfferPriceDraft(product.uniqueId, '');
                         }}
                       >
-                        Add at offer price
+                        {togglingOfferId === product.uniqueId ? 'Adding…' : 'Add at offer price'}
                       </button>
                       <button
                         type="button"
                         className="ghost-button"
                         onClick={() => handleToggleOffer(product, true, null, 'bogo')}
+                        disabled={togglingOfferId === product.uniqueId}
                       >
-                        Buy 1 Get 1 Free
+                        {togglingOfferId === product.uniqueId ? 'Adding…' : 'Buy 1 Get 1 Free'}
                       </button>
                     </div>
                   </article>
@@ -2654,8 +2770,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </label>
           </div>
           <div>
-            <button type="submit" className="primary-button">
-              Create Member
+            <button type="submit" className="primary-button" disabled={creatingUser}>
+              {creatingUser ? 'Creating…' : 'Create Member'}
             </button>
           </div>
         </form>
