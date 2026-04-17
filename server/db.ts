@@ -281,8 +281,12 @@ async function createTables(client: PoolClient) {
       use_count INTEGER NOT NULL DEFAULT 1,
       last_used_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, full_name, phone, delivery_address)
     );
+  `);
+  await client.query(`
+    ALTER TABLE user_addresses ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
   `);
 
   await client.query(`
@@ -437,8 +441,14 @@ async function createTables(client: PoolClient) {
       unit_label VARCHAR(120) NOT NULL,
       quantity INTEGER NOT NULL,
       unit_price_cents INTEGER NOT NULL,
-      line_total_cents INTEGER NOT NULL
+      line_total_cents INTEGER NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+  await client.query(`
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS created_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
   `);
 
   await client.query(`
@@ -1133,7 +1143,8 @@ export async function upsertUserAddress(
         latitude = EXCLUDED.latitude,
         longitude = EXCLUDED.longitude,
         use_count = user_addresses.use_count + 1,
-        last_used_date = NOW();
+        last_used_date = NOW(),
+        updated_date = NOW();
     `,
     [
       userId,
