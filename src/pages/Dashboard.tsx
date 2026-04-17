@@ -6,6 +6,7 @@ import { useOrderSocket } from '../hooks/useOrderSocket';
 import type { RiderLocation } from '../hooks/useOrderSocket';
 import { confirm, pickRider } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
+import LazyMount from '../components/LazyMount';
 import {
   describeWeatherCode,
   fetchOpenMeteoSnapshot,
@@ -353,7 +354,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }, [canManageCatalog]);
 
   useEffect(() => {
-    if (activeTab === 'offers' && canManageCatalog) void loadSlowMovers();
+    if ((activeTab === 'offers' || activeTab === 'overview') && canManageCatalog) {
+      void loadSlowMovers();
+    }
   }, [activeTab, canManageCatalog, loadSlowMovers, products.length]);
 
   const loadSalesReport = useCallback(async (days: 7 | 30 | 90) => {
@@ -370,7 +373,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }, [canManageTeam]);
 
   useEffect(() => {
-    if (activeTab === 'sales' && canManageTeam) void loadSalesReport(salesRange);
+    if ((activeTab === 'sales' || activeTab === 'overview') && canManageTeam) {
+      void loadSalesReport(salesRange);
+    }
   }, [activeTab, canManageTeam, loadSalesReport, salesRange]);
 
   useEffect(() => {
@@ -1450,6 +1455,184 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </div>
           )}
         </div>
+
+        {/* Lazy-mounted: stock value by category */}
+        <LazyMount placeholderHeight={260}>
+          {(() => {
+            const byCat = new Map<string, { name: string; valueCents: number; units: number; count: number }>();
+            for (const p of products) {
+              if (!p.isActive) continue;
+              const key = p.category ?? 'Uncategorised';
+              const entry = byCat.get(key) ?? { name: key, valueCents: 0, units: 0, count: 0 };
+              entry.valueCents += (p.priceCents ?? 0) * (p.stockQuantity ?? 0);
+              entry.units += p.stockQuantity ?? 0;
+              entry.count += 1;
+              byCat.set(key, entry);
+            }
+            const rows = Array.from(byCat.values())
+              .sort((a, b) => b.valueCents - a.valueCents)
+              .slice(0, 8);
+            const max = Math.max(1, ...rows.map((r) => r.valueCents));
+            return (
+              <div className="section-box">
+                <div className="section-box__head">
+                  <div>
+                    <h2>Stock value by category</h2>
+                    <p>Where your inventory rupees are sitting today.</p>
+                  </div>
+                </div>
+                {rows.length === 0 ? (
+                  <div className="empty-state">No active products yet.</div>
+                ) : (
+                  <div className="cat-value-list">
+                    {rows.map((r) => (
+                      <div key={r.name} className="cat-value-row">
+                        <span className="cat-value-row__name">{r.name}</span>
+                        <div className="cat-value-row__bar">
+                          <div
+                            className="cat-value-row__fill"
+                            style={{ width: `${Math.round((r.valueCents / max) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="cat-value-row__value">{formatCurrency(r.valueCents)}</span>
+                        <span className="cat-value-row__sub">{r.count} SKUs · {r.units.toLocaleString()} units</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </LazyMount>
+
+        {/* Lazy-mounted: best sellers from the last 30 days */}
+        <LazyMount placeholderHeight={260}>
+          <div className="section-box">
+            <div className="section-box__head">
+              <div>
+                <h2>Top sellers — last 30 days</h2>
+                <p>Your fastest-moving products by units sold.</p>
+              </div>
+              <button type="button" className="ghost-button" onClick={() => setActiveTab('sales')}>
+                Open sales report →
+              </button>
+            </div>
+            {salesReport && salesReport.topProducts.length > 0 ? (
+              <div className="best-sellers">
+                {salesReport.topProducts.slice(0, 6).map((p, i) => {
+                  const max = Math.max(1, ...salesReport.topProducts.map((x) => x.unitsSold));
+                  return (
+                    <div key={`${p.uniqueId ?? 'anon'}-${i}`} className="best-seller">
+                      <span className="best-seller__rank">#{i + 1}</span>
+                      <div className="best-seller__main">
+                        <span className="best-seller__name">{p.name}</span>
+                        <div className="best-seller__bar">
+                          <div
+                            className="best-seller__fill"
+                            style={{ width: `${Math.round((p.unitsSold / max) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="best-seller__stats">
+                        <strong>{p.unitsSold.toLocaleString()}</strong>
+                        <span>units</span>
+                        <em>{formatCurrency(p.revenueCents)}</em>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-state">
+                {salesLoading ? 'Loading sales data…' : 'No orders in the last 30 days yet.'}
+              </div>
+            )}
+          </div>
+        </LazyMount>
+
+        {/* Lazy-mounted: needs attention (slow movers) — admin/editor only */}
+        {canManageCatalog && (
+          <LazyMount placeholderHeight={240}>
+            <div className="section-box">
+              <div className="section-box__head">
+                <div>
+                  <h2>💡 Needs attention</h2>
+                  <p>Products selling slowly — consider putting them on offer.</p>
+                </div>
+                <button type="button" className="ghost-button" onClick={() => setActiveTab('offers')}>
+                  Manage offers →
+                </button>
+              </div>
+              {slowMovers.length > 0 ? (
+                <ul className="attention-list">
+                  {slowMovers.slice(0, 5).map((s) => (
+                    <li key={s.uniqueId} className="attention-row">
+                      <div className="attention-row__main">
+                        <span className="attention-row__name">{s.name}</span>
+                        <span className="attention-row__meta">
+                          {s.category ?? 'Uncategorised'} · {s.unitLabel}
+                        </span>
+                      </div>
+                      <span className="attention-row__reason">{s.reasonLabel}</span>
+                      <div className="attention-row__price">
+                        <span className="attention-row__strike">{formatCurrency(s.priceCents)}</span>
+                        <strong>{formatCurrency(s.suggestedOfferPriceCents)}</strong>
+                        <em>−{s.suggestedDiscountPercent}%</em>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="empty-state">
+                  {slowMoversLoading ? 'Analysing sales…' : 'Everything is selling well.'}
+                </div>
+              )}
+            </div>
+          </LazyMount>
+        )}
+
+        {/* Lazy-mounted: recently added catalog items */}
+        <LazyMount placeholderHeight={220}>
+          {(() => {
+            const recent = [...products]
+              .filter((p) => p.isActive)
+              .sort((a, b) => new Date(b.createdDate).getTime() - new Date(a.createdDate).getTime())
+              .slice(0, 6);
+            return (
+              <div className="section-box">
+                <div className="section-box__head">
+                  <div>
+                    <h2>Recently added</h2>
+                    <p>The newest additions to your catalog.</p>
+                  </div>
+                </div>
+                {recent.length === 0 ? (
+                  <div className="empty-state">No products yet.</div>
+                ) : (
+                  <div className="recent-products">
+                    {recent.map((p) => (
+                      <article key={p.uniqueId} className="recent-product">
+                        <div className="recent-product__thumb">
+                          {p.imageUrl && (
+                            <img src={p.imageUrl} alt={p.name} loading="lazy" />
+                          )}
+                        </div>
+                        <div className="recent-product__body">
+                          <strong>{p.name}</strong>
+                          <span>{p.category ?? 'Uncategorised'} · {p.unitLabel}</span>
+                          <span className="recent-product__price">{formatCurrency(p.priceCents)}</span>
+                          <span className="recent-product__date">
+                            Added {formatRelativeTime(p.createdDate)}
+                          </span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </LazyMount>
 
         {/* Stat Cards */}
         <div className="stats-row">
