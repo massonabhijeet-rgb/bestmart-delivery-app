@@ -844,6 +844,96 @@ textarea {
 }
 .inv-snapshot__list-stock--out { color: var(--c-danger, #ef4444); }
 
+/* ── Overview: insight grid wrapper ── */
+.insight-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+@media (max-width: 1100px) {
+  .insight-grid { grid-template-columns: 1fr; }
+}
+.insight-card {
+  margin: 0 !important;
+}
+.insight-card .section-box__head {
+  padding: var(--sp-3) var(--sp-4) !important;
+}
+.insight-card .section-box__head h2 {
+  font-size: 0.95rem;
+}
+.insight-card .section-box__head p {
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+/* Compact recent products inside insight grid */
+.recent-products-compact {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.recent-products-compact li {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+}
+.recent-products-compact__thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: var(--c-bg);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.recent-products-compact__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.recent-products-compact__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.recent-products-compact__body strong {
+  color: var(--c-ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-products-compact__body span {
+  color: var(--c-ink-3);
+  font-size: 0.72rem;
+}
+.recent-products-compact__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.recent-products-compact__right strong {
+  font-size: 0.85rem;
+  color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
+}
+.recent-products-compact__right span {
+  font-size: 0.7rem;
+  color: var(--c-ink-3);
+}
+
 /* ── Overview: stock value by category ── */
 .cat-value-list {
   padding: var(--sp-3) var(--sp-6) var(--sp-4);
