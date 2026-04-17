@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { formatCurrency, formatDateTime, formatRelativeTime, labelizeStatus } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { playOrderAlert, unlockAudio } from '../lib/sound';
@@ -106,7 +106,7 @@ const defaultProductForm: ProductFormState = {
   isActive: true,
 };
 
-type DashTab = 'overview' | 'orders' | 'sales' | 'inventory' | 'categories' | 'offers' | 'team';
+type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'team';
 
 function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
@@ -164,6 +164,16 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [freeDeliveryRupees, setFreeDeliveryRupees] = useState('');
   const [deliveryFeeRupees, setDeliveryFeeRupees] = useState('');
   const [savingDeliverySettings, setSavingDeliverySettings] = useState(false);
+  const [historyStart, setHistoryStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 29);
+    return d.toISOString().slice(0, 10);
+  });
+  const [historyEnd, setHistoryEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [historyStatus, setHistoryStatus] = useState<'all' | OrderStatus>('all');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historySort, setHistorySort] = useState<'date_desc' | 'date_asc' | 'total_desc' | 'total_asc'>('date_desc');
+  const [historyExpanded, setHistoryExpanded] = useState<string | null>(null);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -1046,6 +1056,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const tabs: Array<{ key: DashTab; label: string; badge?: number }> = [
     { key: 'overview', label: 'Overview' },
     { key: 'orders', label: orders.length > 0 ? `Orders (${orders.length})` : 'Orders', badge: unseenCount },
+    ...(canManageCatalog ? [{ key: 'history' as DashTab, label: 'History' }] : []),
     ...(canManageTeam ? [{ key: 'sales' as DashTab, label: 'Sales' }] : []),
     { key: 'inventory', label: 'Inventory' },
     ...(canManageCatalog ? [{ key: 'categories' as DashTab, label: 'Categories' }] : []),
@@ -1112,6 +1123,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       <main className="dash-content">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'orders' && renderOrders()}
+        {activeTab === 'history' && renderHistory()}
         {activeTab === 'sales' && renderSales()}
         {activeTab === 'inventory' && renderInventory()}
         {activeTab === 'categories' && renderCategories()}
@@ -3098,6 +3110,297 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       ...salesReport.paymentBreakdown.map((p) => [p.method, p.orders, (p.revenueCents / 100).toFixed(2)]),
     ];
     downloadCsv(`bestmart-sales-${salesReport.periodDays}d-${stamp}.csv`, summary);
+  }
+
+  function setHistoryPreset(days: number) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    setHistoryStart(start.toISOString().slice(0, 10));
+    setHistoryEnd(end.toISOString().slice(0, 10));
+  }
+
+  function renderHistory() {
+    if (!canManageCatalog) {
+      return <div className="section-box"><div className="empty-state">Sign in as admin or editor to view order history.</div></div>;
+    }
+
+    const startMs = new Date(`${historyStart}T00:00:00`).getTime();
+    const endMs = new Date(`${historyEnd}T23:59:59.999`).getTime();
+    const term = historySearch.trim().toLowerCase();
+
+    const filtered = orders.filter((o) => {
+      const t = new Date(o.createdDate).getTime();
+      if (Number.isFinite(startMs) && t < startMs) return false;
+      if (Number.isFinite(endMs) && t > endMs) return false;
+      if (historyStatus !== 'all' && o.status !== historyStatus) return false;
+      if (term) {
+        const hay = [
+          o.publicId, o.customerName, o.customerPhone, o.deliveryAddress,
+          o.assignedRider ?? '', o.paymentMethod,
+        ].join(' ').toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+
+    const sorted = [...filtered].sort((a, b) => {
+      switch (historySort) {
+        case 'date_asc':
+          return new Date(a.createdDate).getTime() - new Date(b.createdDate).getTime();
+        case 'total_desc':
+          return b.totalCents - a.totalCents;
+        case 'total_asc':
+          return a.totalCents - b.totalCents;
+        case 'date_desc':
+        default:
+          return new Date(b.createdDate).getTime() - new Date(a.createdDate).getTime();
+      }
+    });
+
+    const totalRevenue = sorted
+      .filter((o) => o.status !== 'cancelled')
+      .reduce((sum, o) => sum + o.totalCents, 0);
+    const totalItems = sorted
+      .filter((o) => o.status !== 'cancelled')
+      .reduce((sum, o) => sum + (o.items?.reduce((s, it) => s + it.quantity, 0) ?? 0), 0);
+    const cancelledCount = sorted.filter((o) => o.status === 'cancelled').length;
+
+    function exportFiltered() {
+      const headers = [
+        'Date', 'Order ID', 'Status', 'Customer', 'Phone', 'Address',
+        'Payment', 'Items', 'Subtotal', 'Delivery Fee', 'Discount', 'Total', 'Rider',
+      ];
+      const rows: Array<Array<string | number>> = [headers];
+      for (const o of sorted) {
+        const items = o.items?.map((it) => `${it.quantity}× ${it.productName}`).join(' | ') ?? '';
+        rows.push([
+          new Date(o.createdDate).toISOString(),
+          o.publicId,
+          o.status,
+          o.customerName,
+          o.customerPhone,
+          o.deliveryAddress,
+          o.paymentMethod,
+          items,
+          (o.subtotalCents / 100).toFixed(2),
+          (o.deliveryFeeCents / 100).toFixed(2),
+          (o.discountCents / 100).toFixed(2),
+          (o.totalCents / 100).toFixed(2),
+          o.assignedRider ?? '',
+        ]);
+      }
+      downloadCsv(`bestmart-history-${historyStart}_to_${historyEnd}.csv`, rows);
+    }
+
+    const STATUS_OPTIONS: Array<{ value: 'all' | OrderStatus; label: string }> = [
+      { value: 'all', label: 'All statuses' },
+      { value: 'placed', label: 'Placed' },
+      { value: 'confirmed', label: 'Confirmed' },
+      { value: 'packing', label: 'Packing' },
+      { value: 'out_for_delivery', label: 'Out for delivery' },
+      { value: 'delivered', label: 'Delivered' },
+      { value: 'cancelled', label: 'Cancelled' },
+    ];
+
+    return (
+      <div className="section-box">
+        <div className="section-box__head">
+          <div>
+            <h2>Order History</h2>
+            <p>Browse, filter, and export every order placed in any date range.</p>
+          </div>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={exportFiltered}
+            disabled={sorted.length === 0}
+          >
+            ⬇ Export CSV
+          </button>
+        </div>
+
+        {/* Filter bar */}
+        <div className="history-toolbar">
+          <div className="history-toolbar__row">
+            <label className="history-field">
+              <span>From</span>
+              <input
+                type="date"
+                value={historyStart}
+                onChange={(e) => setHistoryStart(e.target.value)}
+                max={historyEnd}
+              />
+            </label>
+            <label className="history-field">
+              <span>To</span>
+              <input
+                type="date"
+                value={historyEnd}
+                onChange={(e) => setHistoryEnd(e.target.value)}
+                min={historyStart}
+                max={new Date().toISOString().slice(0, 10)}
+              />
+            </label>
+            <div className="history-presets">
+              <button type="button" className="chip" onClick={() => setHistoryPreset(1)}>Today</button>
+              <button type="button" className="chip" onClick={() => setHistoryPreset(7)}>7 days</button>
+              <button type="button" className="chip" onClick={() => setHistoryPreset(30)}>30 days</button>
+              <button type="button" className="chip" onClick={() => setHistoryPreset(90)}>90 days</button>
+            </div>
+          </div>
+
+          <div className="history-toolbar__row">
+            <input
+              className="history-search"
+              type="search"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              placeholder="Search by order ID, customer, phone, address, rider…"
+            />
+            <select
+              className="history-select"
+              value={historyStatus}
+              onChange={(e) => setHistoryStatus(e.target.value as 'all' | OrderStatus)}
+            >
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+            <select
+              className="history-select"
+              value={historySort}
+              onChange={(e) => setHistorySort(e.target.value as typeof historySort)}
+            >
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="total_desc">Highest total</option>
+              <option value="total_asc">Lowest total</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Summary strip */}
+        <div className="history-summary">
+          <div className="history-summary__cell">
+            <span className="history-summary__label">Orders</span>
+            <span className="history-summary__value">{sorted.length}</span>
+          </div>
+          <div className="history-summary__cell">
+            <span className="history-summary__label">Revenue</span>
+            <span className="history-summary__value">{formatCurrency(totalRevenue)}</span>
+          </div>
+          <div className="history-summary__cell">
+            <span className="history-summary__label">Items sold</span>
+            <span className="history-summary__value">{totalItems}</span>
+          </div>
+          <div className="history-summary__cell">
+            <span className="history-summary__label">Cancelled</span>
+            <span className="history-summary__value">{cancelledCount}</span>
+          </div>
+        </div>
+
+        {/* Table */}
+        {sorted.length === 0 ? (
+          <div className="empty-state" style={{ margin: 'var(--sp-5) var(--sp-6)' }}>
+            No orders match the selected filters.
+          </div>
+        ) : (
+          <div className="history-table-wrap">
+            <table className="history-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 32 }}></th>
+                  <th>Date</th>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Items</th>
+                  <th>Payment</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((o) => {
+                  const expanded = historyExpanded === o.publicId;
+                  const itemCount = o.items?.reduce((s, it) => s + it.quantity, 0) ?? 0;
+                  return (
+                    <Fragment key={o.publicId}>
+                      <tr
+                        className={`history-row${expanded ? ' history-row--expanded' : ''}`}
+                        onClick={() => setHistoryExpanded(expanded ? null : o.publicId)}
+                      >
+                        <td className="history-row__chev">{expanded ? '▾' : '▸'}</td>
+                        <td>
+                          <span className="history-row__date">{formatDateTime(o.createdDate)}</span>
+                        </td>
+                        <td>
+                          <span className="history-row__id">#{o.publicId}</span>
+                        </td>
+                        <td>
+                          <div className="history-row__customer">
+                            <strong>{o.customerName}</strong>
+                            <span>{o.customerPhone}</span>
+                          </div>
+                        </td>
+                        <td>{itemCount}</td>
+                        <td>{labelizeStatus(o.paymentMethod)}</td>
+                        <td>
+                          <span className={`history-status history-status--${o.status}`}>
+                            {labelizeStatus(o.status)}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <strong>{formatCurrency(o.totalCents)}</strong>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="history-row__detail">
+                          <td colSpan={8}>
+                            <div className="history-detail">
+                              <div className="history-detail__col">
+                                <h4>Delivery</h4>
+                                <p>{o.deliveryAddress}</p>
+                                {o.deliveryNotes && <p className="muted">Notes: {o.deliveryNotes}</p>}
+                                {o.assignedRider && <p className="muted">Rider: {o.assignedRider}</p>}
+                              </div>
+                              <div className="history-detail__col">
+                                <h4>Items</h4>
+                                <ul>
+                                  {o.items?.map((it, i) => (
+                                    <li key={`${o.publicId}-${i}`}>
+                                      {it.quantity}× {it.productName}
+                                      <span className="muted"> · {formatCurrency(it.lineTotalCents)}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div className="history-detail__col">
+                                <h4>Totals</h4>
+                                <div className="history-totals">
+                                  <span>Subtotal</span><strong>{formatCurrency(o.subtotalCents)}</strong>
+                                  <span>Delivery</span><strong>{o.deliveryFeeCents ? formatCurrency(o.deliveryFeeCents) : 'Free'}</strong>
+                                  {o.discountCents > 0 && (
+                                    <>
+                                      <span>Discount</span><strong>− {formatCurrency(o.discountCents)}</strong>
+                                    </>
+                                  )}
+                                  <span className="strong">Total</span><strong className="strong">{formatCurrency(o.totalCents)}</strong>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
   }
 
   function renderSales() {
