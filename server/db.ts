@@ -511,6 +511,12 @@ async function seedUsers(client: PoolClient, companyId: number) {
 }
 
 async function seedCategories(client: PoolClient, companyId: number) {
+  const existing = await client.query<{ count: string }>(
+    'SELECT COUNT(*)::text AS count FROM categories WHERE company_id = $1',
+    [companyId]
+  );
+  if (Number(existing.rows[0]?.count ?? '0') > 0) return;
+
   const names = [
     'Paan Corner',
     'Dairy, Bread & Eggs',
@@ -546,6 +552,12 @@ async function seedCategories(client: PoolClient, companyId: number) {
 }
 
 async function seedProducts(client: PoolClient, companyId: number) {
+  const existing = await client.query<{ count: string }>(
+    'SELECT COUNT(*)::text AS count FROM products WHERE company_id = $1',
+    [companyId]
+  );
+  if (Number(existing.rows[0]?.count ?? '0') > 0) return;
+
   const categoryRows = await client.query<{ id: number; name: string }>(
     'SELECT id, name FROM categories WHERE company_id = $1;',
     [companyId]
