@@ -1061,6 +1061,43 @@ const COUPON_SELECT = `
   COALESCE((SELECT COUNT(*)::int FROM coupon_redemptions r WHERE r.coupon_id = c.id), 0) AS "totalRedemptions"
 `;
 
+export interface PublicCoupon {
+  code: string;
+  description: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  maxDiscountCents: number | null;
+  minSubtotalCents: number;
+  validUntil: string | null;
+}
+
+export async function listPublicCoupons(companyId: number): Promise<PublicCoupon[]> {
+  const result = await pool.query<PublicCoupon>(
+    `
+      SELECT
+        c.code,
+        c.description,
+        c.discount_type AS "discountType",
+        c.discount_value AS "discountValue",
+        c.max_discount_cents AS "maxDiscountCents",
+        c.min_subtotal_cents AS "minSubtotalCents",
+        c.valid_until AS "validUntil"
+      FROM coupons c
+      WHERE c.company_id = $1
+        AND c.is_active = TRUE
+        AND c.valid_from <= NOW()
+        AND (c.valid_until IS NULL OR c.valid_until >= NOW())
+        AND (
+          c.max_total_uses IS NULL
+          OR (SELECT COUNT(*) FROM coupon_redemptions r WHERE r.coupon_id = c.id) < c.max_total_uses
+        )
+      ORDER BY c.created_date DESC;
+    `,
+    [companyId]
+  );
+  return result.rows;
+}
+
 export async function listCoupons(companyId: number): Promise<CouponRecord[]> {
   const result = await pool.query<CouponRecord>(
     `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.company_id = $1 ORDER BY c.created_date DESC;`,

@@ -475,6 +475,21 @@ export async function apiDeleteCoupon(id: number) {
   await request<{ ok: boolean }>(`/coupons/${id}`, { method: 'DELETE' });
 }
 
+export interface PublicCoupon {
+  code: string;
+  description: string;
+  discountType: CouponDiscountType;
+  discountValue: number;
+  maxDiscountCents: number | null;
+  minSubtotalCents: number;
+  validUntil: string | null;
+}
+
+export async function apiListPublicCoupons() {
+  const data = await request<{ coupons: PublicCoupon[] }>('/coupons/public');
+  return data.coupons;
+}
+
 export async function apiPreviewCoupon(code: string, subtotalCents: number) {
   const data = await request<CouponPreview>('/coupons/preview', {
     method: 'POST',

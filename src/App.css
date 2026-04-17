@@ -3961,6 +3961,128 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Coupons strip (storefront landing page)
+   ───────────────────────────────────── */
+.coupons-strip {
+  margin: 0 0 var(--sp-5);
+  padding: 0 var(--sp-4);
+}
+.coupons-strip__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
+}
+.coupons-strip__head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--c-ink);
+}
+.coupons-strip__head p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--c-ink-3);
+}
+.coupons-strip__row {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 6px;
+  margin: 0 calc(-1 * var(--sp-4));
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+.coupons-strip__row::-webkit-scrollbar { height: 6px; }
+.coupons-strip__row::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+
+.coupon-tile {
+  flex: 0 0 280px;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: stretch;
+  background: var(--c-surface);
+  border: 1.5px dashed color-mix(in srgb, var(--c-teal, #0d9488) 50%, var(--c-border));
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.coupon-tile:hover {
+  border-color: var(--c-teal, #0d9488);
+  box-shadow: 0 4px 14px -6px rgba(13, 148, 136, 0.25);
+}
+.coupon-tile__discount {
+  flex: 0 0 80px;
+  background: linear-gradient(135deg, var(--c-teal, #0d9488), color-mix(in srgb, var(--c-teal, #0d9488) 70%, #1e293b));
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px 6px;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+}
+.coupon-tile__body {
+  flex: 1;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.coupon-tile__code {
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.05em;
+  color: var(--c-ink);
+  font-size: 0.95rem;
+}
+.coupon-tile__desc {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--c-ink-2, var(--c-ink-3));
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.coupon-tile__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.7rem;
+  color: var(--c-ink-3);
+  margin-top: auto;
+}
+.coupon-tile__meta span {
+  background: var(--c-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.coupon-tile__copy {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: var(--c-teal, #0d9488);
+  color: #fff;
+  border: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.coupon-tile__copy:hover { background: color-mix(in srgb, var(--c-teal, #0d9488) 85%, #000); }
+
+/* ─────────────────────────────────────
    Coupon block (storefront checkout)
    ───────────────────────────────────── */
 .coupon-block {

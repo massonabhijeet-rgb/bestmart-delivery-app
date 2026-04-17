@@ -4,6 +4,7 @@ import {
   deleteCoupon,
   getDefaultCompanyId,
   listCoupons,
+  listPublicCoupons,
   updateCoupon,
   validateCoupon,
 } from '../db.js';
@@ -15,6 +16,19 @@ import {
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
+
+// Public: list active coupons for the storefront landing page
+router.get('/public', async (_req, res) => {
+  try {
+    const companyId = await getDefaultCompanyId();
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+    const coupons = await listPublicCoupons(companyId);
+    return res.json({ coupons });
+  } catch (err) {
+    console.error('List public coupons error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Admin: list
 router.get(

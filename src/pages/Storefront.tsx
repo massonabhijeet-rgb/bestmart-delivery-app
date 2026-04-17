@@ -7,10 +7,11 @@ import {
   apiGetProducts,
   apiListAddresses,
   apiListCategories,
+  apiListPublicCoupons,
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { CouponPreview } from '../services/api';
+import type { CouponPreview, PublicCoupon } from '../services/api';
 import { effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
@@ -81,6 +82,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [appliedCoupon, setAppliedCoupon] = useState<CouponPreview | null>(null);
   const [couponStatus, setCouponStatus] = useState<'idle' | 'applying' | 'error'>('idle');
   const [couponError, setCouponError] = useState('');
+  const [publicCoupons, setPublicCoupons] = useState<PublicCoupon[]>([]);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
     if (!('geolocation' in navigator) || !window.isSecureContext) {
@@ -130,6 +133,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Unable to load BestMart');
       });
+    apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -447,6 +451,15 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     setCouponStatus('idle');
   }
 
+  function handleCopyCoupon(code: string) {
+    setCouponInput(code);
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(code).catch(() => {});
+    }
+    setCopiedCode(code);
+    window.setTimeout(() => setCopiedCode((c) => (c === code ? null : c)), 1800);
+  }
+
   // Re-validate the coupon when subtotal changes so users see live feedback.
   useEffect(() => {
     if (!appliedCoupon) return;
@@ -597,6 +610,53 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
       {!isBrowsing ? (
         <>
+          {publicCoupons.length > 0 && (
+            <section className="coupons-strip">
+              <div className="coupons-strip__head">
+                <h2>Available coupons</h2>
+                <p>Tap a coupon to copy the code, then apply it at checkout.</p>
+              </div>
+              <div className="coupons-strip__row">
+                {publicCoupons.map((c) => {
+                  const discountLabel = c.discountType === 'percent'
+                    ? `${c.discountValue}% OFF`
+                    : `₹${(c.discountValue / 100).toFixed(0)} OFF`;
+                  const minLabel = c.minSubtotalCents > 0
+                    ? `Min ₹${(c.minSubtotalCents / 100).toFixed(0)}`
+                    : null;
+                  const capLabel = c.discountType === 'percent' && c.maxDiscountCents != null
+                    ? `Up to ₹${(c.maxDiscountCents / 100).toFixed(0)}`
+                    : null;
+                  const expiryLabel = c.validUntil
+                    ? `Until ${new Date(c.validUntil).toLocaleDateString()}`
+                    : null;
+                  const isCopied = copiedCode === c.code;
+                  return (
+                    <article key={c.code} className="coupon-tile">
+                      <div className="coupon-tile__discount">{discountLabel}</div>
+                      <div className="coupon-tile__body">
+                        <div className="coupon-tile__code">{c.code}</div>
+                        {c.description && <p className="coupon-tile__desc">{c.description}</p>}
+                        <div className="coupon-tile__meta">
+                          {minLabel && <span>{minLabel}</span>}
+                          {capLabel && <span>{capLabel}</span>}
+                          {expiryLabel && <span>{expiryLabel}</span>}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="coupon-tile__copy"
+                        onClick={() => handleCopyCoupon(c.code)}
+                      >
+                        {isCopied ? '✓ Copied' : 'Copy code'}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <section className="home-banners">
             {HOME_BANNERS.map((banner) => (
               <article
