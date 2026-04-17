@@ -3961,6 +3961,53 @@ textarea {
 }
 
 /* ─────────────────────────────────────
+   Delivery Settings card
+   ───────────────────────────────────── */
+.delivery-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-6);
+}
+.delivery-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.delivery-settings__label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--c-ink-3);
+}
+.delivery-settings__field input {
+  height: 40px;
+  padding: 0 0.75rem;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.delivery-settings__field input:focus {
+  outline: none;
+  border-color: var(--c-teal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-teal) 18%, transparent);
+}
+.delivery-settings__hint {
+  font-size: 0.75rem;
+  color: var(--c-ink-3);
+}
+.delivery-settings__actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  grid-column: 1 / -1;
+}
+
+/* ─────────────────────────────────────
    Admin Sales tab
    ───────────────────────────────────── */
 .sales-range {

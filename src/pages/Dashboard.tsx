@@ -28,6 +28,7 @@ import {
   apiBulkUploadProductImages,
   apiListSlowMovers,
   apiSalesReport,
+  apiUpdateAppSettings,
 } from '../services/api';
 import type { BulkImageUploadResult, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
@@ -160,6 +161,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [salesReport, setSalesReport] = useState<SalesReport | null>(null);
   const [salesLoading, setSalesLoading] = useState(false);
   const [salesRange, setSalesRange] = useState<7 | 30 | 90>(30);
+  const [freeDeliveryRupees, setFreeDeliveryRupees] = useState('');
+  const [deliveryFeeRupees, setDeliveryFeeRupees] = useState('');
+  const [savingDeliverySettings, setSavingDeliverySettings] = useState(false);
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<number | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<'all' | 'active' | 'archived' | 'low_stock'>('all');
   const [inventorySort, setInventorySort] = useState<'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc'>('default');
@@ -300,6 +304,41 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   useEffect(() => {
     if (activeTab === 'sales' && canManageTeam) void loadSalesReport(salesRange);
   }, [activeTab, canManageTeam, loadSalesReport, salesRange]);
+
+  useEffect(() => {
+    const s = companyInfo?.settings;
+    if (!s) return;
+    setFreeDeliveryRupees(String(s.freeDeliveryThresholdCents / 100));
+    setDeliveryFeeRupees(String(s.deliveryFeeCents / 100));
+  }, [companyInfo?.settings]);
+
+  async function handleSaveDeliverySettings() {
+    const threshold = Number(freeDeliveryRupees);
+    const fee = Number(deliveryFeeRupees);
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      setError('Free delivery threshold must be a non-negative number.');
+      return;
+    }
+    if (!Number.isFinite(fee) || fee < 0) {
+      setError('Delivery fee must be a non-negative number.');
+      return;
+    }
+    setSavingDeliverySettings(true);
+    try {
+      await apiUpdateAppSettings({
+        freeDeliveryThresholdCents: Math.round(threshold * 100),
+        deliveryFeeCents: Math.round(fee * 100),
+      });
+      const updated = await apiGetCompanyPublic();
+      setCompanyInfo(updated);
+      setNotice('Delivery settings updated.');
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save settings');
+    } finally {
+      setSavingDeliverySettings(false);
+    }
+  }
 
   useEffect(() => {
     const handler = () => {
@@ -1228,6 +1267,60 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               >
                 {savingStoreLocation ? 'Detecting…' : companyInfo?.storeLatitude != null ? '📍 Update location' : '📍 Set current location'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Delivery Settings */}
+        {canManageTeam && (
+          <div className="section-box">
+            <div className="section-box__head">
+              <div>
+                <h2>Delivery Settings</h2>
+                <p>
+                  Free delivery threshold and base delivery fee. Applied to every new order.
+                </p>
+              </div>
+            </div>
+            <div className="delivery-settings">
+              <label className="delivery-settings__field">
+                <span className="delivery-settings__label">Free delivery above (₹)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={freeDeliveryRupees}
+                  onChange={(e) => setFreeDeliveryRupees(e.target.value)}
+                  placeholder="200"
+                />
+                <span className="delivery-settings__hint">
+                  Orders at or above this subtotal ship free.
+                </span>
+              </label>
+              <label className="delivery-settings__field">
+                <span className="delivery-settings__label">Delivery fee (₹)</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={deliveryFeeRupees}
+                  onChange={(e) => setDeliveryFeeRupees(e.target.value)}
+                  placeholder="49"
+                />
+                <span className="delivery-settings__hint">
+                  Charged on orders below the free threshold.
+                </span>
+              </label>
+              <div className="delivery-settings__actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void handleSaveDeliverySettings()}
+                  disabled={savingDeliverySettings}
+                >
+                  {savingDeliverySettings ? 'Saving…' : 'Save settings'}
+                </button>
+              </div>
             </div>
           </div>
         )}

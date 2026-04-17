@@ -32,6 +32,11 @@ export interface SavedAddress {
   lastUsedDate: string;
 }
 
+export interface AppSettings {
+  freeDeliveryThresholdCents: number;
+  deliveryFeeCents: number;
+}
+
 export interface CompanyInfo {
   id: number;
   name: string;
@@ -42,6 +47,7 @@ export interface CompanyInfo {
   promises: string[];
   storeLatitude: number | null;
   storeLongitude: number | null;
+  settings: AppSettings;
 }
 
 export interface Product {
@@ -173,6 +179,19 @@ async function request<T>(endpoint: string, options: RequestInit = {}) {
 export async function apiGetCompanyPublic() {
   const data = await request<{ company: CompanyInfo }>('/company/public');
   return data.company;
+}
+
+export async function apiGetAppSettings() {
+  const data = await request<{ settings: AppSettings }>('/company/settings');
+  return data.settings;
+}
+
+export async function apiUpdateAppSettings(patch: Partial<AppSettings>) {
+  const data = await request<{ settings: AppSettings }>('/company/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  return data.settings;
 }
 
 export async function apiSetStoreLocation(latitude: number, longitude: number) {

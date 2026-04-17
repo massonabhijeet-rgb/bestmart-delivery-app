@@ -268,7 +268,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     (sum, item) => sum + lineTotalCents(item.product, item.quantity),
     0
   );
-  const deliveryFeeCents = subtotalCents >= 150000 ? 0 : cartItems.length > 0 ? 4900 : 0;
+  const freeDeliveryThresholdCents = company?.settings?.freeDeliveryThresholdCents ?? 20000;
+  const baseDeliveryFeeCents = company?.settings?.deliveryFeeCents ?? 4900;
+  const deliveryFeeCents =
+    subtotalCents >= freeDeliveryThresholdCents
+      ? 0
+      : cartItems.length > 0
+        ? baseDeliveryFeeCents
+        : 0;
   // Promo: 50% off up to ₹200 on orders above ₹500 (50000 cents).
   const discountCents =
     subtotalCents >= 50000 ? Math.min(Math.floor(subtotalCents / 2), 20000) : 0;
@@ -849,7 +856,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               ))
             ) : (
               <div className="empty-state">
-                Your cart is empty. Add groceries to get started. Free delivery on orders above {formatCurrency(150000)}.
+                Your cart is empty. Add groceries to get started. Free delivery on orders above {formatCurrency(freeDeliveryThresholdCents)}.
               </div>
             )}
           </div>

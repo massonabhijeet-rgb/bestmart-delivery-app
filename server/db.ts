@@ -433,6 +433,17 @@ async function createTables(client: PoolClient) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      key VARCHAR(64) NOT NULL,
+      value TEXT NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (company_id, key)
+    );
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS order_items (
       id SERIAL PRIMARY KEY,
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -902,7 +913,10 @@ export async function getCompanyPublic() {
       LIMIT 1;
     `
   );
-  return result.rows[0] ?? null;
+  const company = result.rows[0] ?? null;
+  if (!company) return null;
+  const settings = await getAppSettings(company.id);
+  return { ...company, settings };
 }
 
 export async function updateStoreLocation(companyId: number, latitude: number, longitude: number) {
@@ -910,6 +924,59 @@ export async function updateStoreLocation(companyId: number, latitude: number, l
     `UPDATE companies SET store_latitude = $1, store_longitude = $2, updated_date = NOW() WHERE id = $3`,
     [latitude, longitude, companyId]
   );
+}
+
+// ── App settings (configurable per company) ──────────────────────────
+export interface AppSettings {
+  freeDeliveryThresholdCents: number;
+  deliveryFeeCents: number;
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  freeDeliveryThresholdCents: 20000, // ₹200
+  deliveryFeeCents: 4900, // ₹49
+};
+
+const SETTING_KEYS: Record<keyof AppSettings, string> = {
+  freeDeliveryThresholdCents: 'free_delivery_threshold_cents',
+  deliveryFeeCents: 'delivery_fee_cents',
+};
+
+export async function getAppSettings(companyId: number): Promise<AppSettings> {
+  const result = await pool.query<{ key: string; value: string }>(
+    `SELECT key, value FROM app_settings WHERE company_id = $1;`,
+    [companyId]
+  );
+  const map = new Map(result.rows.map((r) => [r.key, r.value]));
+  const settings: AppSettings = { ...DEFAULT_SETTINGS };
+  for (const [field, key] of Object.entries(SETTING_KEYS) as Array<[keyof AppSettings, string]>) {
+    const raw = map.get(key);
+    if (raw == null) continue;
+    const num = Number(raw);
+    if (Number.isFinite(num) && num >= 0) settings[field] = Math.round(num);
+  }
+  return settings;
+}
+
+export async function updateAppSettings(
+  companyId: number,
+  patch: Partial<AppSettings>
+): Promise<AppSettings> {
+  for (const [field, value] of Object.entries(patch) as Array<[keyof AppSettings, number | undefined]>) {
+    if (value == null || !Number.isFinite(value) || value < 0) continue;
+    const key = SETTING_KEYS[field];
+    if (!key) continue;
+    await pool.query(
+      `
+        INSERT INTO app_settings (company_id, key, value)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (company_id, key)
+        DO UPDATE SET value = EXCLUDED.value, updated_date = NOW();
+      `,
+      [companyId, key, String(Math.round(value))]
+    );
+  }
+  return getAppSettings(companyId);
 }
 
 export async function getDefaultCompanyId() {
@@ -1782,7 +1849,9 @@ export async function createOrder(input: CreateOrderInput) {
       };
     });
 
-    const deliveryFeeCents = subtotalCents >= 150000 ? 0 : 4900;
+    const settings = await getAppSettings(input.companyId);
+    const deliveryFeeCents =
+      subtotalCents >= settings.freeDeliveryThresholdCents ? 0 : settings.deliveryFeeCents;
     // Promo: 50% off up to ₹200 on orders above ₹500 (50000 cents subtotal threshold).
     const discountCents =
       subtotalCents >= 50000 ? Math.min(Math.floor(subtotalCents / 2), 20000) : 0;
