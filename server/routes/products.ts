@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
-import { uploadToS3 } from '../s3.js';
+import { deleteFromS3, uploadToS3 } from '../s3.js';
 import {
   attachUserIfPresent,
   authenticateToken,
@@ -481,7 +481,14 @@ router.post(
         .webp({ quality: 80 })
         .toBuffer();
 
-      const s3Url = await uploadToS3(`products/${uniqueId}.webp`, webpBuffer, 'image/webp');
+      // Replace, don't append: drop the existing object (cleans up stray
+      // keys from bulk-import URLs) and cache-bust the saved URL so the
+      // browser doesn't keep showing the old image at the same path.
+      if (product.imageUrl) {
+        await deleteFromS3(product.imageUrl);
+      }
+      const baseUrl = await uploadToS3(`products/${uniqueId}.webp`, webpBuffer, 'image/webp');
+      const s3Url = `${baseUrl}?v=${Date.now()}`;
       const updated = await updateProductImage(uniqueId, req.user.companyId, s3Url);
 
       await Promise.all([
@@ -529,7 +536,11 @@ router.post(
             .resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true })
             .webp({ quality: 80 })
             .toBuffer();
-          const s3Url = await uploadToS3(`products/${product.uniqueId}.webp`, webpBuffer, 'image/webp');
+          if (product.imageUrl) {
+            await deleteFromS3(product.imageUrl);
+          }
+          const baseUrl = await uploadToS3(`products/${product.uniqueId}.webp`, webpBuffer, 'image/webp');
+          const s3Url = `${baseUrl}?v=${Date.now()}`;
           await updateProductImage(product.uniqueId, req.user!.companyId, s3Url);
           await Promise.all([
             cacheDelPattern(`bm:products:*:${req.user!.companyId}:*`),

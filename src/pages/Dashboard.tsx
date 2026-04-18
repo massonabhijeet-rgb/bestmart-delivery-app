@@ -972,16 +972,32 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   // ── Bulk image upload helpers ────────────────────────────────────────────
 
+  // Stable identifier that survives folder uploads where multiple subfolders
+  // can contain the same filename. webkitRelativePath is set by browsers when
+  // a directory is picked; for plain file picks it's empty so we fall back to
+  // name + size to keep the dedupe meaningful.
+  function bulkImageKey(f: File): string {
+    const path = (f as File & { webkitRelativePath?: string }).webkitRelativePath;
+    return path && path.length > 0 ? path : `${f.name}::${f.size}`;
+  }
+
   function handleBulkImageFiles(files: FileList | File[]) {
     const IMAGE_EXT = /\.(jpe?g|png|webp|gif|bmp|avif)$/i;
     const arr = Array.from(files).filter(
       (f) => f.type.startsWith('image/') || IMAGE_EXT.test(f.name),
     );
     setBulkImageFiles((prev) => {
-      const existing = new Set(prev.map((f) => f.name.toLowerCase()));
-      return [...prev, ...arr.filter((f) => !existing.has(f.name.toLowerCase()))];
+      const existing = new Set(prev.map(bulkImageKey));
+      return [...prev, ...arr.filter((f) => !existing.has(bulkImageKey(f)))];
     });
     setBulkImageResult(null);
+  }
+
+  function resetBulkImageInputs() {
+    const fileInput = document.getElementById('bulk-image-input') as HTMLInputElement | null;
+    const folderInput = document.getElementById('bulk-image-folder-input') as HTMLInputElement | null;
+    if (fileInput) fileInput.value = '';
+    if (folderInput) folderInput.value = '';
   }
 
   async function handleBulkImageUpload() {
@@ -1011,6 +1027,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         setBulkImageResult({ ...merged });
       }
       if (merged.matched > 0) await loadDashboard();
+      // Clear the picker after upload so the next batch starts fresh and
+      // the same file list isn't accidentally re-uploaded. The result
+      // panel stays visible so the user can see what happened.
+      setBulkImageFiles([]);
+      resetBulkImageInputs();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bulk image upload failed');
     } finally {
@@ -2374,14 +2395,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 <div style={{ width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <strong>{bulkImageFiles.length} image{bulkImageFiles.length !== 1 ? 's' : ''} selected</strong>
-                    <button type="button" className="ghost-button" style={{ fontSize: 12 }} onClick={(e) => { e.stopPropagation(); setBulkImageFiles([]); setBulkImageResult(null); }}>Clear all</button>
+                    <button type="button" className="ghost-button" style={{ fontSize: 12 }} onClick={(e) => { e.stopPropagation(); setBulkImageFiles([]); setBulkImageResult(null); resetBulkImageInputs(); }}>Clear all</button>
                   </div>
                   <div className="bulk-image-file-list">
                     {bulkImageFiles.map((f) => {
                       const matchedName = f.name.replace(/\.[^.]+$/, '');
                       const matched = products.some((p) => p.name.toLowerCase().trim() === matchedName.toLowerCase().trim());
                       return (
-                        <div key={f.name} className={`bulk-image-file-row${matched ? ' bulk-image-file-row--matched' : ' bulk-image-file-row--unmatched'}`}>
+                        <div key={bulkImageKey(f)} className={`bulk-image-file-row${matched ? ' bulk-image-file-row--matched' : ' bulk-image-file-row--unmatched'}`}>
                           <span className="bulk-image-file-row__dot">{matched ? '✓' : '?'}</span>
                           <span className="bulk-image-file-row__name">{f.name}</span>
                           <span className="bulk-image-file-row__status">{matched ? `→ ${matchedName}` : 'No match'}</span>

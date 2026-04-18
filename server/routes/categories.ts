@@ -18,7 +18,7 @@ import {
   updateCategoryImage,
   type WeatherMood,
 } from '../db.js';
-import { uploadToS3 } from '../s3.js';
+import { deleteFromS3, uploadToS3 } from '../s3.js';
 import { TTL, cacheDel, cacheGet, cacheSet, key } from '../cache.js';
 import type { AuthenticatedRequest } from '../types.js';
 
@@ -202,7 +202,12 @@ router.post(
         .webp({ quality: 80 })
         .toBuffer();
 
-      const s3Url = await uploadToS3(`categories/${id}.webp`, webpBuffer, 'image/webp');
+      // Replace, not append: drop the prior object and cache-bust the URL.
+      if (existing.imageUrl) {
+        await deleteFromS3(existing.imageUrl);
+      }
+      const baseUrl = await uploadToS3(`categories/${id}.webp`, webpBuffer, 'image/webp');
+      const s3Url = `${baseUrl}?v=${Date.now()}`;
       const updated = await updateCategoryImage(id, req.user.companyId, s3Url);
 
       await cacheDel(

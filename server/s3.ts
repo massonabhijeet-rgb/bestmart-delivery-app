@@ -23,7 +23,10 @@ export async function uploadToS3(key: string, buffer: Buffer, contentType: strin
 
 export async function deleteFromS3(url: string): Promise<void> {
   try {
-    const key = url.split('.amazonaws.com/')[1];
+    const after = url.split('.amazonaws.com/')[1];
+    if (!after) return;
+    // Strip query string (?v=… cache-buster) so the literal S3 key matches.
+    const key = after.split('?')[0];
     if (!key) return;
     await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
   } catch (_) {}
