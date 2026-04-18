@@ -42,6 +42,7 @@ export interface ProductRecord {
   bogoGetQty: number;
   brandId: number | null;
   brand: string | null;
+  variantGroupId: number | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -142,6 +143,7 @@ interface CreateProductInput {
   isActive?: boolean;
   isOnOffer?: boolean;
   brandId?: number | null;
+  variantGroupId?: number | null;
 }
 
 interface UpdateProductInput extends CreateProductInput {
@@ -219,6 +221,7 @@ function mapProduct(row: ProductRow): ProductRecord {
     bogoGetQty: Math.max(1, Number(row.bogoGetQty ?? 1)),
     brandId: row.brandId ?? null,
     brand: row.brand ?? null,
+    variantGroupId: row.variantGroupId ?? null,
     createdDate: row.createdDate,
     updatedDate: row.updatedDate,
   };
@@ -357,6 +360,9 @@ async function createTables(client: PoolClient) {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_buy_qty INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_get_qty INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS brand_id INTEGER REFERENCES brands(id) ON DELETE SET NULL;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_group_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_products_variant_group
+      ON products(company_id, variant_group_id) WHERE variant_group_id IS NOT NULL;
   `);
 
   await client.query(`
@@ -1634,6 +1640,7 @@ const PRODUCT_SELECT_COLUMNS = `
   p.bogo_get_qty AS "bogoGetQty",
   p.brand_id AS "brandId",
   b.name AS "brand",
+  p.variant_group_id AS "variantGroupId",
   p.created_date AS "createdDate",
   p.updated_date AS "updatedDate"
 `;
@@ -1781,13 +1788,19 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
 // Lightweight name index used by the bulk-image picker so it can match files
 // against product names without pulling the full catalog payload.
 export interface ProductNameIndexEntry {
+  id: number;
   uniqueId: string;
   name: string;
   imageUrl: string | null;
+  unitLabel: string;
+  brandId: number | null;
+  variantGroupId: number | null;
 }
 export async function listProductNameIndex(companyId: number): Promise<ProductNameIndexEntry[]> {
   const result = await pool.query<ProductNameIndexEntry>(
-    `SELECT p.unique_id AS "uniqueId", p.name, p.image_url AS "imageUrl"
+    `SELECT p.id, p.unique_id AS "uniqueId", p.name, p.image_url AS "imageUrl",
+            p.unit_label AS "unitLabel", p.brand_id AS "brandId",
+            p.variant_group_id AS "variantGroupId"
      FROM products p
      WHERE p.company_id = $1
      ORDER BY p.name;`,
@@ -2175,6 +2188,28 @@ export async function getProductByUniqueId(uniqueId: string, companyId: number) 
   return result.rowCount ? mapProduct(result.rows[0]) : null;
 }
 
+// Siblings in the same variant_group_id (excludes the anchor itself).
+export async function listProductVariants(uniqueId: string, companyId: number) {
+  const result = await pool.query(
+    `
+      SELECT ${PRODUCT_SELECT_COLUMNS}
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
+      WHERE p.company_id = $1
+        AND p.is_active = TRUE
+        AND p.variant_group_id IS NOT NULL
+        AND p.variant_group_id = (
+          SELECT variant_group_id FROM products
+          WHERE unique_id = $2 AND company_id = $1
+        )
+        AND p.unique_id <> $2;
+    `,
+    [companyId, uniqueId]
+  );
+  return result.rows.map(mapProduct);
+}
+
 async function readProductWithCategory(
   client: { query: typeof pool.query },
   productId: number
@@ -2211,9 +2246,10 @@ export async function createProduct(input: CreateProductInput) {
         image_url,
         is_active,
         is_on_offer,
-        brand_id
+        brand_id,
+        variant_group_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING id;
     `,
     [
@@ -2232,6 +2268,7 @@ export async function createProduct(input: CreateProductInput) {
       input.isActive ?? true,
       input.isOnOffer ?? false,
       input.brandId ?? null,
+      input.variantGroupId ?? null,
     ]
   );
   const product = await readProductWithCategory(pool, inserted.rows[0].id);
@@ -2447,6 +2484,7 @@ export async function updateProduct(input: UpdateProductInput) {
         is_active = $13,
         is_on_offer = $14,
         brand_id = $15,
+        variant_group_id = $16,
         updated_date = NOW()
       WHERE unique_id = $1 AND company_id = $2
       RETURNING id;
@@ -2467,6 +2505,7 @@ export async function updateProduct(input: UpdateProductInput) {
       input.isActive ?? true,
       input.isOnOffer ?? false,
       input.brandId ?? null,
+      input.variantGroupId ?? null,
     ]
   );
   return updated.rowCount ? readProductWithCategory(pool, updated.rows[0].id) : null;
@@ -2826,6 +2865,7 @@ function pickProductIdsForKeywords(
     priceCents: number;
     isOnOffer: boolean;
     offerPriceCents: number | null;
+    variantGroupId: number | null;
   }>,
   keywords: string[],
   limit = 24,
@@ -2839,7 +2879,9 @@ function pickProductIdsForKeywords(
   for (const row of rows) {
     const haystack = `${row.name} ${row.category ?? ''} ${row.description}`.toLowerCase();
     if (!lcKeywords.some((k) => haystack.includes(k))) continue;
-    const key = normalizeProductKey(row.name) || row.name.toLowerCase();
+    const key = row.variantGroupId != null
+      ? `g:${row.variantGroupId}`
+      : normalizeProductKey(row.name) || row.name.toLowerCase();
     const effective = row.isOnOffer && row.offerPriceCents != null ? row.offerPriceCents : row.priceCents;
     const existing = groups.get(key);
     if (!existing || effective < existing.price) {
@@ -2938,6 +2980,7 @@ export async function listActiveTempCategories(
     priceCents: p.priceCents,
     isOnOffer: p.isOnOffer,
     offerPriceCents: p.offerPriceCents,
+    variantGroupId: p.variantGroupId,
   }));
   const productByUniqueId = new Map(fullProducts.map((p) => [p.uniqueId, p]));
 

@@ -18,6 +18,7 @@ import {
   listProducts,
   listProductNameIndex,
   listProductsPage,
+  listProductVariants,
   listSlowMovers,
   setProductOffer,
   updateProduct,
@@ -73,6 +74,11 @@ function normalizeProductPayload(body: Record<string, unknown>) {
       ? body.brandId === '' || body.brandId == null
         ? null
         : Number(body.brandId)
+      : undefined,
+    variantGroupId: has('variantGroupId')
+      ? body.variantGroupId === '' || body.variantGroupId == null
+        ? null
+        : Number(body.variantGroupId)
       : undefined,
   };
 }
@@ -232,6 +238,25 @@ router.get(
   }
 );
 
+// Sibling variants (same variant_group_id). Storefront uses this to render the
+// "Other sizes" strip with unit-price comparison.
+router.get('/:uniqueId/variants', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  const uniqueId = getRouteParam(req.params.uniqueId);
+  if (!companyId) return res.status(404).json({ error: 'Company not found' });
+  if (!uniqueId) return res.status(400).json({ error: 'Product ID is required' });
+
+  const cacheKey = `${key.productDetail(companyId, uniqueId)}:variants`;
+  const cached = await cacheGet<{ variants: unknown[] }>(cacheKey);
+  if (cached) return res.json(cached);
+
+  const variants = await listProductVariants(uniqueId, companyId);
+  const visible = req.user ? variants : variants.filter((p) => p.isActive);
+  const result = { variants: visible };
+  await cacheSet(cacheKey, result, TTL.PRODUCTS);
+  return res.json(result);
+});
+
 router.get('/:uniqueId', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
   const uniqueId = getRouteParam(req.params.uniqueId);
@@ -294,6 +319,7 @@ router.post(
         isActive: payload.isActive ?? true,
         isOnOffer: payload.isOnOffer ?? false,
         brandId: payload.brandId ?? null,
+        variantGroupId: payload.variantGroupId ?? null,
       });
 
       await cacheDelPattern(`bm:products:*:${req.user.companyId}:*`);
@@ -350,6 +376,8 @@ router.put(
         isActive: payload.isActive ?? existing.isActive,
         isOnOffer: payload.isOnOffer ?? existing.isOnOffer,
         brandId: payload.brandId !== undefined ? payload.brandId : existing.brandId,
+        variantGroupId:
+          payload.variantGroupId !== undefined ? payload.variantGroupId : existing.variantGroupId,
       });
 
       if (!product) {

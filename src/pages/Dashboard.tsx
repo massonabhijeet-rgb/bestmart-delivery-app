@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { formatCurrency, formatDateTime, formatRelativeTime, labelizeStatus } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { playOrderAlert, unlockAudio } from '../lib/sound';
@@ -112,6 +112,10 @@ interface ProductFormState {
   badge: string;
   imageUrl: string;
   isActive: boolean;
+  // Variant linkage. Stored as the canonical group anchor's product.id (string).
+  // Empty string means "standalone product".
+  variantGroupId: string;
+  variantLinkLabel: string;
 }
 
 const defaultProductForm: ProductFormState = {
@@ -126,6 +130,8 @@ const defaultProductForm: ProductFormState = {
   badge: '',
   imageUrl: '',
   isActive: true,
+  variantGroupId: '',
+  variantLinkLabel: '',
 };
 
 type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'team';
@@ -622,6 +628,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setShowProductEditor(true);
   }
 
+  // Lazy-fetched the first time the variant picker (or bulk image panel) needs it.
+  const loadProductNameIndex = useCallback(async () => {
+    if (productNameIndex !== null) return;
+    try {
+      const data = await apiGetProductNameIndex();
+      setProductNameIndex(data);
+    } catch {
+      // best-effort; picker just shows empty results
+    }
+  }, [productNameIndex]);
+
   async function handleCreateCategoryInline() {
     const name = inlineCategoryName.trim();
     if (!name) return;
@@ -687,6 +704,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         badge: productForm.badge || null,
         imageUrl: productForm.imageUrl || null,
         isActive: productForm.isActive,
+        variantGroupId: productForm.variantGroupId ? Number(productForm.variantGroupId) : null,
       };
       const savedProduct = await withBusy(
         editingId ? 'Saving product…' : 'Creating product…',
@@ -2898,6 +2916,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       </select>
                     )}
                   </label>
+                  <VariantLinkField
+                    form={productForm}
+                    setForm={setProductForm}
+                    nameIndex={productNameIndex}
+                    loadIndex={loadProductNameIndex}
+                    editingId={editingId}
+                  />
                   <label className="pe-field">
                     <span className="pe-field__label">
                       Badge
@@ -3258,6 +3283,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       onClick={() => {
                         setEditingId(product.uniqueId);
                         setProductImagePreview(null);
+                        const linkAnchor = product.variantGroupId
+                          ? products.find((p) => p.id === product.variantGroupId)
+                          : null;
                         setProductForm({
                           name: product.name,
                           categoryId: product.categoryId ? String(product.categoryId) : '',
@@ -3270,6 +3298,12 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           badge: product.badge ?? '',
                           imageUrl: product.imageUrl ?? '',
                           isActive: product.isActive,
+                          variantGroupId: product.variantGroupId ? String(product.variantGroupId) : '',
+                          variantLinkLabel: linkAnchor
+                            ? `${linkAnchor.name} · ${linkAnchor.unitLabel}`
+                            : product.variantGroupId
+                              ? `Group #${product.variantGroupId}`
+                              : '',
                         });
                         setProductImage(null);
                         setShowProductEditor(true);
@@ -4901,6 +4935,145 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       </div>
     );
   }
+}
+
+type VariantLinkFieldProps = {
+  form: ProductFormState;
+  setForm: Dispatch<SetStateAction<ProductFormState>>;
+  nameIndex: ProductNameIndexEntry[] | null;
+  loadIndex: () => Promise<void>;
+  editingId: string | null;
+};
+
+function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: VariantLinkFieldProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    if (open && nameIndex === null) void loadIndex();
+  }, [open, nameIndex, loadIndex]);
+
+  const brandFilterId = form.brandId ? Number(form.brandId) : null;
+
+  const matches = useMemo(() => {
+    if (!open || !nameIndex) return [];
+    const q = query.trim().toLowerCase();
+    if (q.length < 1) return [];
+    return nameIndex
+      .filter((p) => {
+        if (editingId && p.uniqueId === editingId) return false;
+        if (brandFilterId != null && p.brandId !== brandFilterId) return false;
+        return p.name.toLowerCase().includes(q) || p.unitLabel.toLowerCase().includes(q);
+      })
+      .slice(0, 8);
+  }, [open, nameIndex, query, brandFilterId, editingId]);
+
+  function pick(entry: ProductNameIndexEntry) {
+    // Chain into the existing group when present so all siblings share one anchor id.
+    const groupId = entry.variantGroupId ?? entry.id;
+    setForm((c) => ({
+      ...c,
+      variantGroupId: String(groupId),
+      variantLinkLabel: `${entry.name} · ${entry.unitLabel}`,
+    }));
+    setOpen(false);
+    setQuery('');
+  }
+
+  function clear() {
+    setForm((c) => ({ ...c, variantGroupId: '', variantLinkLabel: '' }));
+    setQuery('');
+  }
+
+  return (
+    <label className="pe-field" style={{ position: 'relative' }}>
+      <span className="pe-field__label">
+        Variant of
+        <span className="pe-field__hint">link sizes/packs of the same product</span>
+      </span>
+      {form.variantGroupId ? (
+        <div className="pe-inline-create">
+          <input
+            className="pe-field__input"
+            value={form.variantLinkLabel || `Linked (#${form.variantGroupId})`}
+            readOnly
+          />
+          <button type="button" className="ghost-button pe-inline-create__btn" onClick={clear}>
+            Unlink
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            className="pe-field__input"
+            placeholder={
+              brandFilterId != null
+                ? 'Search this brand for a sibling product…'
+                : 'Pick a brand first for better matches, or search all…'
+            }
+            value={query}
+            onFocus={() => setOpen(true)}
+            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          />
+          {open && query.trim().length > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                right: 0,
+                zIndex: 20,
+                background: 'var(--pe-input-bg, #fff)',
+                border: '1px solid var(--pe-input-border, #d0d4dc)',
+                borderRadius: 8,
+                marginTop: 4,
+                maxHeight: 240,
+                overflowY: 'auto',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+              }}
+            >
+              {matches.length === 0 ? (
+                <div style={{ padding: '10px 12px', color: '#888', fontSize: 13 }}>
+                  No matches{brandFilterId != null ? ' for this brand' : ''}.
+                </div>
+              ) : (
+                matches.map((m) => (
+                  <button
+                    key={m.uniqueId}
+                    type="button"
+                    onClick={() => pick(m)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: '1px solid #f0f0f0',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {m.imageUrl && (
+                      <img src={m.imageUrl} alt="" width={28} height={28}
+                           style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                    )}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#777' }}>{m.unitLabel}</div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </label>
+  );
 }
 
 export default Dashboard;

@@ -5,6 +5,7 @@ import {
   apiCreateOrder,
   apiGetCompanyPublic,
   apiGetProductsPage,
+  apiGetProductVariants,
   apiGetStorefrontSpotlight,
   apiListAddresses,
   apiListBrands,
@@ -51,6 +52,40 @@ interface CheckoutForm {
 
 const CART_STORAGE_KEY = 'bestmart:cart';
 
+// Parse a unit label into a normalized base quantity:
+//   "1 L bottle" → { value: 1000, unit: 'ml' }
+//   "500g" → { value: 500, unit: 'g' }
+//   "12 pcs" → { value: 12, unit: 'pcs' }
+// Returns null when nothing parseable is found, so callers can skip ₹/unit display.
+function parseQuantityFromUnitLabel(label: string): { value: number; unit: 'ml' | 'g' | 'pcs' } | null {
+  const m = label.toLowerCase().match(/(\d+(?:\.\d+)?)\s*(ml|l|ltr|litre|litres|g|gm|gms|gram|grams|kg|kgs|pcs?|pieces?|pack)\b/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const u = m[2];
+  if (u === 'ml') return { value: n, unit: 'ml' };
+  if (u === 'l' || u === 'ltr' || u === 'litre' || u === 'litres') return { value: n * 1000, unit: 'ml' };
+  if (u === 'g' || u === 'gm' || u === 'gms' || u === 'gram' || u === 'grams') return { value: n, unit: 'g' };
+  if (u === 'kg' || u === 'kgs') return { value: n * 1000, unit: 'g' };
+  return { value: n, unit: 'pcs' };
+}
+
+// ₹ per litre / kg / piece, in paise per base unit, for ranking variants.
+function unitPriceCentsPerBase(product: Product): { centsPer: number; unit: 'ml' | 'g' | 'pcs' } | null {
+  const q = parseQuantityFromUnitLabel(product.unitLabel);
+  if (!q) return null;
+  const eff = effectivePriceCents(product);
+  return { centsPer: eff / q.value, unit: q.unit };
+}
+
+function formatUnitPrice(p: Product): string | null {
+  const u = unitPriceCentsPerBase(p);
+  if (!u) return null;
+  if (u.unit === 'ml') return `${formatCurrency(Math.round(u.centsPer * 1000))} / L`;
+  if (u.unit === 'g') return `${formatCurrency(Math.round(u.centsPer * 1000))} / kg`;
+  return `${formatCurrency(Math.round(u.centsPer))} / pc`;
+}
+
 const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
 
 function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrack, onLogout }: StorefrontProps) {
@@ -70,6 +105,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     const stored = localStorage.getItem(CART_STORAGE_KEY);
     return stored ? (JSON.parse(stored) as Record<string, number>) : {};
   });
+  // Quick-view: lets shoppers compare other sizes/packs before adding to cart.
+  const [quickView, setQuickView] = useState<Product | null>(null);
+  const [quickViewVariants, setQuickViewVariants] = useState<Product[]>([]);
+  const [quickViewLoading, setQuickViewLoading] = useState(false);
   const [trackingCode, setTrackingCode] = useState('');
   const [placingOrder, setPlacingOrder] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState(false);
@@ -111,6 +150,29 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [pageTotal, setPageTotal] = useState(0);
   const [pageHasMore, setPageHasMore] = useState(false);
   const [pageLoading, setPageLoading] = useState(false);
+
+  // Fetch sibling variants whenever quick-view opens. Cleared on close.
+  useEffect(() => {
+    if (!quickView) {
+      setQuickViewVariants([]);
+      return;
+    }
+    let cancelled = false;
+    setQuickViewLoading(true);
+    apiGetProductVariants(quickView.uniqueId)
+      .then((variants) => {
+        if (!cancelled) setQuickViewVariants(variants);
+      })
+      .catch(() => {
+        if (!cancelled) setQuickViewVariants([]);
+      })
+      .finally(() => {
+        if (!cancelled) setQuickViewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [quickView]);
 
   // Merge any product list into the cache so it's available everywhere.
   function ingestProducts(list: Product[]) {
@@ -1393,7 +1455,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 }
                 key={product.uniqueId}
               >
-                <div className="product-card__media">
+                <div
+                  className="product-card__media"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setQuickView(product)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setQuickView(product);
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="product-card__media-img" />}
                   {product.stockQuantity <= 5 ? (
                     <div className="badge-stack">
@@ -1839,7 +1913,168 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         </section>
       ) : null}
       </div>
+      {quickView ? (
+        <QuickViewModal
+          anchor={quickView}
+          variants={quickViewVariants}
+          loading={quickViewLoading}
+          cart={cart}
+          onClose={() => setQuickView(null)}
+          onAdd={(uniqueId, qty) => updateQuantity(uniqueId, qty)}
+        />
+      ) : null}
     </main>
+  );
+}
+
+type QuickViewProps = {
+  anchor: Product;
+  variants: Product[];
+  loading: boolean;
+  cart: Record<string, number>;
+  onClose: () => void;
+  onAdd: (uniqueId: string, qty: number) => void;
+};
+
+function QuickViewModal({ anchor, variants, loading, cart, onClose, onAdd }: QuickViewProps) {
+  // Show anchor + all siblings, ranked by ₹/base unit so "best value" surfaces first.
+  const all = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Product[] = [];
+    for (const p of [anchor, ...variants]) {
+      if (seen.has(p.uniqueId)) continue;
+      seen.add(p.uniqueId);
+      list.push(p);
+    }
+    return list.sort((a, b) => {
+      const ua = unitPriceCentsPerBase(a);
+      const ub = unitPriceCentsPerBase(b);
+      if (ua && ub && ua.unit === ub.unit) return ua.centsPer - ub.centsPer;
+      if (ua && !ub) return -1;
+      if (!ua && ub) return 1;
+      return effectivePriceCents(a) - effectivePriceCents(b);
+    });
+  }, [anchor, variants]);
+
+  const bestUniqueId = useMemo(() => {
+    const ranked = all
+      .map((p) => ({ p, u: unitPriceCentsPerBase(p) }))
+      .filter((x) => x.u != null);
+    if (ranked.length < 2) return null;
+    return ranked[0].p.uniqueId;
+  }, [all]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff',
+          borderRadius: 14,
+          width: '100%',
+          maxWidth: 520,
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', borderBottom: '1px solid #eee' }}>
+          <strong style={{ fontSize: 15 }}>{anchor.name}</strong>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: 16 }}>
+          {variants.length === 0 && !loading ? (
+            <p style={{ color: '#666', fontSize: 13, margin: '4px 0 14px' }}>
+              No other sizes for this product.
+            </p>
+          ) : (
+            <p style={{ color: '#666', fontSize: 12, margin: '0 0 12px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {loading ? 'Loading other sizes…' : 'Other sizes & packs'}
+            </p>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {all.map((p) => {
+              const inCart = cart[p.uniqueId] ?? 0;
+              const unitPrice = formatUnitPrice(p);
+              const isBest = p.uniqueId === bestUniqueId;
+              const isAnchor = p.uniqueId === anchor.uniqueId;
+              return (
+                <div
+                  key={p.uniqueId}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: 10,
+                    border: isAnchor ? '2px solid #2e7d32' : '1px solid #e2e2e2',
+                    borderRadius: 10,
+                    background: isAnchor ? '#f5fbf5' : '#fff',
+                  }}
+                >
+                  {p.imageUrl ? (
+                    <img src={p.imageUrl} alt="" width={56} height={56}
+                         style={{ objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 56, height: 56, borderRadius: 6, background: '#f0f0f0', flexShrink: 0 }} />
+                  )}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{p.unitLabel}</span>
+                      {isBest ? (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: '#2e7d32', padding: '2px 6px', borderRadius: 4, letterSpacing: 0.4 }}>
+                          BEST VALUE
+                        </span>
+                      ) : null}
+                      {isAnchor ? (
+                        <span style={{ fontSize: 10, color: '#2e7d32', fontWeight: 600 }}>VIEWING</span>
+                      ) : null}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#333', marginTop: 2 }}>
+                      <strong>{formatCurrency(effectivePriceCents(p))}</strong>
+                      {unitPrice ? <span style={{ color: '#777', marginLeft: 6, fontSize: 12 }}>· {unitPrice}</span> : null}
+                    </div>
+                  </div>
+                  <div style={{ flexShrink: 0 }}>
+                    {inCart > 0 ? (
+                      <div className="qty-stepper">
+                        <button type="button" onClick={() => onAdd(p.uniqueId, inCart - 1)}>-</button>
+                        <span>{inCart}</span>
+                        <button
+                          type="button"
+                          disabled={inCart >= p.stockQuantity}
+                          onClick={() => onAdd(p.uniqueId, inCart + 1)}
+                        >+</button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={p.stockQuantity <= 0}
+                        onClick={() => onAdd(p.uniqueId, 1)}
+                      >
+                        {p.stockQuantity <= 0 ? 'Sold Out' : 'Add'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

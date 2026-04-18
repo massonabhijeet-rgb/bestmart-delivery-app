@@ -93,6 +93,7 @@ export interface Product {
   bogoGetQty: number;
   brandId: number | null;
   brand: string | null;
+  variantGroupId: number | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -352,9 +353,13 @@ export async function apiGetInventorySummary(): Promise<InventorySummary> {
 }
 
 export interface ProductNameIndexEntry {
+  id: number;
   uniqueId: string;
   name: string;
   imageUrl: string | null;
+  unitLabel: string;
+  brandId: number | null;
+  variantGroupId: number | null;
 }
 
 export async function apiGetProductNameIndex(): Promise<ProductNameIndexEntry[]> {
@@ -422,6 +427,11 @@ export async function apiDeleteProduct(uniqueId: string) {
   return request<{ message: string }>(`/products/${uniqueId}`, {
     method: 'DELETE',
   });
+}
+
+export async function apiGetProductVariants(uniqueId: string) {
+  const data = await request<{ variants: Product[] }>(`/products/${uniqueId}/variants`);
+  return data.variants;
 }
 
 export async function apiListCategories() {
