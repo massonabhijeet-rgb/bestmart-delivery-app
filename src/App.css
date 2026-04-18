@@ -4432,6 +4432,35 @@ textarea {
   gap: var(--sp-2);
 }
 
+.cat-card__hide-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--c-ink-2, #4b5563);
+  cursor: pointer;
+  user-select: none;
+}
+.cat-card__hide-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--c-teal, #0d9488);
+}
+
+.cat-card__hidden-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+  padding: 2px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
 /* Card action buttons */
 .cat-card__actions {
   display: flex;
@@ -8159,4 +8188,78 @@ body {
   height: 100%;
   object-fit: cover;
   border-radius: 8px;
+}
+
+/* Auto-curated weekly categories — weather + festival driven */
+.temp-categories {
+  margin: 0 0 var(--sp-5);
+  padding: 0 var(--sp-4);
+}
+.temp-categories__head {
+  margin-bottom: var(--sp-4);
+}
+.temp-categories__eyebrow {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ea580c;
+  background: rgba(234, 88, 12, 0.12);
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+}
+.temp-categories__head h2 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+  color: var(--c-ink);
+  font-weight: 700;
+}
+.temp-categories__head p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--c-ink-3);
+}
+.temp-categories__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+.temp-category-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px;
+  border: none;
+  border-radius: 16px;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  min-height: 130px;
+  box-shadow: 0 6px 20px -8px rgba(15, 23, 42, 0.35);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.temp-category-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -10px rgba(15, 23, 42, 0.45);
+}
+.temp-category-card__title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.temp-category-card__count {
+  font-size: 0.78rem;
+  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.temp-category-card__cta {
+  margin-top: auto;
+  font-size: 0.82rem;
+  font-weight: 600;
+  opacity: 0.95;
 }

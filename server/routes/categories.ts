@@ -11,9 +11,12 @@ import {
   deleteCategory,
   getCategoryById,
   getDefaultCompanyId,
+  listActiveTempCategories,
   listCategories,
+  refreshTemporaryCategories,
   updateCategory,
   updateCategoryImage,
+  type WeatherMood,
 } from '../db.js';
 import { uploadToS3 } from '../s3.js';
 import { TTL, cacheDel, cacheGet, cacheSet, key } from '../cache.js';
@@ -30,18 +33,45 @@ function getRouteParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+const ALLOWED_MOODS: ReadonlySet<WeatherMood> = new Set(['hot', 'warm', 'cool', 'cold', 'rainy']);
+
+// Auto-curated weekly buckets (Diwali Specials, Summer Coolers…). Refreshed
+// in-place on each call: expired rows pruned, active defs upserted.
+router.get('/temporary', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  try {
+    const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+    if (!companyId) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    const rawMood = String((req.query.mood as string | undefined) ?? '').toLowerCase();
+    const mood = ALLOWED_MOODS.has(rawMood as WeatherMood) ? (rawMood as WeatherMood) : null;
+    await refreshTemporaryCategories(companyId, mood);
+    const tempCategories = await listActiveTempCategories(companyId);
+    return res.json({ tempCategories });
+  } catch (error) {
+    console.error('Temp categories error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
   if (!companyId) {
     return res.status(404).json({ error: 'Company not found' });
   }
 
-  const cacheKey = key.categoriesList(companyId);
+  // Admins/editors see hidden categories so they can manage them; everyone
+  // else (storefront shoppers) gets only the visible set.
+  const includeHidden =
+    req.user?.role === 'admin' || req.user?.role === 'editor';
+
+  const cacheKey = `${key.categoriesList(companyId)}:${includeHidden ? 'all' : 'visible'}`;
   const cached = await cacheGet<{ categories: unknown[] }>(cacheKey);
   if (cached) return res.json(cached);
 
   const categories = await listCategories(companyId);
-  const result = { categories };
+  const filtered = includeHidden ? categories : categories.filter((c) => !c.isHidden);
+  const result = { categories: filtered };
   await cacheSet(cacheKey, result, TTL.CATEGORIES);
   return res.json(result);
 });
@@ -61,7 +91,10 @@ router.post(
         return res.status(400).json({ error: 'Category name is required' });
       }
       const category = await createCategory(req.user.companyId, name);
-      await cacheDel(key.categoriesList(req.user.companyId));
+      await cacheDel(
+        `${key.categoriesList(req.user.companyId)}:all`,
+        `${key.categoriesList(req.user.companyId)}:visible`,
+      );
       return res.status(201).json({ category });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to create category';
@@ -84,15 +117,22 @@ router.put(
         return res.status(401).json({ error: 'Authentication required' });
       }
       const id = Number(getRouteParam(req.params.id));
-      const name = String((req.body as { name?: string }).name ?? '').trim();
+      const body = req.body as { name?: string; isHidden?: boolean };
+      const name = String(body.name ?? '').trim();
+      const isHidden = typeof body.isHidden === 'boolean' ? body.isHidden : undefined;
       if (!Number.isFinite(id) || !name) {
         return res.status(400).json({ error: 'Category ID and name are required' });
       }
-      const category = await updateCategory(id, req.user.companyId, name);
+      const category = await updateCategory(id, req.user.companyId, name, isHidden);
       if (!category) {
         return res.status(404).json({ error: 'Category not found' });
       }
-      await cacheDel(key.categoriesList(req.user.companyId));
+      await cacheDel(
+        `${key.categoriesList(req.user.companyId)}:all`,
+        `${key.categoriesList(req.user.companyId)}:visible`,
+        key.productsList(req.user.companyId, true),
+        key.productsList(req.user.companyId, false),
+      );
       return res.json({ category });
     } catch (error) {
       console.error('Update category error:', error);
@@ -118,7 +158,10 @@ router.delete(
       if (!result.deleted) {
         return res.status(404).json({ error: 'Category not found' });
       }
-      await cacheDel(key.categoriesList(req.user.companyId));
+      await cacheDel(
+        `${key.categoriesList(req.user.companyId)}:all`,
+        `${key.categoriesList(req.user.companyId)}:visible`,
+      );
       return res.json({
         message: 'Category deleted',
         productsDeleted: result.productsDeleted,
@@ -162,7 +205,10 @@ router.post(
       const s3Url = await uploadToS3(`categories/${id}.webp`, webpBuffer, 'image/webp');
       const updated = await updateCategoryImage(id, req.user.companyId, s3Url);
 
-      await cacheDel(key.categoriesList(req.user.companyId));
+      await cacheDel(
+        `${key.categoriesList(req.user.companyId)}:all`,
+        `${key.categoriesList(req.user.companyId)}:visible`,
+      );
       return res.json({
         message: 'Category image uploaded successfully',
         category: updated,

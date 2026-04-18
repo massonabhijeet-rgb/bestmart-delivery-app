@@ -103,6 +103,7 @@ export interface Category {
   name: string;
   slug: string;
   imageUrl: string | null;
+  isHidden: boolean;
   createdDate: string;
   updatedDate: string;
 }
@@ -318,10 +319,12 @@ export async function apiCreateCategory(name: string) {
   return data.category;
 }
 
-export async function apiUpdateCategory(id: number, name: string) {
+export async function apiUpdateCategory(id: number, name: string, isHidden?: boolean) {
+  const payload: { name: string; isHidden?: boolean } = { name };
+  if (typeof isHidden === 'boolean') payload.isHidden = isHidden;
   const data = await request<{ category: Category }>(`/categories/${id}`, {
     method: 'PUT',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(payload),
   });
   return data.category;
 }
@@ -331,6 +334,24 @@ export async function apiDeleteCategory(id: number) {
     `/categories/${id}`,
     { method: 'DELETE' }
   );
+}
+
+export type WeatherMoodTag = 'hot' | 'warm' | 'cool' | 'cold' | 'rainy';
+
+export interface TempCategory {
+  id: number;
+  autoKey: string;
+  name: string;
+  keywords: string[];
+  priority: number;
+  expiresAt: string;
+  productIds: string[];
+}
+
+export async function apiListTempCategories(mood: WeatherMoodTag | null) {
+  const qs = mood ? `?mood=${encodeURIComponent(mood)}` : '';
+  const data = await request<{ tempCategories: TempCategory[] }>(`/categories/temporary${qs}`);
+  return data.tempCategories;
 }
 
 export async function apiUploadCategoryImage(id: number, file: File) {

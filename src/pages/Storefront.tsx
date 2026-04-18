@@ -9,10 +9,11 @@ import {
   apiListBrands,
   apiListCategories,
   apiListPublicCoupons,
+  apiListTempCategories,
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { Brand, CouponPreview, PublicCoupon } from '../services/api';
+import type { Brand, CouponPreview, PublicCoupon, TempCategory } from '../services/api';
 import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
@@ -96,6 +97,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [publicCoupons, setPublicCoupons] = useState<PublicCoupon[]>([]);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [mood, setMood] = useState<WeatherMood>(() => moodFromIndiaCalendar());
+  const [tempCategories, setTempCategories] = useState<TempCategory[]>([]);
+  const [tempCategoryKey, setTempCategoryKey] = useState<string | null>(null);
 
   function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
     if (!('geolocation' in navigator) || !window.isSecureContext) {
@@ -167,6 +170,23 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     });
     return () => controller.abort();
   }, [liveLocation?.latitude, liveLocation?.longitude, company?.storeLatitude, company?.storeLongitude]);
+
+  // Auto-curated weekly buckets (Diwali Specials, Summer Coolers, …). The
+  // backend prunes expired ones and upserts the active set on each call, so
+  // re-fetching whenever mood changes keeps the storefront in sync.
+  useEffect(() => {
+    let cancelled = false;
+    apiListTempCategories(mood)
+      .then((rows) => {
+        if (!cancelled) setTempCategories(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setTempCategories([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mood]);
 
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -328,10 +348,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
   const filteredProducts = useMemo(() => {
     const term = deferredSearch.trim();
+    const tempIds = activeTempCategory ? new Set(activeTempCategory.productIds) : null;
     const byCategory = products.filter(
       (product) =>
         (category === 'All' || product.category === category) &&
-        (!brandFilter || product.brand === brandFilter),
+        (!brandFilter || product.brand === brandFilter) &&
+        (!tempIds || tempIds.has(product.uniqueId)),
     );
     if (!term) return byCategory;
     return fuzzyRank(term, byCategory, (product) => [
@@ -341,7 +363,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       product.badge,
       product.unitLabel,
     ]);
-  }, [products, category, deferredSearch]);
+  }, [products, category, deferredSearch, brandFilter, activeTempCategory]);
 
   const cartItems = useMemo(() => {
     return products
@@ -563,12 +585,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     category !== 'All' ||
     Boolean(deferredSearch.trim()) ||
     Boolean(brandFilter) ||
+    Boolean(tempCategoryKey) ||
     forceCartView;
+
+  const activeTempCategory = useMemo(
+    () => (tempCategoryKey ? tempCategories.find((t) => t.autoKey === tempCategoryKey) ?? null : null),
+    [tempCategoryKey, tempCategories],
+  );
 
   function handleGoHome() {
     setCategory('All');
     setSearch('');
     setBrandFilter(null);
+    setTempCategoryKey(null);
     setForceCartView(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -775,6 +804,50 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                         </button>
                       </div>
                     </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {tempCategories.length > 0 && (
+            <section className="temp-categories">
+              <div className="temp-categories__head">
+                <span className="temp-categories__eyebrow">✨ This week on BestMart</span>
+                <h2>Curated for the season</h2>
+                <p>Auto-picked based on the weather and the festival calendar — refreshed every week.</p>
+              </div>
+              <div className="temp-categories__row">
+                {tempCategories.map((tc, idx) => {
+                  const palettes = [
+                    { from: '#f97316', to: '#ea580c' },
+                    { from: '#22c55e', to: '#15803d' },
+                    { from: '#0ea5e9', to: '#0369a1' },
+                    { from: '#a855f7', to: '#7e22ce' },
+                    { from: '#ec4899', to: '#be185d' },
+                  ];
+                  const palette = palettes[idx % palettes.length];
+                  return (
+                    <button
+                      key={tc.autoKey}
+                      type="button"
+                      className="temp-category-card"
+                      style={{
+                        background: `linear-gradient(135deg, ${palette.from} 0%, ${palette.to} 100%)`,
+                      }}
+                      onClick={() => {
+                        setTempCategoryKey(tc.autoKey);
+                        setCategory('All');
+                        setBrandFilter(null);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                    >
+                      <span className="temp-category-card__title">{tc.name}</span>
+                      <span className="temp-category-card__count">
+                        {tc.productIds.length} pick{tc.productIds.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="temp-category-card__cta">Shop now →</span>
+                    </button>
                   );
                 })}
               </div>
@@ -1134,8 +1207,21 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             <div>
               <p className="eyebrow">Catalog</p>
               <h2>
-                {brandFilter ? `${brandFilter} products` : 'Shop fresh groceries and daily essentials.'}
+                {activeTempCategory
+                  ? activeTempCategory.name
+                  : brandFilter
+                  ? `${brandFilter} products`
+                  : 'Shop fresh groceries and daily essentials.'}
               </h2>
+              {activeTempCategory && (
+                <button
+                  type="button"
+                  className="active-filter"
+                  onClick={() => setTempCategoryKey(null)}
+                >
+                  {activeTempCategory.name} <span aria-hidden>✕</span>
+                </button>
+              )}
               {brandFilter && (
                 <button
                   type="button"

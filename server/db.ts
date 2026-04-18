@@ -52,6 +52,7 @@ export interface CategoryRecord {
   name: string;
   slug: string;
   imageUrl: string | null;
+  isHidden: boolean;
   createdDate: string;
   updatedDate: string;
 }
@@ -229,6 +230,7 @@ function mapCategory(row: {
   name: string;
   slug: string;
   imageUrl: string | null;
+  isHidden?: boolean | null;
   createdDate: string;
   updatedDate: string;
 }): CategoryRecord {
@@ -238,6 +240,7 @@ function mapCategory(row: {
     name: row.name,
     slug: row.slug,
     imageUrl: row.imageUrl ?? null,
+    isHidden: Boolean(row.isHidden),
     createdDate: row.createdDate,
     updatedDate: row.updatedDate,
   };
@@ -358,6 +361,7 @@ async function createTables(client: PoolClient) {
 
   await client.query(`
     ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_url TEXT;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
   // One-time migration: copy distinct values from legacy products.category into categories rows,
@@ -508,6 +512,29 @@ async function createTables(client: PoolClient) {
       updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (company_id, key)
     );
+  `);
+
+  // Temporary, auto-curated categories driven by weather and the festival calendar.
+  // Rows are created on demand and pruned when expires_at passes. Keywords are
+  // used at read-time to match products by name/category — products keep their
+  // own permanent category_id.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS temp_categories (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      auto_key VARCHAR(80) NOT NULL,
+      name VARCHAR(120) NOT NULL,
+      keywords TEXT[] NOT NULL DEFAULT '{}',
+      priority INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, auto_key)
+    );
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_temp_categories_company_expires
+      ON temp_categories(company_id, expires_at);
   `);
 
   await client.query(`
@@ -1619,6 +1646,7 @@ export async function listProducts(companyId: number, includeInactive = false) {
       LEFT JOIN brands b ON b.id = p.brand_id
       WHERE p.company_id = $1
         AND ($2::boolean = TRUE OR p.is_active = TRUE)
+        AND ($2::boolean = TRUE OR c.is_hidden IS NOT TRUE)
       ORDER BY
         p.is_active DESC,
         p.is_on_offer DESC,
@@ -1966,6 +1994,7 @@ const CATEGORY_SELECT_COLUMNS = `
   name,
   slug,
   image_url AS "imageUrl",
+  is_hidden AS "isHidden",
   created_date AS "createdDate",
   updated_date AS "updatedDate"
 `;
@@ -2062,6 +2091,243 @@ export async function deleteBrand(companyId: number, id: number): Promise<boolea
   return (result.rowCount ?? 0) > 0;
 }
 
+// ── Temporary auto-curated categories ────────────────────────────────
+// Weekly buckets like "☀️ Summer Coolers" or "🪔 Diwali Specials" that appear
+// at the top of the storefront when their condition (weather mood + date window)
+// fires. Products are matched by keyword — they keep their permanent category_id.
+export type WeatherMood = 'hot' | 'warm' | 'cool' | 'cold' | 'rainy';
+
+export interface TempCategoryRecord {
+  id: number;
+  autoKey: string;
+  name: string;
+  keywords: string[];
+  priority: number;
+  expiresAt: string;
+  productIds: string[]; // product unique_ids matching this temp category right now
+}
+
+interface TempCategoryDef {
+  autoKey: string;
+  name: string;
+  keywords: string[];
+  priority: number; // higher = appears first
+  // Returns the expiry date if the def is currently active, otherwise null.
+  // mood may be null when the storefront did not pass a weather hint.
+  resolve: (now: Date, mood: WeatherMood | null) => Date | null;
+}
+
+// Helper: returns end-of-window Date if today is inside [startMM-DD, endMM-DD] (inclusive),
+// crossing year boundary if end < start. Window expiry = end of window day.
+function festivalWindow(now: Date, startMonth: number, startDay: number, endMonth: number, endDay: number): Date | null {
+  const year = now.getFullYear();
+  let start = new Date(year, startMonth - 1, startDay, 0, 0, 0);
+  let end = new Date(year, endMonth - 1, endDay, 23, 59, 59);
+  if (end < start) {
+    // window crosses new year (e.g. Dec 28 → Jan 3)
+    if (now >= start) {
+      end = new Date(year + 1, endMonth - 1, endDay, 23, 59, 59);
+    } else {
+      start = new Date(year - 1, startMonth - 1, startDay, 0, 0, 0);
+    }
+  }
+  return now >= start && now <= end ? end : null;
+}
+
+const WEATHER_TTL_DAYS = 7;
+function weatherExpiry(now: Date): Date {
+  return new Date(now.getTime() + WEATHER_TTL_DAYS * 24 * 60 * 60 * 1000);
+}
+
+const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
+  // Weather-based — refreshed as the mood changes
+  {
+    autoKey: 'weather:hot',
+    name: '☀️ Summer Coolers',
+    keywords: ['cold drink', 'soft drink', 'soda', 'juice', 'lemonade', 'iced tea', 'ice cream', 'kulfi', 'sorbet', 'coconut water', 'cooler', 'lassi', 'mango drink'],
+    priority: 90,
+    resolve: (now, mood) => (mood === 'hot' || mood === 'warm') ? weatherExpiry(now) : null,
+  },
+  {
+    autoKey: 'weather:cold',
+    name: '❄️ Winter Warmers',
+    keywords: ['tea', 'coffee', 'soup', 'hot chocolate', 'cocoa', 'ghee', 'jaggery', 'honey', 'almond', 'cashew', 'dry fruit', 'oats', 'porridge'],
+    priority: 90,
+    resolve: (now, mood) => mood === 'cold' ? weatherExpiry(now) : null,
+  },
+  {
+    autoKey: 'weather:rainy',
+    name: '🌧️ Monsoon Munchies',
+    keywords: ['noodles', 'maggi', 'pakora mix', 'bhajiya', 'samosa', 'tea', 'coffee', 'bhujia', 'chips', 'namkeen', 'soup', 'masala'],
+    priority: 95,
+    resolve: (now, mood) => mood === 'rainy' ? weatherExpiry(now) : null,
+  },
+  // Festival-based — windows around major Indian festivals
+  {
+    autoKey: 'festival:republic',
+    name: '🇮🇳 Republic Day Picks',
+    keywords: ['ladoo', 'sweet', 'barfi', 'mithai', 'tricolor', 'jalebi'],
+    priority: 80,
+    resolve: (now) => festivalWindow(now, 1, 23, 1, 27),
+  },
+  {
+    autoKey: 'festival:holi',
+    name: '🎨 Holi Specials',
+    keywords: ['gujiya', 'thandai', 'sweet', 'mithai', 'rasgulla', 'jalebi', 'ladoo', 'gulal', 'color', 'milk'],
+    priority: 85,
+    resolve: (now) => festivalWindow(now, 3, 8, 3, 18),
+  },
+  {
+    autoKey: 'festival:rakhi',
+    name: '🪢 Rakhi Specials',
+    keywords: ['sweet', 'mithai', 'chocolate', 'dry fruit', 'ladoo', 'barfi', 'soan papdi', 'gift'],
+    priority: 80,
+    resolve: (now) => festivalWindow(now, 8, 5, 8, 25),
+  },
+  {
+    autoKey: 'festival:independence',
+    name: '🇮🇳 Independence Day Picks',
+    keywords: ['ladoo', 'sweet', 'mithai', 'tricolor', 'barfi', 'jalebi'],
+    priority: 80,
+    resolve: (now) => festivalWindow(now, 8, 12, 8, 16),
+  },
+  {
+    autoKey: 'festival:ganesh',
+    name: '🐘 Ganesh Chaturthi Specials',
+    keywords: ['modak', 'ladoo', 'sweet', 'mithai', 'jaggery', 'coconut', 'besan'],
+    priority: 80,
+    resolve: (now) => festivalWindow(now, 8, 28, 9, 12),
+  },
+  {
+    autoKey: 'festival:navratri',
+    name: '🌼 Navratri Fast Specials',
+    keywords: ['sabudana', 'singhara', 'kuttu', 'rock salt', 'sendha namak', 'potato', 'sago', 'peanut', 'sama rice'],
+    priority: 85,
+    resolve: (now) => festivalWindow(now, 9, 25, 10, 15),
+  },
+  {
+    autoKey: 'festival:diwali',
+    name: '🪔 Diwali Specials',
+    keywords: ['sweet', 'mithai', 'dry fruit', 'ladoo', 'barfi', 'soan papdi', 'kaju katli', 'chocolate', 'candle', 'diya', 'ghee', 'besan'],
+    priority: 95,
+    resolve: (now) => festivalWindow(now, 10, 20, 11, 10),
+  },
+  {
+    autoKey: 'festival:christmas',
+    name: '🎄 Christmas Treats',
+    keywords: ['cake', 'plum cake', 'cookie', 'biscuit', 'wine', 'chocolate', 'candy', 'marshmallow', 'gingerbread'],
+    priority: 90,
+    resolve: (now) => festivalWindow(now, 12, 18, 12, 28),
+  },
+  {
+    autoKey: 'festival:newyear',
+    name: '🎉 New Year Picks',
+    keywords: ['chocolate', 'wine', 'cake', 'candy', 'snack', 'chips', 'sparkler'],
+    priority: 88,
+    resolve: (now) => festivalWindow(now, 12, 28, 1, 3),
+  },
+];
+
+function pickProductIdsForKeywords(
+  rows: Array<{ uniqueId: string; name: string; category: string | null; description: string }>,
+  keywords: string[],
+  limit = 24,
+): string[] {
+  if (keywords.length === 0) return [];
+  const lcKeywords = keywords.map((k) => k.toLowerCase());
+  const out: string[] = [];
+  for (const row of rows) {
+    const haystack = `${row.name} ${row.category ?? ''} ${row.description}`.toLowerCase();
+    if (lcKeywords.some((k) => haystack.includes(k))) {
+      out.push(row.uniqueId);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+// Reconciles temp_categories rows with the active definitions for the given moment.
+// Idempotent: safe to call on every storefront fetch.
+export async function refreshTemporaryCategories(
+  companyId: number,
+  mood: WeatherMood | null,
+  now: Date = new Date(),
+): Promise<void> {
+  // Drop expired rows first.
+  await pool.query(
+    `DELETE FROM temp_categories WHERE company_id = $1 AND expires_at < $2;`,
+    [companyId, now]
+  );
+
+  for (const def of TEMP_CATEGORY_DEFS) {
+    const expiresAt = def.resolve(now, mood);
+    if (!expiresAt) continue;
+    await pool.query(
+      `
+        INSERT INTO temp_categories (company_id, auto_key, name, keywords, priority, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (company_id, auto_key) DO UPDATE
+          SET name = EXCLUDED.name,
+              keywords = EXCLUDED.keywords,
+              priority = EXCLUDED.priority,
+              expires_at = EXCLUDED.expires_at,
+              updated_date = NOW();
+      `,
+      [companyId, def.autoKey, def.name, def.keywords, def.priority, expiresAt]
+    );
+  }
+}
+
+export async function listActiveTempCategories(
+  companyId: number,
+  now: Date = new Date(),
+): Promise<TempCategoryRecord[]> {
+  const result = await pool.query<{
+    id: number;
+    autoKey: string;
+    name: string;
+    keywords: string[];
+    priority: number;
+    expiresAt: string;
+  }>(
+    `
+      SELECT id, auto_key AS "autoKey", name, keywords, priority,
+             expires_at AS "expiresAt"
+      FROM temp_categories
+      WHERE company_id = $1 AND expires_at > $2
+      ORDER BY priority DESC, name ASC;
+    `,
+    [companyId, now]
+  );
+  if (result.rowCount === 0) return [];
+
+  // Pull the active product catalog once and bucket products into each temp category.
+  const productRows = await pool.query<{
+    uniqueId: string;
+    name: string;
+    category: string | null;
+    description: string;
+  }>(
+    `
+      SELECT p.unique_id AS "uniqueId", p.name, c.name AS "category", p.description
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.company_id = $1
+        AND p.is_active = TRUE
+        AND p.stock_quantity > 0
+        AND c.is_hidden IS NOT TRUE;
+    `,
+    [companyId]
+  );
+
+  return result.rows
+    .map((row) => ({
+      ...row,
+      productIds: pickProductIdsForKeywords(productRows.rows, row.keywords ?? []),
+    }))
+    .filter((row) => row.productIds.length > 0);
+}
+
 export async function getCategoryById(id: number, companyId: number) {
   const result = await pool.query(
     `
@@ -2089,17 +2355,25 @@ export async function createCategory(companyId: number, name: string) {
   return mapCategory(result.rows[0]);
 }
 
-export async function updateCategory(id: number, companyId: number, name: string) {
+export async function updateCategory(
+  id: number,
+  companyId: number,
+  name: string,
+  isHidden?: boolean,
+) {
   const slug = toSlug(name);
   if (!slug) throw new Error('Category name is invalid');
   const result = await pool.query(
     `
       UPDATE categories
-      SET name = $3, slug = $4, updated_date = NOW()
+      SET name = $3,
+          slug = $4,
+          is_hidden = COALESCE($5::boolean, is_hidden),
+          updated_date = NOW()
       WHERE id = $1 AND company_id = $2
       RETURNING ${CATEGORY_SELECT_COLUMNS};
     `,
-    [id, companyId, name.trim(), slug]
+    [id, companyId, name.trim(), slug, isHidden ?? null]
   );
   return result.rowCount ? mapCategory(result.rows[0]) : null;
 }

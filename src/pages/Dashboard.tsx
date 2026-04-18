@@ -235,6 +235,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [newCategoryName, setNewCategoryName] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
+  const [editingCategoryHidden, setEditingCategoryHidden] = useState(false);
   const [categoryImages, setCategoryImages] = useState<Record<number, File | null>>({});
   const [orderSearch, setOrderSearch] = useState('');
   const [orderFilter, setOrderFilter] = useState<'all' | 'active' | OrderStatus>('active');
@@ -789,10 +790,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!name) return;
     setSavingCategoryId(id);
     try {
-      await apiUpdateCategory(id, name);
+      await apiUpdateCategory(id, name, editingCategoryHidden);
       setNotice('Category updated.');
       setEditingCategoryId(null);
       setEditingCategoryName('');
+      setEditingCategoryHidden(false);
       await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update category');
@@ -3130,9 +3132,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') { e.preventDefault(); handleSaveCategoryName(cat.id); }
-                          if (e.key === 'Escape') { setEditingCategoryId(null); setEditingCategoryName(''); }
+                          if (e.key === 'Escape') { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); }
                         }}
                       />
+                      <label className="cat-card__hide-toggle">
+                        <input
+                          type="checkbox"
+                          checked={editingCategoryHidden}
+                          onChange={(e) => setEditingCategoryHidden(e.target.checked)}
+                        />
+                        <span>Hide whole category from storefront</span>
+                      </label>
                       <div className="cat-card__rename-actions">
                         <button
                           type="button"
@@ -3145,7 +3155,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         <button
                           type="button"
                           className="cat-card__btn"
-                          onClick={() => { setEditingCategoryId(null); setEditingCategoryName(''); }}
+                          onClick={() => { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); }}
                         >
                           Cancel
                         </button>
@@ -3153,7 +3163,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                     </div>
                   ) : (
                     <div className="cat-card__info">
-                      <span className="cat-card__name">{cat.name}</span>
+                      <span className="cat-card__name">
+                        {cat.name}
+                        {cat.isHidden && <span className="cat-card__hidden-badge">Hidden</span>}
+                      </span>
                       <span className="cat-card__count">
                         {productCount} product{productCount !== 1 ? 's' : ''}
                       </span>
@@ -3165,9 +3178,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       <button
                         type="button"
                         className="cat-card__btn"
-                        onClick={() => { setEditingCategoryId(cat.id); setEditingCategoryName(cat.name); }}
+                        onClick={() => {
+                          setEditingCategoryId(cat.id);
+                          setEditingCategoryName(cat.name);
+                          setEditingCategoryHidden(cat.isHidden);
+                        }}
                       >
-                        Rename
+                        Edit
                       </button>
                       <button
                         type="button"
