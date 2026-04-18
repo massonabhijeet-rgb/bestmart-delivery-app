@@ -207,6 +207,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [deletingBrandId, setDeletingBrandId] = useState<number | null>(null);
   const [newBrandName, setNewBrandName] = useState('');
   const [creatingBrand, setCreatingBrand] = useState(false);
+  const [catalogSubTab, setCatalogSubTab] = useState<'categories' | 'brands'>('categories');
+  const [editingBrandId, setEditingBrandId] = useState<number | null>(null);
+  const [editingBrandName, setEditingBrandName] = useState('');
+  const [savingBrandId, setSavingBrandId] = useState<number | null>(null);
   const [togglingOfferId, setTogglingOfferId] = useState<string | null>(null);
   const [uploadingCategoryImageId, setUploadingCategoryImageId] = useState<number | null>(null);
   const [creatingUser, setCreatingUser] = useState(false);
@@ -1050,6 +1054,25 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError(err instanceof Error ? err.message : 'Unable to create brand');
     } finally {
       setCreatingBrand(false);
+    }
+  }
+
+  async function handleRenameBrand(id: number) {
+    const next = editingBrandName.trim();
+    if (!next) return;
+    setSavingBrandId(id);
+    try {
+      const updated = await apiUpdateBrand(id, next);
+      setBrands((prev) =>
+        prev.map((b) => (b.id === id ? updated : b)).sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setEditingBrandId(null);
+      setEditingBrandName('');
+      setNotice('Brand renamed.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to rename brand');
+    } finally {
+      setSavingBrandId(null);
     }
   }
 
@@ -3665,15 +3688,43 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       }
     }
     return (
-      <>
       <div className="section-box">
-        <div className="section-box__head">
+        <div className="section-box__head catalog-head">
           <div>
-            <h2>Categories</h2>
-            <p>{categories.length} categories · {inventorySummary?.totalProducts ?? 0} products total</p>
+            <h2>Catalog</h2>
+            <p>
+              {catalogSubTab === 'categories'
+                ? <>{categories.length} categor{categories.length === 1 ? 'y' : 'ies'} · {inventorySummary?.totalProducts ?? 0} products total</>
+                : <>{brands.length} brand{brands.length !== 1 ? 's' : ''}</>
+              }
+            </p>
+          </div>
+          <div className="catalog-subtabs" role="tablist" aria-label="Catalog sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={catalogSubTab === 'categories'}
+              className={`catalog-subtab${catalogSubTab === 'categories' ? ' catalog-subtab--active' : ''}`}
+              onClick={() => setCatalogSubTab('categories')}
+            >
+              Categories
+              <span className="catalog-subtab__count">{categories.length}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={catalogSubTab === 'brands'}
+              className={`catalog-subtab${catalogSubTab === 'brands' ? ' catalog-subtab--active' : ''}`}
+              onClick={() => setCatalogSubTab('brands')}
+            >
+              Brands
+              <span className="catalog-subtab__count">{brands.length}</span>
+            </button>
           </div>
         </div>
 
+        {catalogSubTab === 'categories' ? (
+          <>
         {/* Add category bar */}
         {canManageCatalog && (
           <form className="cat-create-bar" onSubmit={handleCreateCategory}>
@@ -3836,16 +3887,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             });
           })()}
         </div>
-      </div>
-
-      <div className="section-box">
-        <div className="section-box__head">
-          <div>
-            <h2>Brands</h2>
-            <p>{brands.length} brand{brands.length !== 1 ? 's' : ''}</p>
-          </div>
-        </div>
-
+          </>
+        ) : (
+          <>
         {canManageCatalog && (
           <form className="cat-create-bar" onSubmit={handleCreateBrand}>
             <div className="cat-create-bar__inner">
@@ -3870,37 +3914,95 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           </form>
         )}
 
-        <div className="brand-list">
+        <div className="brand-grid">
           {brands.length === 0 && (
-            <p className="empty-state">No brands yet.</p>
+            <p className="empty-state" style={{ gridColumn: '1/-1' }}>No brands yet. Add one above.</p>
           )}
           {brands.map((b) => {
             const count = brandProductCounts.get(b.id) ?? 0;
+            const isEditing = editingBrandId === b.id;
+            const initials = b.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
             return (
-              <div key={b.id} className="brand-row">
-                <div className="brand-row__info">
-                  <span className="brand-row__name">{b.name}</span>
-                  <span className="brand-row__count">
-                    {count} product{count !== 1 ? 's' : ''}
-                  </span>
+              <article key={b.id} className={`brand-card${isEditing ? ' brand-card--editing' : ''}`}>
+                <div className="brand-card__avatar" aria-hidden="true">{initials}</div>
+                <div className="brand-card__body">
+                  {isEditing ? (
+                    <div className="brand-card__edit">
+                      <input
+                        className="brand-card__edit-input"
+                        value={editingBrandName}
+                        onChange={(e) => setEditingBrandName(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); void handleRenameBrand(b.id); }
+                          if (e.key === 'Escape') { setEditingBrandId(null); setEditingBrandName(''); }
+                        }}
+                      />
+                      <div className="brand-card__edit-actions">
+                        <button
+                          type="button"
+                          className="cat-card__btn cat-card__btn--primary"
+                          onClick={() => void handleRenameBrand(b.id)}
+                          disabled={!editingBrandName.trim() || savingBrandId === b.id}
+                        >
+                          {savingBrandId === b.id ? 'Saving…' : 'Save'}
+                        </button>
+                        <button
+                          type="button"
+                          className="cat-card__btn"
+                          onClick={() => { setEditingBrandId(null); setEditingBrandName(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="brand-card__info">
+                      <span className="brand-card__name">{b.name}</span>
+                      <span className="brand-card__count">
+                        {count} product{count !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  )}
+                  {canManageCatalog && !isEditing && (
+                    <div className="brand-card__actions">
+                      <button
+                        type="button"
+                        className="inv-card__icon-btn"
+                        title="Rename brand"
+                        aria-label="Rename brand"
+                        onClick={() => { setEditingBrandId(b.id); setEditingBrandName(b.name); }}
+                      >
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <path d="M13 3l4 4-9 9H4v-4l9-9z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="inv-card__icon-btn inv-card__icon-btn--danger"
+                        title={count > 0 ? `${count} product(s) will be affected` : 'Delete brand'}
+                        aria-label="Delete brand"
+                        onClick={() => handleDeleteBrand(b)}
+                        disabled={deletingBrandId === b.id}
+                      >
+                        {deletingBrandId === b.id ? (
+                          <span className="inv-card__icon-spinner" aria-hidden="true" />
+                        ) : (
+                          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                            <path d="M3 6h14M8 6V4h4v2M6 6l1 11h6l1-11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {canManageCatalog && (
-                  <button
-                    type="button"
-                    className="cat-card__btn cat-card__btn--danger"
-                    title={count > 0 ? `${count} product(s) will be affected` : 'Delete brand'}
-                    onClick={() => handleDeleteBrand(b)}
-                    disabled={deletingBrandId === b.id}
-                  >
-                    {deletingBrandId === b.id ? 'Deleting…' : 'Delete'}
-                  </button>
-                )}
-              </div>
+              </article>
             );
           })}
         </div>
+          </>
+        )}
       </div>
-      </>
     );
   }
 
