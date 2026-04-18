@@ -509,6 +509,31 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     [cachedProductsList, checkoutMood, cart],
   );
 
+  // Discounted items to surface at checkout — pulls from spotlight offers
+  // first, falls back to any in-cache product with a markdown. Skips items
+  // already in cart so we don't nag.
+  const checkoutDeals = useMemo(() => {
+    const seen = new Set<string>();
+    const picks: Product[] = [];
+    const isDiscount = (p: Product) =>
+      p.isOnOffer ||
+      (p.originalPriceCents != null && p.originalPriceCents > effectivePriceCents(p));
+    const pool: Product[] = [
+      ...(spotlight?.offerProducts ?? []),
+      ...cachedProductsList,
+    ];
+    for (const p of pool) {
+      if (seen.has(p.uniqueId)) continue;
+      if (!p.isActive || p.stockQuantity <= 0) continue;
+      if (cart[p.uniqueId]) continue;
+      if (!isDiscount(p)) continue;
+      seen.add(p.uniqueId);
+      picks.push(p);
+      if (picks.length >= 12) break;
+    }
+    return picks;
+  }, [spotlight, cachedProductsList, cart]);
+
   const activeTempCategory = useMemo(
     () => (tempCategoryKey ? tempCategories.find((t) => t.autoKey === tempCategoryKey) ?? null : null),
     [tempCategoryKey, tempCategories],
@@ -1804,6 +1829,72 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </div>
             )}
           </div>
+
+          {cartItems.length > 0 && checkoutDeals.length > 0 && (
+            <div className="checkout-deals">
+              <div className="checkout-deals__head">
+                <span className="checkout-deals__emoji" aria-hidden>🏷️</span>
+                <div>
+                  <span className="checkout-deals__eyebrow">Hot deals</span>
+                  <h3 className="checkout-deals__title">Save more on these</h3>
+                  <p className="checkout-deals__subtitle">
+                    Active offers and markdowns — add before you check out.
+                  </p>
+                </div>
+              </div>
+              <div className="checkout-deals__row">
+                {checkoutDeals.map((product) => {
+                  const price = effectivePriceCents(product);
+                  const original = product.originalPriceCents;
+                  const showStrike = original != null && original > price;
+                  return (
+                    <article key={product.uniqueId} className="checkout-treat">
+                      <div className="checkout-treat__thumb">
+                        {product.imageUrl && (
+                          <img
+                            src={product.imageUrl}
+                            alt={product.name}
+                            loading="lazy"
+                            className="checkout-treat__thumb-img"
+                          />
+                        )}
+                        <span className="checkout-deals__badge">DEAL</span>
+                      </div>
+                      <div className="checkout-treat__body">
+                        <span className="checkout-treat__name">{product.name}</span>
+                        <span className="checkout-treat__meta">{product.unitLabel}</span>
+                        <div className="checkout-treat__foot">
+                          <div className="checkout-deals__prices">
+                            <strong>{formatCurrency(price)}</strong>
+                            {showStrike ? (
+                              <span className="checkout-deals__strike">
+                                {formatCurrency(original)}
+                              </span>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            className="checkout-treat__add"
+                            onClick={() => {
+                              void apiLogClick({
+                                productId: product.id,
+                                categoryId: product.categoryId ?? null,
+                                source: 'checkout_deals',
+                              });
+                              updateQuantity(product.uniqueId, 1);
+                            }}
+                            aria-label={`Add ${product.name}`}
+                          >
+                            + Add
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {cartItems.length > 0 && checkoutPicks.length > 0 && (
             <div className={`checkout-treats checkout-treats--${checkoutMood}`}>

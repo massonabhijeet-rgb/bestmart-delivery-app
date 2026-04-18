@@ -1783,17 +1783,23 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
 
   const whereSql = where.join(' AND ');
 
+  // Discounts surface first across all sort modes on the storefront. Admin
+  // views keep their existing ordering so managers can scan the full list by
+  // price/stock/etc. without the offer bucket forcing deals to the top.
+  const discountedFirst =
+    '(CASE WHEN p.is_on_offer OR (p.original_price_cents IS NOT NULL AND p.original_price_cents > p.price_cents) THEN 0 ELSE 1 END)';
+  const storefrontPrefix = opts.admin ? '' : `${discountedFirst}, `;
   let orderSql: string;
   switch (opts.sort) {
-    case 'price_asc': orderSql = 'p.price_cents ASC, p.name'; break;
-    case 'price_desc': orderSql = 'p.price_cents DESC, p.name'; break;
-    case 'stock_asc': orderSql = 'p.stock_quantity ASC, p.name'; break;
-    case 'stock_desc': orderSql = 'p.stock_quantity DESC, p.name'; break;
-    case 'created_desc': orderSql = 'p.created_date DESC, p.name'; break;
+    case 'price_asc': orderSql = `${storefrontPrefix}p.price_cents ASC, p.name`; break;
+    case 'price_desc': orderSql = `${storefrontPrefix}p.price_cents DESC, p.name`; break;
+    case 'stock_asc': orderSql = `${storefrontPrefix}p.stock_quantity ASC, p.name`; break;
+    case 'stock_desc': orderSql = `${storefrontPrefix}p.stock_quantity DESC, p.name`; break;
+    case 'created_desc': orderSql = `${storefrontPrefix}p.created_date DESC, p.name`; break;
     default:
       orderSql = opts.admin
         ? 'p.is_active DESC, p.is_on_offer DESC, c.name, p.name'
-        : 'p.is_on_offer DESC, c.name, p.name';
+        : `${discountedFirst}, c.name, p.name`;
   }
 
   const countRes = await pool.query<{ total: string }>(
@@ -2293,7 +2299,10 @@ export async function getHomeRails(
                   COALESCE(s.units_sold, 0)::int AS "unitsSold",
                   ROW_NUMBER() OVER (
                     PARTITION BY p.category_id
-                    ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+                    ORDER BY
+                      (CASE WHEN p.is_on_offer OR (p.original_price_cents IS NOT NULL AND p.original_price_cents > p.price_cents) THEN 0 ELSE 1 END),
+                      COALESCE(s.units_sold, 0) DESC,
+                      p.updated_date DESC
                   ) AS rn
            ${baseJoinWhere}
          )
