@@ -5421,6 +5421,86 @@ textarea {
 .active-filter span { font-size: 0.85em; opacity: 0.7; }
 
 /* ─────────────────────────────────────
+   Home rails (Bestsellers + per-category top picks)
+   ───────────────────────────────────── */
+.home-rail {
+  margin: 0 0 var(--sp-6);
+  padding: 0 var(--sp-4);
+}
+.home-rail__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.home-rail__head h2 {
+  margin: 0 0 4px;
+  font-size: 1.25rem;
+  color: var(--c-ink);
+  font-weight: 700;
+}
+.home-rail__head p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--c-ink-3);
+}
+.home-rail__eyebrow {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+}
+.home-rail--featured .home-rail__head h2 {
+  font-size: 1.4rem;
+}
+.home-rail__see-all {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--c-border);
+  background: transparent;
+  color: var(--c-teal, #0d9488);
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms;
+}
+.home-rail__see-all:hover {
+  background: var(--c-surface-2, #f3f4f6);
+  border-color: var(--c-border-strong, #d1d5db);
+}
+.home-rail__row {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 8px;
+  margin: 0 calc(-1 * var(--sp-4));
+  padding-left: var(--sp-4);
+  padding-right: var(--sp-4);
+}
+.home-rail__row::-webkit-scrollbar { height: 6px; }
+.home-rail__row::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+.home-rail__row .daily-essential-card {
+  flex: 0 0 170px;
+  scroll-snap-align: start;
+}
+/* Invisible sentinel to trigger "load next batch of rails" on scroll. */
+.home-rail__sentinel {
+  height: 1px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* ─────────────────────────────────────
    Daily essentials strip (landing page)
    ───────────────────────────────────── */
 .daily-essentials {

@@ -4,6 +4,7 @@ import {
   apiCancelOrder,
   apiCreateOrder,
   apiGetCompanyPublic,
+  apiGetHomeRails,
   apiGetProductsPage,
   apiGetProductVariants,
   apiGetStorefrontSpotlight,
@@ -15,7 +16,7 @@ import {
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { Brand, CouponPreview, PublicCoupon, StorefrontSpotlight, TempCategory } from '../services/api';
+import type { Brand, CouponPreview, HomeRails, PublicCoupon, StorefrontSpotlight, TempCategory } from '../services/api';
 import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
@@ -94,6 +95,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   // details without re-fetching the whole catalog up front.
   const [productCache, setProductCache] = useState<Record<string, Product>>({});
   const [spotlight, setSpotlight] = useState<StorefrontSpotlight | null>(null);
+  const [homeRails, setHomeRails] = useState<HomeRails | null>(null);
+  // Incremental "load more rails on scroll": start with a small batch and
+  // reveal more as the sentinel at the end of the rendered rails enters view.
+  const RAILS_PER_BATCH = 4;
+  const [visibleRailCount, setVisibleRailCount] = useState(RAILS_PER_BATCH);
+  const railSentinelRef = useRef<HTMLDivElement | null>(null);
   const [categoryRows, setCategoryRows] = useState<Category[]>([]);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -298,6 +305,50 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       cancelled = true;
     };
   }, [mood]);
+
+  // Bestsellers + per-category rails. Cached server-side for 10 min; the
+  // result also seeds productCache so cart and quick-view work immediately.
+  useEffect(() => {
+    let cancelled = false;
+    apiGetHomeRails()
+      .then((data) => {
+        if (cancelled) return;
+        setHomeRails(data);
+        setVisibleRailCount(RAILS_PER_BATCH);
+        const all = [...data.bestsellers, ...data.categoryRails.flatMap((r) => r.products)];
+        ingestProducts(all);
+      })
+      .catch(() => {
+        if (!cancelled) setHomeRails({ bestsellers: [], categoryRails: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Reveal more category rails when the sentinel scrolls into view. Uses
+  // rootMargin so we start loading a screen ahead of where the user is.
+  useEffect(() => {
+    if (!homeRails) return;
+    const total = homeRails.categoryRails.length;
+    if (visibleRailCount >= total) return;
+    const node = railSentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setVisibleRailCount((n) => Math.min(total, n + RAILS_PER_BATCH));
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin: '600px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [homeRails, visibleRailCount]);
 
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -754,6 +805,56 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     Boolean(brandFilter) ||
     Boolean(tempCategoryKey) ||
     forceCartView;
+
+  function renderRailCard(product: Product) {
+    const inCart = cart[product.uniqueId];
+    return (
+      <article key={product.uniqueId} className="daily-essential-card">
+        <div className="daily-essential-card__thumb">
+          {product.imageUrl && (
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              loading="lazy"
+              className="daily-essential-card__thumb-img"
+            />
+          )}
+        </div>
+        <div className="daily-essential-card__body">
+          <strong className="daily-essential-card__name">{product.name}</strong>
+          <span className="daily-essential-card__meta">{product.unitLabel}</span>
+          <div className="daily-essential-card__price-row">
+            <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+            {product.originalPriceCents && product.originalPriceCents > effectivePriceCents(product) ? (
+              <span className="daily-essential-card__strike">
+                {formatCurrency(product.originalPriceCents)}
+              </span>
+            ) : null}
+          </div>
+          {inCart ? (
+            <div className="qty-stepper">
+              <button type="button" onClick={() => updateQuantity(product.uniqueId, inCart - 1)}>−</button>
+              <span>{inCart}</span>
+              <button
+                type="button"
+                disabled={inCart >= product.stockQuantity}
+                onClick={() => updateQuantity(product.uniqueId, inCart + 1)}
+              >+</button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="daily-essential-card__add"
+              disabled={product.stockQuantity <= 0}
+              onClick={() => updateQuantity(product.uniqueId, 1)}
+            >
+              {product.stockQuantity <= 0 ? 'Sold out' : '+ Add'}
+            </button>
+          )}
+        </div>
+      </article>
+    );
+  }
 
   function handleGoHome() {
     setCategory('All');
@@ -1264,6 +1365,54 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             </section>
             </LazyMount>
           ) : null}
+
+          {!isBrowsing && homeRails && homeRails.bestsellers.length > 0 && (
+            <LazyMount placeholderHeight={340}>
+              <section className="home-rail home-rail--featured">
+                <div className="home-rail__head">
+                  <div>
+                    <span className="home-rail__eyebrow">⭐ Bestsellers</span>
+                    <h2>Most popular this month</h2>
+                    <p>What other shoppers are loving right now.</p>
+                  </div>
+                </div>
+                <div className="home-rail__row">
+                  {homeRails.bestsellers.map(renderRailCard)}
+                </div>
+              </section>
+            </LazyMount>
+          )}
+
+          {!isBrowsing && homeRails?.categoryRails.slice(0, visibleRailCount).map((rail) => (
+            rail.products.length > 0 ? (
+              <LazyMount key={rail.id} placeholderHeight={320}>
+                <section className="home-rail">
+                  <div className="home-rail__head">
+                    <div>
+                      <h2>Top in {rail.name}</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="home-rail__see-all"
+                      onClick={() => {
+                        setCategory(rail.name);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                    >
+                      See all →
+                    </button>
+                  </div>
+                  <div className="home-rail__row">
+                    {rail.products.map(renderRailCard)}
+                  </div>
+                </section>
+              </LazyMount>
+            ) : null
+          ))}
+
+          {!isBrowsing && homeRails && visibleRailCount < homeRails.categoryRails.length && (
+            <div ref={railSentinelRef} className="home-rail__sentinel" aria-hidden="true" />
+          )}
 
           <LazyMount placeholderHeight={260}>
           <section className="category-grid">

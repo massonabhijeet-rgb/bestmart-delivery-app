@@ -12,6 +12,7 @@ import {
   createProduct,
   deactivateProduct,
   getDefaultCompanyId,
+  getHomeRails,
   getInventorySummary,
   getProductByUniqueId,
   getStorefrontSpotlight,
@@ -220,6 +221,22 @@ router.get('/spotlight', attachUserIfPresent, async (req: AuthenticatedRequest, 
   const spotlight = await getStorefrontSpotlight(companyId, mood, 12);
   await cacheSet(cacheKey, spotlight, 120); // 2 min
   return res.json(spotlight);
+});
+
+// Storefront home page rails: global bestsellers + one rail per category, all
+// sorted by 30-day units sold. Cached for 10 min — product writes bust via
+// the existing bm:products:* invalidation in write paths.
+router.get('/home-rails', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+  const cacheKey = `bm:products:home-rails:${companyId}:all`;
+  const cached = await cacheGet<unknown>(cacheKey);
+  if (cached) return res.json(cached);
+
+  const rails = await getHomeRails(companyId, { limit: 8, days: 30 });
+  await cacheSet(cacheKey, rails, 600);
+  return res.json(rails);
 });
 
 router.get(

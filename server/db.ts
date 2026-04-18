@@ -2030,6 +2030,174 @@ export async function getStorefrontSpotlight(
   };
 }
 
+export interface HomeRailsCategory {
+  id: number;
+  name: string;
+  imageUrl: string | null;
+  products: ReturnType<typeof mapProduct>[];
+  /** Ranking score used to sort rails — exposed for debugging / tuning. */
+  score: number;
+  /** Reason tags applied to this rail, e.g. 'weekend-boost' or 'low-stock'. */
+  signals: string[];
+}
+
+export interface HomeRails {
+  bestsellers: ReturnType<typeof mapProduct>[];
+  categoryRails: HomeRailsCategory[];
+}
+
+// Categories that get a weekend boost (Fri–Sun). Matched case-insensitively
+// against category name by substring, so "Cold Drinks", "Soft Drinks", "Chips
+// & Namkeen" etc. all qualify. Keep these lowercase.
+const WEEKEND_BOOST_KEYWORDS = [
+  'snack', 'chips', 'namkeen', 'chocolate', 'candy', 'ice cream',
+  'cold drink', 'soft drink', 'soda', 'beverage', 'juice', 'energy',
+  'party', 'biscuit',
+];
+
+// Top products by units sold (30d) — globally and per category. Used for the
+// storefront home page rails. Out-of-stock / inactive / hidden-category
+// products are excluded; products with zero sales fall back to updated_date
+// ordering so new catalog items still appear.
+export async function getHomeRails(
+  companyId: number,
+  { limit = 8, days = 30 }: { limit?: number; days?: number } = {},
+): Promise<HomeRails> {
+  const soldCte = `
+    sold AS (
+      SELECT oi.product_id, SUM(oi.quantity)::int AS units_sold
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE o.company_id = $1
+        AND o.status <> 'cancelled'
+        AND o.created_date >= NOW() - ($3 || ' days')::INTERVAL
+      GROUP BY oi.product_id
+    )
+  `;
+  const baseJoinWhere = `
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    LEFT JOIN brands b ON b.id = p.brand_id
+    LEFT JOIN sold s ON s.product_id = p.id
+    WHERE p.company_id = $1
+      AND p.is_active = TRUE
+      AND p.stock_quantity > 0
+      AND c.is_hidden IS NOT TRUE
+  `;
+
+  const [globalRes, perCatRes] = await Promise.all([
+    pool.query(
+      `WITH ${soldCte}
+       SELECT ${PRODUCT_SELECT_COLUMNS}, COALESCE(s.units_sold, 0)::int AS "unitsSold"
+       ${baseJoinWhere}
+       ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+       LIMIT $2;`,
+      [companyId, limit, days],
+    ),
+    pool.query(
+      `WITH ${soldCte},
+       ranked AS (
+         SELECT ${PRODUCT_SELECT_COLUMNS},
+                COALESCE(s.units_sold, 0)::int AS "unitsSold",
+                ROW_NUMBER() OVER (
+                  PARTITION BY p.category_id
+                  ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+                ) AS rn
+         ${baseJoinWhere}
+       )
+       SELECT * FROM ranked WHERE rn <= $2;`,
+      [companyId, limit, days],
+    ),
+  ]);
+
+  // Group per-category rows by categoryId. Also collect per-row unitsSold and
+  // stockQuantity so we can score the rail before mapping to Product shape.
+  type Accum = {
+    id: number;
+    name: string;
+    imageUrl: string | null;
+    products: ReturnType<typeof mapProduct>[];
+    totalUnitsSold: number;
+    totalStock: number;
+  };
+  const byCat = new Map<number, Accum>();
+  for (const row of perCatRes.rows) {
+    if (row.categoryId == null) continue;
+    const product = mapProduct(row);
+    const sold = Number(row.unitsSold ?? 0);
+    const stock = Number(row.stockQuantity ?? 0);
+    const existing = byCat.get(row.categoryId);
+    if (existing) {
+      existing.products.push(product);
+      existing.totalUnitsSold += sold;
+      existing.totalStock += stock;
+    } else {
+      byCat.set(row.categoryId, {
+        id: row.categoryId,
+        name: row.category ?? '',
+        imageUrl: row.categoryImageUrl ?? null,
+        products: [product],
+        totalUnitsSold: sold,
+        totalStock: stock,
+      });
+    }
+  }
+
+  // Phase 1 dynamic ranking: weekend boost for party categories + inventory-
+  // aware penalty for near-out-of-stock rails. Base score is 30-day units
+  // sold; higher-selling categories naturally rise, while low-stock ones sink
+  // so shoppers don't see shelves they can't actually buy from.
+  const now = new Date();
+  const dow = now.getDay(); // 0=Sun .. 6=Sat
+  const isWeekend = dow === 0 || dow === 5 || dow === 6;
+
+  const categoryRails: HomeRailsCategory[] = Array.from(byCat.values()).map((c) => {
+    const trimmed = c.products.slice(0, limit);
+    const lowerName = c.name.toLowerCase();
+    const isParty = WEEKEND_BOOST_KEYWORDS.some((k) => lowerName.includes(k));
+    const avgStock = trimmed.length > 0 ? c.totalStock / trimmed.length : 0;
+
+    // Additive scoring — multiplicative tilts get swamped by cold-start data
+    // where most categories have 0 sales. Units sold stays the dominant
+    // signal once the catalogue has meaningful traffic; the boost and
+    // penalties are tuned to move a rail a few slots, not dominate.
+    const signals: string[] = [];
+    let score = c.totalUnitsSold;
+
+    if (isWeekend && isParty) {
+      score += 3;
+      signals.push('weekend-boost');
+    }
+    if (avgStock < 10) {
+      score -= 3;
+      signals.push('low-stock');
+    } else if (avgStock < 25) {
+      score -= 1;
+      signals.push('thin-stock');
+    }
+
+    return {
+      id: c.id,
+      name: c.name,
+      imageUrl: c.imageUrl,
+      products: trimmed,
+      score: Math.round(score * 100) / 100,
+      signals,
+    };
+  });
+
+  // Sort by score desc; fall back to name for determinism on ties.
+  categoryRails.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.name.localeCompare(b.name);
+  });
+
+  return {
+    bestsellers: globalRes.rows.map(mapProduct),
+    categoryRails,
+  };
+}
+
 export interface SlowMoverSuggestion {
   uniqueId: string;
   name: string;

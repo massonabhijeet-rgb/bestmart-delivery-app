@@ -378,6 +378,24 @@ export async function apiGetStorefrontSpotlight(mood: string | null): Promise<St
   return request<StorefrontSpotlight>(`/products/spotlight${qs}`);
 }
 
+export interface HomeRailsCategory {
+  id: number;
+  name: string;
+  imageUrl: string | null;
+  products: Product[];
+  score: number;
+  signals: string[];
+}
+
+export interface HomeRails {
+  bestsellers: Product[];
+  categoryRails: HomeRailsCategory[];
+}
+
+export async function apiGetHomeRails(): Promise<HomeRails> {
+  return request<HomeRails>('/products/home-rails');
+}
+
 export interface BulkImportRowInput {
   rowNum: number;
   name: string;
