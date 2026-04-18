@@ -533,6 +533,7 @@ async function createTables(client: PoolClient) {
     );
   `);
   await client.query(`
+    ALTER TABLE temp_categories ADD COLUMN IF NOT EXISTS theme VARCHAR(40) NOT NULL DEFAULT 'summer';
     CREATE INDEX IF NOT EXISTS idx_temp_categories_company_expires
       ON temp_categories(company_id, expires_at);
   `);
@@ -2097,10 +2098,25 @@ export async function deleteBrand(companyId: number, id: number): Promise<boolea
 // fires. Products are matched by keyword — they keep their permanent category_id.
 export type WeatherMood = 'hot' | 'warm' | 'cool' | 'cold' | 'rainy';
 
+export type TempCategoryTheme =
+  | 'summer'
+  | 'winter'
+  | 'monsoon'
+  | 'holi'
+  | 'rakhi'
+  | 'independence'
+  | 'republic'
+  | 'ganesh'
+  | 'navratri'
+  | 'diwali'
+  | 'christmas'
+  | 'newyear';
+
 export interface TempCategoryRecord {
   id: number;
   autoKey: string;
   name: string;
+  theme: TempCategoryTheme;
   keywords: string[];
   priority: number;
   expiresAt: string;
@@ -2110,6 +2126,7 @@ export interface TempCategoryRecord {
 interface TempCategoryDef {
   autoKey: string;
   name: string;
+  theme: TempCategoryTheme;
   keywords: string[];
   priority: number; // higher = appears first
   // Returns the expiry date if the def is currently active, otherwise null.
@@ -2144,6 +2161,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'weather:hot',
     name: '☀️ Summer Coolers',
+    theme: 'summer',
     keywords: ['cold drink', 'soft drink', 'soda', 'juice', 'lemonade', 'iced tea', 'ice cream', 'kulfi', 'sorbet', 'coconut water', 'cooler', 'lassi', 'mango drink'],
     priority: 90,
     resolve: (now, mood) => (mood === 'hot' || mood === 'warm') ? weatherExpiry(now) : null,
@@ -2151,6 +2169,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'weather:cold',
     name: '❄️ Winter Warmers',
+    theme: 'winter',
     keywords: ['tea', 'coffee', 'soup', 'hot chocolate', 'cocoa', 'ghee', 'jaggery', 'honey', 'almond', 'cashew', 'dry fruit', 'oats', 'porridge'],
     priority: 90,
     resolve: (now, mood) => mood === 'cold' ? weatherExpiry(now) : null,
@@ -2158,6 +2177,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'weather:rainy',
     name: '🌧️ Monsoon Munchies',
+    theme: 'monsoon',
     keywords: ['noodles', 'maggi', 'pakora mix', 'bhajiya', 'samosa', 'tea', 'coffee', 'bhujia', 'chips', 'namkeen', 'soup', 'masala'],
     priority: 95,
     resolve: (now, mood) => mood === 'rainy' ? weatherExpiry(now) : null,
@@ -2166,6 +2186,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:republic',
     name: '🇮🇳 Republic Day Picks',
+    theme: 'republic',
     keywords: ['ladoo', 'sweet', 'barfi', 'mithai', 'tricolor', 'jalebi'],
     priority: 80,
     resolve: (now) => festivalWindow(now, 1, 23, 1, 27),
@@ -2173,6 +2194,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:holi',
     name: '🎨 Holi Specials',
+    theme: 'holi',
     keywords: ['gujiya', 'thandai', 'sweet', 'mithai', 'rasgulla', 'jalebi', 'ladoo', 'gulal', 'color', 'milk'],
     priority: 85,
     resolve: (now) => festivalWindow(now, 3, 8, 3, 18),
@@ -2180,6 +2202,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:rakhi',
     name: '🪢 Rakhi Specials',
+    theme: 'rakhi',
     keywords: ['sweet', 'mithai', 'chocolate', 'dry fruit', 'ladoo', 'barfi', 'soan papdi', 'gift'],
     priority: 80,
     resolve: (now) => festivalWindow(now, 8, 5, 8, 25),
@@ -2187,6 +2210,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:independence',
     name: '🇮🇳 Independence Day Picks',
+    theme: 'independence',
     keywords: ['ladoo', 'sweet', 'mithai', 'tricolor', 'barfi', 'jalebi'],
     priority: 80,
     resolve: (now) => festivalWindow(now, 8, 12, 8, 16),
@@ -2194,6 +2218,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:ganesh',
     name: '🐘 Ganesh Chaturthi Specials',
+    theme: 'ganesh',
     keywords: ['modak', 'ladoo', 'sweet', 'mithai', 'jaggery', 'coconut', 'besan'],
     priority: 80,
     resolve: (now) => festivalWindow(now, 8, 28, 9, 12),
@@ -2201,6 +2226,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:navratri',
     name: '🌼 Navratri Fast Specials',
+    theme: 'navratri',
     keywords: ['sabudana', 'singhara', 'kuttu', 'rock salt', 'sendha namak', 'potato', 'sago', 'peanut', 'sama rice'],
     priority: 85,
     resolve: (now) => festivalWindow(now, 9, 25, 10, 15),
@@ -2208,6 +2234,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:diwali',
     name: '🪔 Diwali Specials',
+    theme: 'diwali',
     keywords: ['sweet', 'mithai', 'dry fruit', 'ladoo', 'barfi', 'soan papdi', 'kaju katli', 'chocolate', 'candle', 'diya', 'ghee', 'besan'],
     priority: 95,
     resolve: (now) => festivalWindow(now, 10, 20, 11, 10),
@@ -2215,6 +2242,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:christmas',
     name: '🎄 Christmas Treats',
+    theme: 'christmas',
     keywords: ['cake', 'plum cake', 'cookie', 'biscuit', 'wine', 'chocolate', 'candy', 'marshmallow', 'gingerbread'],
     priority: 90,
     resolve: (now) => festivalWindow(now, 12, 18, 12, 28),
@@ -2222,6 +2250,7 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   {
     autoKey: 'festival:newyear',
     name: '🎉 New Year Picks',
+    theme: 'newyear',
     keywords: ['chocolate', 'wine', 'cake', 'candy', 'snack', 'chips', 'sparkler'],
     priority: 88,
     resolve: (now) => festivalWindow(now, 12, 28, 1, 3),
@@ -2264,16 +2293,17 @@ export async function refreshTemporaryCategories(
     if (!expiresAt) continue;
     await pool.query(
       `
-        INSERT INTO temp_categories (company_id, auto_key, name, keywords, priority, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO temp_categories (company_id, auto_key, name, theme, keywords, priority, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (company_id, auto_key) DO UPDATE
           SET name = EXCLUDED.name,
+              theme = EXCLUDED.theme,
               keywords = EXCLUDED.keywords,
               priority = EXCLUDED.priority,
               expires_at = EXCLUDED.expires_at,
               updated_date = NOW();
       `,
-      [companyId, def.autoKey, def.name, def.keywords, def.priority, expiresAt]
+      [companyId, def.autoKey, def.name, def.theme, def.keywords, def.priority, expiresAt]
     );
   }
 }
@@ -2286,12 +2316,13 @@ export async function listActiveTempCategories(
     id: number;
     autoKey: string;
     name: string;
+    theme: TempCategoryTheme;
     keywords: string[];
     priority: number;
     expiresAt: string;
   }>(
     `
-      SELECT id, auto_key AS "autoKey", name, keywords, priority,
+      SELECT id, auto_key AS "autoKey", name, theme, keywords, priority,
              expires_at AS "expiresAt"
       FROM temp_categories
       WHERE company_id = $1 AND expires_at > $2

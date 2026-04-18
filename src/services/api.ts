@@ -338,10 +338,25 @@ export async function apiDeleteCategory(id: number) {
 
 export type WeatherMoodTag = 'hot' | 'warm' | 'cool' | 'cold' | 'rainy';
 
+export type TempCategoryTheme =
+  | 'summer'
+  | 'winter'
+  | 'monsoon'
+  | 'holi'
+  | 'rakhi'
+  | 'independence'
+  | 'republic'
+  | 'ganesh'
+  | 'navratri'
+  | 'diwali'
+  | 'christmas'
+  | 'newyear';
+
 export interface TempCategory {
   id: number;
   autoKey: string;
   name: string;
+  theme: TempCategoryTheme;
   keywords: string[];
   priority: number;
   expiresAt: string;

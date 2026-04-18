@@ -817,40 +817,89 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 <h2>Curated for the season</h2>
                 <p>Auto-picked based on the weather and the festival calendar — refreshed every week.</p>
               </div>
-              <div className="temp-categories__row">
-                {tempCategories.map((tc, idx) => {
-                  const palettes = [
-                    { from: '#f97316', to: '#ea580c' },
-                    { from: '#22c55e', to: '#15803d' },
-                    { from: '#0ea5e9', to: '#0369a1' },
-                    { from: '#a855f7', to: '#7e22ce' },
-                    { from: '#ec4899', to: '#be185d' },
-                  ];
-                  const palette = palettes[idx % palettes.length];
-                  return (
-                    <button
-                      key={tc.autoKey}
-                      type="button"
-                      className="temp-category-card"
-                      style={{
-                        background: `linear-gradient(135deg, ${palette.from} 0%, ${palette.to} 100%)`,
-                      }}
-                      onClick={() => {
-                        setTempCategoryKey(tc.autoKey);
-                        setCategory('All');
-                        setBrandFilter(null);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                    >
-                      <span className="temp-category-card__title">{tc.name}</span>
-                      <span className="temp-category-card__count">
-                        {tc.productIds.length} pick{tc.productIds.length === 1 ? '' : 's'}
-                      </span>
-                      <span className="temp-category-card__cta">Shop now →</span>
-                    </button>
-                  );
-                })}
-              </div>
+
+              {tempCategories.map((tc) => {
+                const items = tc.productIds
+                  .map((id) => productLookup.get(id))
+                  .filter((p): p is Product => Boolean(p))
+                  .slice(0, 12);
+                if (items.length === 0) return null;
+                return (
+                  <article key={tc.autoKey} className={`temp-section temp-section--${tc.theme}`}>
+                    <div className="temp-section__head">
+                      <div className="temp-section__head-text">
+                        <h3 className="temp-section__title">{tc.name}</h3>
+                        <span className="temp-section__count">
+                          {tc.productIds.length} pick{tc.productIds.length === 1 ? '' : 's'} this week
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="temp-section__view-all"
+                        onClick={() => {
+                          setTempCategoryKey(tc.autoKey);
+                          setCategory('All');
+                          setBrandFilter(null);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                      >
+                        View all →
+                      </button>
+                    </div>
+                    <div className="daily-essentials__row">
+                      {items.map((product) => (
+                        <article key={product.uniqueId} className="daily-essential-card">
+                          <div className="daily-essential-card__thumb">
+                            {product.imageUrl && (
+                              <img
+                                src={product.imageUrl}
+                                alt={product.name}
+                                loading="lazy"
+                                className="daily-essential-card__thumb-img"
+                              />
+                            )}
+                          </div>
+                          <div className="daily-essential-card__body">
+                            <strong className="daily-essential-card__name">{product.name}</strong>
+                            <span className="daily-essential-card__meta">{product.unitLabel}</span>
+                            <div className="daily-essential-card__price-row">
+                              <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                              {product.originalPriceCents && product.originalPriceCents > effectivePriceCents(product) ? (
+                                <span className="daily-essential-card__strike">
+                                  {formatCurrency(product.originalPriceCents)}
+                                </span>
+                              ) : null}
+                            </div>
+                            {cart[product.uniqueId] ? (
+                              <div className="qty-stepper">
+                                <button
+                                  type="button"
+                                  onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)}
+                                >−</button>
+                                <span>{cart[product.uniqueId]}</span>
+                                <button
+                                  type="button"
+                                  disabled={cart[product.uniqueId] >= product.stockQuantity}
+                                  onClick={() => updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)}
+                                >+</button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="daily-essential-card__add"
+                                disabled={product.stockQuantity <= 0}
+                                onClick={() => updateQuantity(product.uniqueId, 1)}
+                              >
+                                {product.stockQuantity <= 0 ? 'Sold out' : '+ Add'}
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
             </section>
           )}
 

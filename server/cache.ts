@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -6,10 +6,10 @@ let redis: Redis | null = null;
 
 if (REDIS_URL) {
   redis = new Redis(REDIS_URL, { lazyConnect: true, enableOfflineQueue: false });
-  redis.on('error', (err) => {
+  redis.on('error', (err: Error) => {
     console.warn('[cache] Redis error:', err.message);
   });
-  redis.connect().catch((err) => {
+  redis.connect().catch((err: Error) => {
     console.warn('[cache] Redis connect failed, caching disabled:', err.message);
     redis = null;
   });
