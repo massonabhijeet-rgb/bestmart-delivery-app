@@ -2207,7 +2207,7 @@ export async function getUserCategoryAffinity(
        JOIN orders o ON o.id = oi.order_id
        JOIN products p ON p.id = oi.product_id
        WHERE o.company_id = $1
-         AND o.user_id = $2
+         AND o.created_by_user_id = $2
          AND o.status <> 'cancelled'
          AND o.created_date >= NOW() - ($3 || ' days')::INTERVAL
          AND p.category_id IS NOT NULL
