@@ -123,6 +123,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<'new' | number>('new');
   const [forceCartView, setForceCartView] = useState(false);
+  const [cartPopoverOpen, setCartPopoverOpen] = useState(false);
   const [error, setError] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [liveLocation, setLiveLocation] = useState<{
@@ -1926,15 +1927,81 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       ) : null}
       </div>
       {isBrowsing && !forceCartView && cartCount > 0 ? (
-        <button
-          type="button"
-          className="cart-fab"
-          onClick={handleOpenCart}
-          aria-label={`Open cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}
-        >
-          <span className="cart-fab__icon" aria-hidden>🛒</span>
-          <span className="cart-fab__badge">{cartCount}</span>
-        </button>
+        <div className="cart-fab-wrap">
+          {cartPopoverOpen ? (
+            <>
+              <div
+                className="cart-popover__backdrop"
+                onClick={() => setCartPopoverOpen(false)}
+                aria-hidden
+              />
+              <div
+                className="cart-popover"
+                role="dialog"
+                aria-label="Cart preview"
+              >
+                <div className="cart-popover__head">
+                  <strong>Your cart</strong>
+                  <span>{cartCount} item{cartCount === 1 ? '' : 's'}</span>
+                </div>
+                <div className="cart-popover__list">
+                  {cartItems.map((item) => (
+                    <div key={item.product.uniqueId} className="cart-popover__row">
+                      <div className="cart-popover__row-info">
+                        <span className="cart-popover__row-name">{item.product.name}</span>
+                        <span className="cart-popover__row-price">
+                          {formatCurrency(lineTotalCents(item.product, item.quantity))}
+                        </span>
+                      </div>
+                      <div className="qty-stepper qty-stepper--compact">
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(item.product.uniqueId, item.quantity - 1)}
+                        >
+                          −
+                        </button>
+                        <span>{item.quantity}</span>
+                        <button
+                          type="button"
+                          disabled={item.quantity >= item.product.stockQuantity}
+                          onClick={() => updateQuantity(item.product.uniqueId, item.quantity + 1)}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="cart-popover__foot">
+                  <div className="cart-popover__subtotal">
+                    <span>Subtotal</span>
+                    <strong>{formatCurrency(subtotalCents)}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-button cart-popover__cta"
+                    onClick={() => {
+                      setCartPopoverOpen(false);
+                      handleOpenCart();
+                    }}
+                  >
+                    Checkout
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="cart-fab"
+            onClick={() => setCartPopoverOpen((v) => !v)}
+            aria-label={`${cartPopoverOpen ? 'Close' : 'Open'} cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}
+            aria-expanded={cartPopoverOpen}
+          >
+            <span className="cart-fab__icon" aria-hidden>🛒</span>
+            <span className="cart-fab__badge">{cartCount}</span>
+          </button>
+        </div>
       ) : null}
       {quickView ? (
         <QuickViewModal
