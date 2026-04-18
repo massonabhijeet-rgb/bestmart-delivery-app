@@ -1222,7 +1222,8 @@ export async function updateCoupon(
 ): Promise<CouponRecord | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
-  let i = 1;
+  // $1 = id, $2 = companyId (prepended via unshift below). SET params start at $3.
+  let i = 2;
   const push = (col: string, value: unknown) => {
     fields.push(`${col} = $${++i}`);
     values.push(value);
