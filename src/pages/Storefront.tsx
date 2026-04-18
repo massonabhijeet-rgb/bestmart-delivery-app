@@ -1031,6 +1031,81 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         </div>
       ) : !isBrowsing ? (
         <>
+          {offerProducts.length > 0 ? (
+            <LazyMount placeholderHeight={360}>
+            <section className="todays-offer">
+              <div className="todays-offer__head">
+                <div>
+                  <span className="todays-offer__badge">TODAY'S OFFER</span>
+                  <h2>Hand-picked deals, just for today</h2>
+                </div>
+              </div>
+              <div className="todays-offer__grid">
+                {offerProducts.map((product) => (
+                  <article key={product.uniqueId} className="todays-offer__card">
+                    <div className="todays-offer__thumb">
+                      {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="todays-offer__thumb-img" />}
+                      <span className="todays-offer__flag">
+                        {isBogoProduct(product) ? `Buy ${product.bogoBuyQty} Get ${product.bogoGetQty}` : 'Offer'}
+                      </span>
+                    </div>
+                    <div className="todays-offer__body">
+                      <strong>{product.name}</strong>
+                      <span className="todays-offer__meta">{product.unitLabel}</span>
+                      <div className="todays-offer__price-row">
+                        <strong>{formatCurrency(effectivePriceCents(product))}</strong>
+                        {isBogoProduct(product) ? (
+                          <span className="todays-offer__bogo">+{bogoGet(product)} FREE</span>
+                        ) : product.offerPriceCents != null &&
+                          product.offerPriceCents < product.priceCents ? (
+                          <span className="todays-offer__strike">
+                            {formatCurrency(product.priceCents)}
+                          </span>
+                        ) : product.originalPriceCents ? (
+                          <span className="todays-offer__strike">
+                            {formatCurrency(product.originalPriceCents)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {cart[product.uniqueId] ? (
+                        <div className="qty-stepper">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)
+                            }
+                          >
+                            -
+                          </button>
+                          <span>{cart[product.uniqueId]}</span>
+                          <button
+                            type="button"
+                            disabled={cart[product.uniqueId] >= product.stockQuantity}
+                            onClick={() =>
+                              updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)
+                            }
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={product.stockQuantity <= 0}
+                          onClick={() => updateQuantity(product.uniqueId, 1)}
+                        >
+                          {product.stockQuantity <= 0 ? 'Sold Out' : 'Add to cart'}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+            </LazyMount>
+          ) : null}
+
           {publicCoupons.length > 0 && (
             <section className="coupon-banners">
               <div className="coupon-banners__head">
@@ -1339,81 +1414,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </section>
             </LazyMount>
           )}
-
-          {offerProducts.length > 0 ? (
-            <LazyMount placeholderHeight={360}>
-            <section className="todays-offer">
-              <div className="todays-offer__head">
-                <div>
-                  <span className="todays-offer__badge">TODAY'S OFFER</span>
-                  <h2>Hand-picked deals, just for today</h2>
-                </div>
-              </div>
-              <div className="todays-offer__grid">
-                {offerProducts.map((product) => (
-                  <article key={product.uniqueId} className="todays-offer__card">
-                    <div className="todays-offer__thumb">
-                      {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="todays-offer__thumb-img" />}
-                      <span className="todays-offer__flag">
-                        {isBogoProduct(product) ? `Buy ${product.bogoBuyQty} Get ${product.bogoGetQty}` : 'Offer'}
-                      </span>
-                    </div>
-                    <div className="todays-offer__body">
-                      <strong>{product.name}</strong>
-                      <span className="todays-offer__meta">{product.unitLabel}</span>
-                      <div className="todays-offer__price-row">
-                        <strong>{formatCurrency(effectivePriceCents(product))}</strong>
-                        {isBogoProduct(product) ? (
-                          <span className="todays-offer__bogo">+{bogoGet(product)} FREE</span>
-                        ) : product.offerPriceCents != null &&
-                          product.offerPriceCents < product.priceCents ? (
-                          <span className="todays-offer__strike">
-                            {formatCurrency(product.priceCents)}
-                          </span>
-                        ) : product.originalPriceCents ? (
-                          <span className="todays-offer__strike">
-                            {formatCurrency(product.originalPriceCents)}
-                          </span>
-                        ) : null}
-                      </div>
-                      {cart[product.uniqueId] ? (
-                        <div className="qty-stepper">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateQuantity(product.uniqueId, cart[product.uniqueId] - 1)
-                            }
-                          >
-                            -
-                          </button>
-                          <span>{cart[product.uniqueId]}</span>
-                          <button
-                            type="button"
-                            disabled={cart[product.uniqueId] >= product.stockQuantity}
-                            onClick={() =>
-                              updateQuantity(product.uniqueId, cart[product.uniqueId] + 1)
-                            }
-                          >
-                            +
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={product.stockQuantity <= 0}
-                          onClick={() => updateQuantity(product.uniqueId, 1)}
-                        >
-                          {product.stockQuantity <= 0 ? 'Sold Out' : 'Add to cart'}
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-            </LazyMount>
-          ) : null}
 
           {!isBrowsing && homeRails && homeRails.bestsellers.length > 0 && (
             <LazyMount placeholderHeight={340}>
