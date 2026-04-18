@@ -14,6 +14,7 @@ import {
 } from '../lib/weatherPicks';
 import {
   apiAddProduct,
+  apiBulkImportProducts,
   apiCreateCategory,
   apiCreateUser,
   apiDeleteCategory,
@@ -152,7 +153,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [bulkRows, setBulkRows] = useState<BulkProductRow[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(0);
-  const [bulkResult, setBulkResult] = useState<{ done: number; failed: number; errors: string[] } | null>(null);
+  const [bulkResult, setBulkResult] = useState<{
+    done: number;
+    failed: number;
+    errors: string[];
+    skippedExisting?: number;
+    brandsCreated?: number;
+  } | null>(null);
   const [showBulkImagePanel, setShowBulkImagePanel] = useState(false);
   const [bulkImageFiles, setBulkImageFiles] = useState<File[]>([]);
   const [bulkImageUploading, setBulkImageUploading] = useState(false);
@@ -1197,34 +1204,19 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (valid.length === 0) return;
     setBulkImporting(true);
     setBulkProgress(0);
-    const errors: string[] = [];
     let done = 0;
+    let failed = 0;
+    let skippedExisting = 0;
+    let brandsCreated = 0;
+    const errors: string[] = [];
     await withBusy(`Importing ${valid.length} products…`, async () => {
-      const brandCache = new Map<string, number>(
-        brands.map((b) => [b.name.toLowerCase(), b.id]),
-      );
-      for (const row of valid) {
-        try {
-          let brandId = row.brandId;
-          if (brandId === null && row.brandName) {
-            const key = row.brandName.toLowerCase();
-            const cached = brandCache.get(key);
-            if (cached !== undefined) {
-              brandId = cached;
-            } else {
-              try {
-                const created = await apiCreateBrand(row.brandName);
-                brandId = created.id;
-                brandCache.set(key, created.id);
-              } catch {
-                // brand creation failed (e.g. race / duplicate) — proceed without brand
-              }
-            }
-          }
-          await apiAddProduct({
+      try {
+        const res = await apiBulkImportProducts(
+          valid.map((row) => ({
+            rowNum: row.rowNum,
             name: row.name,
-            categoryId: row.categoryId!,
-            brandId,
+            categoryName: row.categoryName,
+            brandName: row.brandName || null,
             unitLabel: row.unitLabel,
             description: row.description,
             priceCents: row.priceCents,
@@ -1233,15 +1225,25 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             badge: row.badge,
             imageUrl: row.imageUrl,
             isActive: row.isActive,
-          });
-          done++;
-        } catch (err) {
-          errors.push(`Row ${row.rowNum} (${row.name}): ${err instanceof Error ? err.message : 'Failed'}`);
+          })),
+        );
+        done = res.created;
+        skippedExisting = res.skippedExisting.length;
+        brandsCreated = res.brandsCreated;
+        for (const s of res.skippedExisting) {
+          errors.push(`Row ${s.rowNum} (${s.name}): already exists — skipped`);
         }
-        setBulkProgress(Math.round(((done + errors.length) / valid.length) * 100));
+        for (const s of res.skippedNoCategory) {
+          errors.push(`Row ${s.rowNum} (${s.name}): category "${s.categoryName}" not found — skipped`);
+        }
+        failed = res.skippedNoCategory.length;
+        setBulkProgress(100);
+      } catch (err) {
+        failed = valid.length;
+        errors.push(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     });
-    setBulkResult({ done, failed: errors.length, errors });
+    setBulkResult({ done, failed, errors, skippedExisting, brandsCreated });
     setBulkImporting(false);
     setBulkRows([]);
     await loadDashboard();
@@ -2514,6 +2516,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               <div className="bulk-result">
                 <div className={`bulk-result__banner${bulkResult.failed === 0 ? ' bulk-result__banner--success' : ' bulk-result__banner--partial'}`}>
                   <strong>{bulkResult.done} product{bulkResult.done !== 1 ? 's' : ''} imported successfully</strong>
+                  {bulkResult.brandsCreated ? <span>{bulkResult.brandsCreated} new brand{bulkResult.brandsCreated !== 1 ? 's' : ''} created</span> : null}
+                  {bulkResult.skippedExisting ? <span>{bulkResult.skippedExisting} duplicate{bulkResult.skippedExisting !== 1 ? 's' : ''} skipped</span> : null}
                   {bulkResult.failed > 0 && <span>{bulkResult.failed} rows failed</span>}
                 </div>
                 {bulkResult.errors.length > 0 && (

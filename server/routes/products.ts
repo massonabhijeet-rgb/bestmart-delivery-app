@@ -8,6 +8,7 @@ import {
   requireRole,
 } from '../middleware/auth.js';
 import {
+  bulkImportProducts,
   createProduct,
   deactivateProduct,
   getDefaultCompanyId,
@@ -17,6 +18,7 @@ import {
   setProductOffer,
   updateProduct,
   updateProductImage,
+  type BulkImportProductRow,
 } from '../db.js';
 import {
   TTL,
@@ -337,6 +339,75 @@ router.patch(
   }
 );
 
+
+router.post(
+  '/bulk-import',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const body = req.body as { products?: unknown };
+      if (!Array.isArray(body.products)) {
+        return res.status(400).json({ error: 'products array is required' });
+      }
+
+      const rows: BulkImportProductRow[] = [];
+      for (const raw of body.products as Array<Record<string, unknown>>) {
+        const name = String(raw.name ?? '').trim();
+        const categoryName = String(raw.categoryName ?? '').trim();
+        const unitLabel = String(raw.unitLabel ?? '').trim();
+        const description = String(raw.description ?? '').trim();
+        const priceCents = Number(raw.priceCents);
+        const stockQuantity = Number(raw.stockQuantity);
+        if (
+          !name ||
+          !categoryName ||
+          !unitLabel ||
+          !description ||
+          !Number.isFinite(priceCents) ||
+          !Number.isFinite(stockQuantity)
+        ) {
+          continue;
+        }
+        const brandRaw = raw.brandName == null ? '' : String(raw.brandName).trim();
+        const originalRaw = raw.originalPriceCents;
+        const originalPriceCents =
+          originalRaw == null || originalRaw === '' ? null : Number(originalRaw);
+        rows.push({
+          rowNum: Number(raw.rowNum) || 0,
+          name,
+          categoryName,
+          brandName: brandRaw || null,
+          unitLabel,
+          description,
+          priceCents,
+          originalPriceCents:
+            originalPriceCents != null && Number.isFinite(originalPriceCents)
+              ? originalPriceCents
+              : null,
+          stockQuantity,
+          badge: raw.badge ? String(raw.badge).trim() || null : null,
+          imageUrl: raw.imageUrl ? String(raw.imageUrl).trim() || null : null,
+          isActive: raw.isActive == null ? true : Boolean(raw.isActive),
+        });
+      }
+
+      const result = await bulkImportProducts(req.user.companyId, rows);
+
+      if (result.created > 0 || result.brandsCreated > 0) {
+        await cacheDelPattern(`bm:products:list:${req.user.companyId}:*`);
+      }
+
+      return res.json(result);
+    } catch (error) {
+      console.error('Bulk import error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 router.post(
   '/:uniqueId/upload-image',

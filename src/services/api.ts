@@ -284,6 +284,35 @@ export async function apiGetProducts(includeInactive = false) {
   return data.products;
 }
 
+export interface BulkImportRowInput {
+  rowNum: number;
+  name: string;
+  categoryName: string;
+  brandName: string | null;
+  unitLabel: string;
+  description: string;
+  priceCents: number;
+  originalPriceCents: number | null;
+  stockQuantity: number;
+  badge: string | null;
+  imageUrl: string | null;
+  isActive: boolean;
+}
+
+export interface BulkImportResponse {
+  created: number;
+  brandsCreated: number;
+  skippedExisting: Array<{ rowNum: number; name: string }>;
+  skippedNoCategory: Array<{ rowNum: number; name: string; categoryName: string }>;
+}
+
+export async function apiBulkImportProducts(products: BulkImportRowInput[]) {
+  return request<BulkImportResponse>('/products/bulk-import', {
+    method: 'POST',
+    body: JSON.stringify({ products }),
+  });
+}
+
 export async function apiAddProduct(product: Partial<Product>) {
   const data = await request<{ product: Product }>('/products', {
     method: 'POST',

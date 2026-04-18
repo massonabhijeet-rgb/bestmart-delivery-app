@@ -1882,6 +1882,184 @@ export async function createProduct(input: CreateProductInput) {
   return product;
 }
 
+// ── Bulk import (Excel upload) ────────────────────────────────────────
+// One transaction:
+//   1. Resolve every category & brand by case-insensitive slug.
+//   2. Bulk-insert any brands the file mentions but the company doesn't have yet
+//      (ON CONFLICT (company_id, slug) DO NOTHING — safe under races).
+//   3. Skip any incoming product whose slug already exists for the company.
+//   4. Bulk-insert all surviving rows in a single multi-VALUES INSERT.
+export interface BulkImportProductRow {
+  rowNum: number;
+  name: string;
+  categoryName: string;
+  brandName: string | null;
+  unitLabel: string;
+  description: string;
+  priceCents: number;
+  originalPriceCents: number | null;
+  stockQuantity: number;
+  badge: string | null;
+  imageUrl: string | null;
+  isActive: boolean;
+}
+
+export interface BulkImportResult {
+  created: number;
+  skippedExisting: Array<{ rowNum: number; name: string }>;
+  skippedNoCategory: Array<{ rowNum: number; name: string; categoryName: string }>;
+  brandsCreated: number;
+}
+
+export async function bulkImportProducts(
+  companyId: number,
+  rows: BulkImportProductRow[],
+): Promise<BulkImportResult> {
+  const result: BulkImportResult = {
+    created: 0,
+    skippedExisting: [],
+    skippedNoCategory: [],
+    brandsCreated: 0,
+  };
+  if (rows.length === 0) return result;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Categories — must already exist; rows whose category isn't found are skipped.
+    const catRes = await client.query<{ id: number; slug: string }>(
+      'SELECT id, slug FROM categories WHERE company_id = $1;',
+      [companyId],
+    );
+    const categoryBySlug = new Map(catRes.rows.map((r) => [r.slug, r.id]));
+
+    // 2. Brands — fetch existing, then insert any new slugs in one shot.
+    const brandRes = await client.query<{ id: number; slug: string }>(
+      'SELECT id, slug FROM brands WHERE company_id = $1;',
+      [companyId],
+    );
+    const brandBySlug = new Map(brandRes.rows.map((r) => [r.slug, r.id]));
+
+    const newBrands = new Map<string, string>(); // slug -> name
+    for (const r of rows) {
+      if (!r.brandName) continue;
+      const slug = toSlug(r.brandName);
+      if (!slug) continue;
+      if (!brandBySlug.has(slug) && !newBrands.has(slug)) {
+        newBrands.set(slug, r.brandName.trim());
+      }
+    }
+
+    if (newBrands.size > 0) {
+      const values: string[] = [];
+      const params: unknown[] = [];
+      let i = 1;
+      for (const [slug, name] of newBrands) {
+        values.push(`($${i++}, $${i++}, $${i++})`);
+        params.push(companyId, name, slug);
+      }
+      const insertRes = await client.query<{ id: number; slug: string }>(
+        `INSERT INTO brands (company_id, name, slug)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (company_id, slug) DO NOTHING
+         RETURNING id, slug;`,
+        params,
+      );
+      for (const row of insertRes.rows) brandBySlug.set(row.slug, row.id);
+      result.brandsCreated = insertRes.rowCount ?? 0;
+
+      // Re-fetch any conflicting rows we didn't get back from RETURNING.
+      const missing = [...newBrands.keys()].filter((s) => !brandBySlug.has(s));
+      if (missing.length > 0) {
+        const refetch = await client.query<{ id: number; slug: string }>(
+          `SELECT id, slug FROM brands WHERE company_id = $1 AND slug = ANY($2::text[]);`,
+          [companyId, missing],
+        );
+        for (const row of refetch.rows) brandBySlug.set(row.slug, row.id);
+      }
+    }
+
+    // 3. Existing product slugs — skip duplicates case-insensitively.
+    const productRes = await client.query<{ slug: string }>(
+      'SELECT slug FROM products WHERE company_id = $1;',
+      [companyId],
+    );
+    const existingProductSlugs = new Set(productRes.rows.map((r) => r.slug));
+    const seenInBatch = new Set<string>();
+
+    // 4. Build the bulk INSERT for surviving rows.
+    const insertValues: string[] = [];
+    const insertParams: unknown[] = [];
+    let p = 1;
+
+    for (const row of rows) {
+      const catSlug = toSlug(row.categoryName);
+      const categoryId = categoryBySlug.get(catSlug);
+      if (!categoryId) {
+        result.skippedNoCategory.push({
+          rowNum: row.rowNum,
+          name: row.name,
+          categoryName: row.categoryName,
+        });
+        continue;
+      }
+
+      const productSlug = toSlug(row.name);
+      if (!productSlug) continue;
+      if (existingProductSlugs.has(productSlug) || seenInBatch.has(productSlug)) {
+        result.skippedExisting.push({ rowNum: row.rowNum, name: row.name });
+        continue;
+      }
+      seenInBatch.add(productSlug);
+
+      const brandSlug = row.brandName ? toSlug(row.brandName) : '';
+      const brandId = brandSlug ? brandBySlug.get(brandSlug) ?? null : null;
+
+      insertValues.push(
+        `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`,
+      );
+      insertParams.push(
+        uuidv4(),
+        companyId,
+        row.name,
+        productSlug,
+        categoryId,
+        row.description,
+        row.unitLabel,
+        row.priceCents,
+        row.originalPriceCents,
+        row.stockQuantity,
+        row.badge,
+        row.imageUrl,
+        row.isActive,
+        false, // is_on_offer
+        brandId,
+      );
+    }
+
+    if (insertValues.length > 0) {
+      const insertRes = await client.query(
+        `INSERT INTO products (
+           unique_id, company_id, name, slug, category_id,
+           description, unit_label, price_cents, original_price_cents,
+           stock_quantity, badge, image_url, is_active, is_on_offer, brand_id
+         ) VALUES ${insertValues.join(', ')};`,
+        insertParams,
+      );
+      result.created = insertRes.rowCount ?? 0;
+    }
+
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function updateProduct(input: UpdateProductInput) {
   const updated = await pool.query<{ id: number }>(
     `
