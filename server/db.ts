@@ -2557,6 +2557,41 @@ export async function deactivateProduct(uniqueId: string, companyId: number) {
   return (result.rowCount ?? 0) > 0;
 }
 
+export async function restoreProduct(uniqueId: string, companyId: number) {
+  const result = await pool.query(
+    `
+      UPDATE products
+      SET is_active = TRUE, updated_date = NOW()
+      WHERE unique_id = $1 AND company_id = $2
+      RETURNING id;
+    `,
+    [uniqueId, companyId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// Permanent delete. Blocks if the product has any order history so order rows
+// keep their product reference — caller should surface the hasOrders signal.
+export async function hardDeleteProduct(
+  uniqueId: string,
+  companyId: number,
+): Promise<{ deleted: boolean; notFound: boolean; hasOrders: boolean }> {
+  const found = await pool.query<{ id: number; hasOrders: boolean }>(
+    `
+      SELECT p.id,
+        EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.id) AS "hasOrders"
+      FROM products p
+      WHERE p.unique_id = $1 AND p.company_id = $2;
+    `,
+    [uniqueId, companyId]
+  );
+  if (!found.rowCount) return { deleted: false, notFound: true, hasOrders: false };
+  const { id, hasOrders } = found.rows[0];
+  if (hasOrders) return { deleted: false, notFound: false, hasOrders: true };
+  await pool.query(`DELETE FROM products WHERE id = $1;`, [id]);
+  return { deleted: true, notFound: false, hasOrders: false };
+}
+
 export async function updateProductImage(
   uniqueId: string,
   companyId: number,
@@ -2671,12 +2706,81 @@ export async function updateBrand(
   return result.rows[0] ?? null;
 }
 
-export async function deleteBrand(companyId: number, id: number): Promise<boolean> {
-  const result = await pool.query(
-    `DELETE FROM brands WHERE id = $1 AND company_id = $2;`,
+// Cascade-delete a brand along with its products. Products with existing order
+// history are archived and detached from the brand (to preserve order refs);
+// products with no orders are hard-deleted. Mirrors deleteCategory semantics.
+export async function deleteBrand(
+  companyId: number,
+  id: number,
+): Promise<{ deleted: boolean; productsDeleted: number; productsArchived: number }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const productsInBrand = await client.query<{ id: number; hasOrders: boolean }>(
+      `
+        SELECT p.id,
+          EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.id) AS "hasOrders"
+        FROM products p
+        WHERE p.brand_id = $1 AND p.company_id = $2;
+      `,
+      [id, companyId]
+    );
+
+    let archivedCount = 0;
+    let deletedCount = 0;
+    for (const row of productsInBrand.rows) {
+      if (row.hasOrders) {
+        await client.query(
+          `UPDATE products SET is_active = FALSE, brand_id = NULL, updated_date = NOW() WHERE id = $1;`,
+          [row.id]
+        );
+        archivedCount += 1;
+      } else {
+        await client.query(`DELETE FROM products WHERE id = $1;`, [row.id]);
+        deletedCount += 1;
+      }
+    }
+
+    const result = await client.query(
+      `DELETE FROM brands WHERE id = $1 AND company_id = $2;`,
+      [id, companyId]
+    );
+
+    await client.query('COMMIT');
+    return {
+      deleted: (result.rowCount ?? 0) > 0,
+      productsDeleted: deletedCount,
+      productsArchived: archivedCount,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Preview counts so the UI can warn the admin before they confirm.
+export async function getBrandDeletionImpact(
+  companyId: number,
+  id: number,
+): Promise<{ totalProducts: number; withOrders: number; withoutOrders: number }> {
+  const result = await pool.query<{ total: string; withOrders: string }>(
+    `
+      SELECT
+        COUNT(*)::text AS total,
+        COUNT(*) FILTER (
+          WHERE EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.id)
+        )::text AS "withOrders"
+      FROM products p
+      WHERE p.brand_id = $1 AND p.company_id = $2;
+    `,
     [id, companyId]
   );
-  return (result.rowCount ?? 0) > 0;
+  const total = Number(result.rows[0]?.total ?? 0);
+  const withOrders = Number(result.rows[0]?.withOrders ?? 0);
+  return { totalProducts: total, withOrders, withoutOrders: total - withOrders };
 }
 
 // ── Temporary auto-curated categories ────────────────────────────────

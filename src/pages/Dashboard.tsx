@@ -19,9 +19,13 @@ import {
   apiCreateUser,
   apiDeleteCategory,
   apiDeleteProduct,
+  apiRestoreProduct,
+  apiHardDeleteProduct,
+  apiGetBrandDeletionImpact,
   apiGetInventorySummary,
   apiGetProductNameIndex,
   apiGetProducts,
+  apiGetProductsPage,
   apiGetSummary,
   apiListCategories,
   apiListOrders,
@@ -146,6 +150,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   // initial dashboard load light. Aggregates come from inventorySummary.
   const [productsLoaded, setProductsLoaded] = useState(false);
   const [productsLoading, setProductsLoading] = useState(false);
+  // Paginated inventory list — independent from the full `products` cache so
+  // the admin inventory page stays snappy on big catalogs.
+  const [inventoryItems, setInventoryItems] = useState<Product[]>([]);
+  const [inventoryTotal, setInventoryTotal] = useState(0);
+  const [inventoryPage, setInventoryPage] = useState(1);
+  const [inventoryPageSize, setInventoryPageSize] = useState(50);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventorySearchDebounced, setInventorySearchDebounced] = useState('');
   const [inventorySummary, setInventorySummary] = useState<InventorySummary | null>(null);
   // Lazy index for the bulk-image picker (replaces full-catalog client load).
   const [productNameIndex, setProductNameIndex] = useState<ProductNameIndexEntry[] | null>(null);
@@ -183,12 +195,18 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [bulkImageDragging, setBulkImageDragging] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [hardDeletingId, setHardDeletingId] = useState<string | null>(null);
+  const [savingFieldId, setSavingFieldId] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [statusChangingId, setStatusChangingId] = useState<string | null>(null);
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [savingCategoryId, setSavingCategoryId] = useState<number | null>(null);
   const [deletingCategoryId, setDeletingCategoryId] = useState<number | null>(null);
+  const [deletingBrandId, setDeletingBrandId] = useState<number | null>(null);
+  const [newBrandName, setNewBrandName] = useState('');
+  const [creatingBrand, setCreatingBrand] = useState(false);
   const [togglingOfferId, setTogglingOfferId] = useState<string | null>(null);
   const [uploadingCategoryImageId, setUploadingCategoryImageId] = useState<number | null>(null);
   const [creatingUser, setCreatingUser] = useState(false);
@@ -376,14 +394,46 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }, [canManageCatalog, productsLoading, productsLoaded]);
 
-  // Refresh both the inventory aggregates and the cached product list (when
-  // present). Called after create/update/delete/offer/import operations.
+  const loadInventoryPage = useCallback(async () => {
+    if (!canManageCatalog) return;
+    setInventoryLoading(true);
+    try {
+      const result = await apiGetProductsPage({
+        admin: true,
+        page: inventoryPage,
+        pageSize: inventoryPageSize,
+        q: inventorySearchDebounced || null,
+        categoryId:
+          inventoryCategoryFilter === 'all' ? null : inventoryCategoryFilter,
+        status: inventoryStatusFilter,
+        sort: inventorySort,
+      });
+      setInventoryItems(result.products);
+      setInventoryTotal(result.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load inventory');
+    } finally {
+      setInventoryLoading(false);
+    }
+  }, [
+    canManageCatalog,
+    inventoryPage,
+    inventoryPageSize,
+    inventorySearchDebounced,
+    inventoryCategoryFilter,
+    inventoryStatusFilter,
+    inventorySort,
+  ]);
+
+  // Refresh aggregates, the current inventory page, and (when already cached)
+  // the full product list. Called after create/update/delete/offer/import ops.
   const refreshInventory = useCallback(async () => {
     if (!canManageCatalog) return;
     try {
       const [summary, list] = await Promise.all([
         apiGetInventorySummary(),
         productsLoaded ? apiGetProducts(true) : Promise.resolve(null),
+        loadInventoryPage(),
       ]);
       setInventorySummary(summary);
       if (list) setProducts(list);
@@ -392,7 +442,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     } catch (err) {
       console.warn('Refresh inventory failed', err);
     }
-  }, [canManageCatalog, productsLoaded]);
+  }, [canManageCatalog, productsLoaded, loadInventoryPage]);
 
   useEffect(() => {
     void loadDashboard();
@@ -400,13 +450,35 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }, [loadDashboard]);
 
   // First time the admin lands on a tab that needs the full product list,
-  // fetch it. After that it stays cached (and gets refreshed on edits).
+  // fetch it. Inventory uses its own paginated loader; Offers / Categories
+  // still need the complete cache for their cross-cutting lookups.
   useEffect(() => {
     if (!canManageCatalog) return;
-    if (activeTab === 'inventory' || activeTab === 'offers') {
+    if (activeTab === 'offers' || activeTab === 'categories') {
       void loadProducts();
     }
   }, [activeTab, canManageCatalog, loadProducts]);
+
+  // Debounce the inventory search input so typing doesn't fire a query per keystroke.
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setInventorySearchDebounced(inventorySearch.trim());
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [inventorySearch]);
+
+  // Any time a filter/search/sort changes, jump back to page 1.
+  useEffect(() => {
+    setInventoryPage(1);
+  }, [inventorySearchDebounced, inventoryCategoryFilter, inventoryStatusFilter, inventorySort]);
+
+  // Fetch the current inventory page whenever its inputs change and the tab
+  // is open. Refetches on page/filter/sort change via loadInventoryPage deps.
+  useEffect(() => {
+    if (!canManageCatalog) return;
+    if (activeTab !== 'inventory') return;
+    void loadInventoryPage();
+  }, [activeTab, canManageCatalog, loadInventoryPage]);
 
   // Live clock — ticks every minute on the Overview tab.
   useEffect(() => {
@@ -580,32 +652,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     });
   }, [orders, orderFilter, orderSearch]);
 
-  const filteredProducts = useMemo(() => {
-    let result = products;
-
-    if (inventoryStatusFilter === 'active') result = result.filter((p) => p.isActive);
-    else if (inventoryStatusFilter === 'archived') result = result.filter((p) => !p.isActive);
-    else if (inventoryStatusFilter === 'low_stock') result = result.filter((p) => p.stockQuantity <= 5);
-
-    if (inventoryCategoryFilter !== 'all') {
-      result = result.filter((p) => p.categoryId === inventoryCategoryFilter);
-    }
-
-    const term = inventorySearch.trim();
-    if (term) {
-      result = fuzzyRank(term, result, (p) => [p.name, p.category, p.description, p.badge, p.unitLabel]);
-    } else if (inventorySort !== 'default') {
-      result = [...result].sort((a, b) => {
-        if (inventorySort === 'price_asc') return a.priceCents - b.priceCents;
-        if (inventorySort === 'price_desc') return b.priceCents - a.priceCents;
-        if (inventorySort === 'stock_asc') return a.stockQuantity - b.stockQuantity;
-        if (inventorySort === 'stock_desc') return b.stockQuantity - a.stockQuantity;
-        return 0;
-      });
-    }
-
-    return result;
-  }, [products, inventorySearch, inventoryCategoryFilter, inventoryStatusFilter, inventorySort]);
+  // Inventory rendering uses `inventoryItems` + `inventoryTotal` from the
+  // paginated server loader — no client-side filter memo needed here.
 
   function resetProductEditor() {
     setEditingId(null);
@@ -729,16 +777,71 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }
 
+  async function handleInlineProductUpdate(
+    uniqueId: string,
+    patch: { categoryId?: number; brandId?: number | null },
+  ) {
+    setSavingFieldId(uniqueId);
+    try {
+      const updated = await apiUpdateProduct(uniqueId, patch as Partial<Product>);
+      setInventoryItems((list) =>
+        list.map((p) => (p.uniqueId === uniqueId ? updated : p)),
+      );
+      setProducts((list) =>
+        list.map((p) => (p.uniqueId === uniqueId ? updated : p)),
+      );
+      setNotice('Updated.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update product');
+    } finally {
+      setSavingFieldId(null);
+    }
+  }
+
   async function handleArchive(uniqueId: string) {
     setArchivingId(uniqueId);
     try {
       await apiDeleteProduct(uniqueId);
-      setNotice('Product archived.');
+      setNotice('Product moved to trash.');
       await refreshInventory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to archive product');
+      setError(err instanceof Error ? err.message : 'Unable to delete product');
     } finally {
       setArchivingId(null);
+    }
+  }
+
+  async function handleRestoreProduct(uniqueId: string) {
+    setRestoringId(uniqueId);
+    try {
+      await apiRestoreProduct(uniqueId);
+      setNotice('Product restored.');
+      await refreshInventory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to restore product');
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  async function handleHardDeleteProduct(uniqueId: string, name: string) {
+    const confirmed = await confirm({
+      title: 'Permanently delete this product?',
+      message: `${name} will be permanently removed. This cannot be undone. Products with past orders cannot be hard-deleted — they stay in trash to keep order history intact.`,
+      confirmLabel: 'Delete permanently',
+      cancelLabel: 'Keep in trash',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setHardDeletingId(uniqueId);
+    try {
+      await apiHardDeleteProduct(uniqueId);
+      setNotice('Product permanently deleted.');
+      await refreshInventory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to permanently delete product');
+    } finally {
+      setHardDeletingId(null);
     }
   }
 
@@ -930,6 +1033,64 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError(err instanceof Error ? err.message : 'Unable to delete category');
     } finally {
       setDeletingCategoryId(null);
+    }
+  }
+
+  async function handleCreateBrand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = newBrandName.trim();
+    if (!name) return;
+    setCreatingBrand(true);
+    try {
+      const created = await apiCreateBrand(name);
+      setBrands((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewBrandName('');
+      setNotice(`Brand "${name}" created.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create brand');
+    } finally {
+      setCreatingBrand(false);
+    }
+  }
+
+  async function handleDeleteBrand(brand: Brand) {
+    let impactLine = '';
+    try {
+      const impact = await apiGetBrandDeletionImpact(brand.id);
+      if (impact.totalProducts > 0) {
+        const pieces: string[] = [];
+        if (impact.withoutOrders > 0) pieces.push(`${impact.withoutOrders} will be permanently deleted`);
+        if (impact.withOrders > 0) pieces.push(`${impact.withOrders} with past orders will be moved to trash`);
+        impactLine = `This brand has ${impact.totalProducts} product(s). ${pieces.join(' · ')}.\n\n`;
+      }
+    } catch {
+      // If the impact lookup fails, fall back to a generic warning.
+      impactLine = 'All products under this brand will be affected.\n\n';
+    }
+
+    const confirmed = await confirm({
+      title: `Delete brand "${brand.name}"?`,
+      message: `${impactLine}This action cannot be undone.`,
+      confirmLabel: 'Delete Brand',
+      cancelLabel: 'Keep Brand',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    setDeletingBrandId(brand.id);
+    try {
+      const result = await apiDeleteBrand(brand.id);
+      const parts: string[] = [`Brand "${brand.name}" deleted.`];
+      if (result.productsDeleted) parts.push(`${result.productsDeleted} product(s) deleted.`);
+      if (result.productsArchived) parts.push(`${result.productsArchived} moved to trash.`);
+      setNotice(parts.join(' '));
+      setError('');
+      const [brandList] = await Promise.all([apiListBrands(), refreshInventory()]);
+      setBrands(brandList);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete brand');
+    } finally {
+      setDeletingBrandId(null);
     }
   }
 
@@ -1657,7 +1818,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               className="inv-snapshot__cell"
               onClick={() => { setActiveTab('inventory'); setInventoryStatusFilter('archived'); }}
             >
-              <span className="inv-snapshot__label">Archived</span>
+              <span className="inv-snapshot__label">Trash</span>
               <strong className="inv-snapshot__value">{archivedProducts}</strong>
             </button>
             <button
@@ -3139,7 +3300,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               [
                 { key: 'all', label: 'All', count: inventorySummary?.totalProducts ?? 0 },
                 { key: 'active', label: 'Active', count: inventorySummary?.activeProducts ?? 0 },
-                { key: 'archived', label: 'Archived', count: inventorySummary?.archivedProducts ?? 0 },
+                { key: 'archived', label: 'Trash', count: inventorySummary?.archivedProducts ?? 0 },
                 { key: 'low_stock', label: 'Low Stock', count: (inventorySummary?.lowStock ?? 0) + (inventorySummary?.outOfStock ?? 0) },
               ] as Array<{ key: typeof inventoryStatusFilter; label: string; count: number }>
             ).map((f) => (
@@ -3187,11 +3348,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
           {/* Result count */}
           <div className="inv-results-meta">
-            {inventorySearch
-              ? <>Showing <strong>{filteredProducts.length}</strong> result{filteredProducts.length !== 1 ? 's' : ''} for "<em>{inventorySearch}</em>"</>
-              : productsLoading
-                ? <>Loading inventory…</>
-                : <><strong>{filteredProducts.length}</strong> of {inventorySummary?.totalProducts ?? products.length} products</>
+            {inventoryLoading
+              ? <>Loading inventory…</>
+              : inventorySearch
+                ? <>Showing <strong>{inventoryTotal}</strong> result{inventoryTotal !== 1 ? 's' : ''} for "<em>{inventorySearch}</em>"</>
+                : <><strong>{inventoryTotal}</strong> of {inventorySummary?.totalProducts ?? inventoryTotal} products</>
             }
             {(inventorySearch || inventoryStatusFilter !== 'all' || inventoryCategoryFilter !== 'all') && (
               <button
@@ -3211,10 +3372,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         </div>
 
         <div className="inventory-list">
-          {filteredProducts.length === 0 && (
+          {!inventoryLoading && inventoryItems.length === 0 && (
             <p className="empty-state">No products match your search.</p>
           )}
-          {filteredProducts.map((product) => {
+          {inventoryItems.map((product) => {
             const stockPct = Math.min(100, Math.round((product.stockQuantity / 100) * 100));
             const isLow = product.stockQuantity <= 5;
             return (
@@ -3237,15 +3398,59 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                     {product.badge && <span className="inv-card__badge">{product.badge}</span>}
                   </div>
                   <div className="inv-card__meta">
-                    {product.brand && (
+                    {canManageCatalog ? (
                       <>
-                        <span className="inv-card__brand">{product.brand}</span>
+                        <select
+                          className="inv-card__inline-select"
+                          value={product.categoryId ?? ''}
+                          disabled={savingFieldId === product.uniqueId || !product.isActive}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            if (next && next !== product.categoryId) {
+                              void handleInlineProductUpdate(product.uniqueId, { categoryId: next });
+                            }
+                          }}
+                          title="Change category"
+                        >
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
                         <span className="inv-card__dot">·</span>
+                        <select
+                          className="inv-card__inline-select"
+                          value={product.brandId ?? ''}
+                          disabled={savingFieldId === product.uniqueId || !product.isActive}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const next = raw === '' ? null : Number(raw);
+                            if (next !== product.brandId) {
+                              void handleInlineProductUpdate(product.uniqueId, { brandId: next });
+                            }
+                          }}
+                          title="Change brand"
+                        >
+                          <option value="">No brand</option>
+                          {brands.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                        <span className="inv-card__dot">·</span>
+                        <span>{product.unitLabel}</span>
+                      </>
+                    ) : (
+                      <>
+                        {product.brand && (
+                          <>
+                            <span className="inv-card__brand">{product.brand}</span>
+                            <span className="inv-card__dot">·</span>
+                          </>
+                        )}
+                        <span>{product.category ?? 'Uncategorised'}</span>
+                        <span className="inv-card__dot">·</span>
+                        <span>{product.unitLabel}</span>
                       </>
                     )}
-                    <span>{product.category ?? 'Uncategorised'}</span>
-                    <span className="inv-card__dot">·</span>
-                    <span>{product.unitLabel}</span>
                   </div>
                 </div>
 
@@ -3270,61 +3475,178 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
                 <div className="inv-card__status-col">
                   <span className={`inv-card__status${product.isActive ? ' inv-card__status--live' : ''}`}>
-                    {product.isActive ? 'Live' : 'Archived'}
+                    {product.isActive ? 'Live' : 'In Trash'}
                   </span>
                   {product.isOnOffer && <span className="inv-card__offer-tag">On offer</span>}
                 </div>
 
                 {canManageCatalog && (
                   <div className="inv-card__actions">
-                    <button
-                      type="button"
-                      className="inv-card__btn"
-                      onClick={() => {
-                        setEditingId(product.uniqueId);
-                        setProductImagePreview(null);
-                        const linkAnchor = product.variantGroupId
-                          ? products.find((p) => p.id === product.variantGroupId)
-                          : null;
-                        setProductForm({
-                          name: product.name,
-                          categoryId: product.categoryId ? String(product.categoryId) : '',
-                          brandId: product.brandId ? String(product.brandId) : '',
-                          unitLabel: product.unitLabel,
-                          description: product.description,
-                          price: String(product.priceCents / 100),
-                          originalPrice: product.originalPriceCents ? String(product.originalPriceCents / 100) : '',
-                          stockQuantity: String(product.stockQuantity),
-                          badge: product.badge ?? '',
-                          imageUrl: product.imageUrl ?? '',
-                          isActive: product.isActive,
-                          variantGroupId: product.variantGroupId ? String(product.variantGroupId) : '',
-                          variantLinkLabel: linkAnchor
-                            ? `${linkAnchor.name} · ${linkAnchor.unitLabel}`
-                            : product.variantGroupId
-                              ? `Group #${product.variantGroupId}`
-                              : '',
-                        });
-                        setProductImage(null);
-                        setShowProductEditor(true);
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="inv-card__btn inv-card__btn--danger"
-                      onClick={() => handleArchive(product.uniqueId)}
-                      disabled={archivingId === product.uniqueId}
-                    >
-                      {archivingId === product.uniqueId ? 'Archiving…' : 'Archive'}
-                    </button>
+                    {product.isActive ? (
+                      <>
+                        <button
+                          type="button"
+                          className="inv-card__icon-btn"
+                          title="Edit product"
+                          aria-label="Edit product"
+                          onClick={() => {
+                            setEditingId(product.uniqueId);
+                            setProductImagePreview(null);
+                            const linkAnchor = product.variantGroupId
+                              ? products.find((p) => p.id === product.variantGroupId)
+                              : null;
+                            setProductForm({
+                              name: product.name,
+                              categoryId: product.categoryId ? String(product.categoryId) : '',
+                              brandId: product.brandId ? String(product.brandId) : '',
+                              unitLabel: product.unitLabel,
+                              description: product.description,
+                              price: String(product.priceCents / 100),
+                              originalPrice: product.originalPriceCents ? String(product.originalPriceCents / 100) : '',
+                              stockQuantity: String(product.stockQuantity),
+                              badge: product.badge ?? '',
+                              imageUrl: product.imageUrl ?? '',
+                              isActive: product.isActive,
+                              variantGroupId: product.variantGroupId ? String(product.variantGroupId) : '',
+                              variantLinkLabel: linkAnchor
+                                ? `${linkAnchor.name} · ${linkAnchor.unitLabel}`
+                                : product.variantGroupId
+                                  ? `Group #${product.variantGroupId}`
+                                  : '',
+                            });
+                            setProductImage(null);
+                            setShowProductEditor(true);
+                          }}
+                        >
+                          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                            <path d="M13 3l4 4-9 9H4v-4l9-9z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          className="inv-card__icon-btn inv-card__icon-btn--danger"
+                          title="Move to trash"
+                          aria-label="Move to trash"
+                          onClick={() => handleArchive(product.uniqueId)}
+                          disabled={archivingId === product.uniqueId}
+                        >
+                          {archivingId === product.uniqueId ? (
+                            <span className="inv-card__icon-spinner" aria-hidden="true" />
+                          ) : (
+                            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                              <path d="M3 6h14M8 6V4h4v2M6 6l1 11h6l1-11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="inv-card__icon-btn"
+                          title="Restore from trash"
+                          aria-label="Restore from trash"
+                          onClick={() => handleRestoreProduct(product.uniqueId)}
+                          disabled={restoringId === product.uniqueId}
+                        >
+                          {restoringId === product.uniqueId ? (
+                            <span className="inv-card__icon-spinner" aria-hidden="true" />
+                          ) : (
+                            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                              <path d="M4 10a6 6 0 1 1 2 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                              <path d="M3 5v4h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="inv-card__icon-btn inv-card__icon-btn--danger"
+                          title="Delete permanently"
+                          aria-label="Delete permanently"
+                          onClick={() => handleHardDeleteProduct(product.uniqueId, product.name)}
+                          disabled={hardDeletingId === product.uniqueId}
+                        >
+                          {hardDeletingId === product.uniqueId ? (
+                            <span className="inv-card__icon-spinner" aria-hidden="true" />
+                          ) : (
+                            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                              <path d="M3 6h14M8 6V4h4v2M6 6l1 11h6l1-11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                              <path d="M8 9l4 6M12 9l-4 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                            </svg>
+                          )}
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </article>
             );
           })}
         </div>
+
+        {inventoryTotal > 0 && (() => {
+          const totalPages = Math.max(1, Math.ceil(inventoryTotal / inventoryPageSize));
+          const start = (inventoryPage - 1) * inventoryPageSize + 1;
+          const end = Math.min(inventoryPage * inventoryPageSize, inventoryTotal);
+          return (
+            <div className="inv-pagination">
+              <div className="inv-pagination__info">
+                Showing {start}–{end} of {inventoryTotal}
+              </div>
+              <div className="inv-pagination__controls">
+                <button
+                  type="button"
+                  className="inv-pagination__btn"
+                  onClick={() => setInventoryPage(1)}
+                  disabled={inventoryPage <= 1 || inventoryLoading}
+                >
+                  « First
+                </button>
+                <button
+                  type="button"
+                  className="inv-pagination__btn"
+                  onClick={() => setInventoryPage((p) => Math.max(1, p - 1))}
+                  disabled={inventoryPage <= 1 || inventoryLoading}
+                >
+                  ‹ Prev
+                </button>
+                <span className="inv-pagination__page">
+                  Page {inventoryPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="inv-pagination__btn"
+                  onClick={() => setInventoryPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={inventoryPage >= totalPages || inventoryLoading}
+                >
+                  Next ›
+                </button>
+                <button
+                  type="button"
+                  className="inv-pagination__btn"
+                  onClick={() => setInventoryPage(totalPages)}
+                  disabled={inventoryPage >= totalPages || inventoryLoading}
+                >
+                  Last »
+                </button>
+                <select
+                  className="inv-pagination__size"
+                  value={inventoryPageSize}
+                  onChange={(e) => {
+                    setInventoryPageSize(Number(e.target.value));
+                    setInventoryPage(1);
+                  }}
+                  disabled={inventoryLoading}
+                >
+                  <option value={25}>25 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                  <option value={200}>200 / page</option>
+                </select>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -3333,7 +3655,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
      TEAM
   ──────────────────────────────────────── */
   function renderCategories() {
+    const brandProductCounts = new Map<number, number>();
+    for (const p of products) {
+      if (p.brandId != null) {
+        brandProductCounts.set(p.brandId, (brandProductCounts.get(p.brandId) ?? 0) + 1);
+      }
+    }
     return (
+      <>
       <div className="section-box">
         <div className="section-box__head">
           <div>
@@ -3505,6 +3834,70 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           })()}
         </div>
       </div>
+
+      <div className="section-box">
+        <div className="section-box__head">
+          <div>
+            <h2>Brands</h2>
+            <p>{brands.length} brand{brands.length !== 1 ? 's' : ''}</p>
+          </div>
+        </div>
+
+        {canManageCatalog && (
+          <form className="cat-create-bar" onSubmit={handleCreateBrand}>
+            <div className="cat-create-bar__inner">
+              <svg className="cat-create-bar__icon" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="7.5" stroke="currentColor" strokeWidth="1.6" />
+                <path d="M10 7v6M7 10h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              <input
+                className="cat-create-bar__input"
+                value={newBrandName}
+                onChange={(e) => setNewBrandName(e.target.value)}
+                placeholder="New brand name…"
+              />
+            </div>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={!newBrandName.trim() || creatingBrand}
+            >
+              {creatingBrand ? 'Adding…' : 'Add Brand'}
+            </button>
+          </form>
+        )}
+
+        <div className="brand-list">
+          {brands.length === 0 && (
+            <p className="empty-state">No brands yet.</p>
+          )}
+          {brands.map((b) => {
+            const count = brandProductCounts.get(b.id) ?? 0;
+            return (
+              <div key={b.id} className="brand-row">
+                <div className="brand-row__info">
+                  <span className="brand-row__name">{b.name}</span>
+                  <span className="brand-row__count">
+                    {count} product{count !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {canManageCatalog && (
+                  <button
+                    type="button"
+                    className="cat-card__btn cat-card__btn--danger"
+                    title={count > 0 ? `${count} product(s) will be affected` : 'Delete brand'}
+                    onClick={() => handleDeleteBrand(b)}
+                    disabled={deletingBrandId === b.id}
+                  >
+                    {deletingBrandId === b.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      </>
     );
   }
 

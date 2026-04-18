@@ -15,11 +15,13 @@ import {
   getInventorySummary,
   getProductByUniqueId,
   getStorefrontSpotlight,
+  hardDeleteProduct,
   listProducts,
   listProductNameIndex,
   listProductsPage,
   listProductVariants,
   listSlowMovers,
+  restoreProduct,
   setProductOffer,
   updateProduct,
   updateProductImage,
@@ -416,7 +418,49 @@ router.delete(
       cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
       cacheDel(key.productDetail(req.user.companyId, uniqueId)),
     ]);
-    return res.json({ message: 'Product archived' });
+    return res.json({ message: 'Product moved to trash' });
+  }
+);
+
+router.post(
+  '/:uniqueId/restore',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    const uniqueId = getRouteParam(req.params.uniqueId);
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    if (!uniqueId) return res.status(400).json({ error: 'Product ID is required' });
+    const ok = await restoreProduct(uniqueId, req.user.companyId);
+    if (!ok) return res.status(404).json({ error: 'Product not found' });
+    await Promise.all([
+      cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
+      cacheDel(key.productDetail(req.user.companyId, uniqueId)),
+    ]);
+    return res.json({ message: 'Product restored' });
+  }
+);
+
+router.delete(
+  '/:uniqueId/permanent',
+  authenticateToken,
+  requireRole('admin'),
+  async (req: AuthenticatedRequest, res) => {
+    const uniqueId = getRouteParam(req.params.uniqueId);
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    if (!uniqueId) return res.status(400).json({ error: 'Product ID is required' });
+    const result = await hardDeleteProduct(uniqueId, req.user.companyId);
+    if (result.notFound) return res.status(404).json({ error: 'Product not found' });
+    if (result.hasOrders) {
+      return res.status(409).json({
+        error:
+          'This product has past orders and cannot be permanently deleted. It will stay in trash so order history keeps working.',
+      });
+    }
+    await Promise.all([
+      cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
+      cacheDel(key.productDetail(req.user.companyId, uniqueId)),
+    ]);
+    return res.json({ message: 'Product permanently deleted' });
   }
 );
 

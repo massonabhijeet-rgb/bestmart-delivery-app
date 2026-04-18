@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createBrand,
   deleteBrand,
+  getBrandDeletionImpact,
   getDefaultCompanyId,
   listBrands,
   updateBrand,
@@ -73,6 +74,19 @@ router.patch(
   }
 );
 
+router.get(
+  '/:id/deletion-impact',
+  authenticateToken,
+  requireRole('admin'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid brand id' });
+    const impact = await getBrandDeletionImpact(req.user.companyId, id);
+    return res.json({ impact });
+  }
+);
+
 router.delete(
   '/:id',
   authenticateToken,
@@ -81,9 +95,13 @@ router.delete(
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid brand id' });
-    const ok = await deleteBrand(req.user.companyId, id);
-    if (!ok) return res.status(404).json({ error: 'Brand not found' });
-    return res.json({ ok: true });
+    const result = await deleteBrand(req.user.companyId, id);
+    if (!result.deleted) return res.status(404).json({ error: 'Brand not found' });
+    return res.json({
+      ok: true,
+      productsDeleted: result.productsDeleted,
+      productsArchived: result.productsArchived,
+    });
   }
 );
 

@@ -429,6 +429,18 @@ export async function apiDeleteProduct(uniqueId: string) {
   });
 }
 
+export async function apiRestoreProduct(uniqueId: string) {
+  return request<{ message: string }>(`/products/${uniqueId}/restore`, {
+    method: 'POST',
+  });
+}
+
+export async function apiHardDeleteProduct(uniqueId: string) {
+  return request<{ message: string }>(`/products/${uniqueId}/permanent`, {
+    method: 'DELETE',
+  });
+}
+
 export async function apiGetProductVariants(uniqueId: string) {
   const data = await request<{ variants: Product[] }>(`/products/${uniqueId}/variants`);
   return data.variants;
@@ -563,8 +575,24 @@ export async function apiUpdateBrand(id: number, name: string) {
   return data.brand;
 }
 
+export interface BrandDeletionImpact {
+  totalProducts: number;
+  withOrders: number;
+  withoutOrders: number;
+}
+
+export async function apiGetBrandDeletionImpact(id: number) {
+  const data = await request<{ impact: BrandDeletionImpact }>(
+    `/brands/${id}/deletion-impact`,
+  );
+  return data.impact;
+}
+
 export async function apiDeleteBrand(id: number) {
-  await request<{ ok: boolean }>(`/brands/${id}`, { method: 'DELETE' });
+  return request<{ ok: boolean; productsDeleted: number; productsArchived: number }>(
+    `/brands/${id}`,
+    { method: 'DELETE' },
+  );
 }
 
 export async function apiToggleProductOffer(
