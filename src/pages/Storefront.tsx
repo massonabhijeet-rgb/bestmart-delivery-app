@@ -365,7 +365,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       product.name,
       product.category,
       product.description,
-      product.badge,
       product.unitLabel,
     ]);
   }, [products, category, deferredSearch, brandFilter, activeTempCategory]);
@@ -1334,16 +1333,15 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               >
                 <div className="product-card__media">
                   {product.imageUrl && <img src={product.imageUrl} alt={product.name} loading="lazy" className="product-card__media-img" />}
-                  {product.badge || product.stockQuantity <= 5 ? (
+                  {product.stockQuantity <= 5 ? (
                     <div className="badge-stack">
-                      {product.badge ? <span className="badge">{product.badge}</span> : null}
                       {product.stockQuantity <= 0 ? (
                         <span className="badge badge--sold-out">Sold Out</span>
-                      ) : product.stockQuantity <= 5 ? (
+                      ) : (
                         <span className="badge badge--low-stock">
                           Only {product.stockQuantity} Left
                         </span>
-                      ) : null}
+                      )}
                     </div>
                   ) : null}
                 </div>
