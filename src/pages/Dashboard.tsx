@@ -1200,12 +1200,31 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     const errors: string[] = [];
     let done = 0;
     await withBusy(`Importing ${valid.length} products…`, async () => {
+      const brandCache = new Map<string, number>(
+        brands.map((b) => [b.name.toLowerCase(), b.id]),
+      );
       for (const row of valid) {
         try {
+          let brandId = row.brandId;
+          if (brandId === null && row.brandName) {
+            const key = row.brandName.toLowerCase();
+            const cached = brandCache.get(key);
+            if (cached !== undefined) {
+              brandId = cached;
+            } else {
+              try {
+                const created = await apiCreateBrand(row.brandName);
+                brandId = created.id;
+                brandCache.set(key, created.id);
+              } catch {
+                // brand creation failed (e.g. race / duplicate) — proceed without brand
+              }
+            }
+          }
           await apiAddProduct({
             name: row.name,
             categoryId: row.categoryId!,
-            brandId: row.brandId,
+            brandId,
             unitLabel: row.unitLabel,
             description: row.description,
             priceCents: row.priceCents,
@@ -2469,7 +2488,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           <td className="bulk-table__num">{row.rowNum}</td>
                           <td>{row.name || <em className="bulk-empty">—</em>}</td>
                           <td>{row.categoryName || <em className="bulk-empty">—</em>}</td>
-                          <td>{row.brandName ? (row.brandId ? row.brandName : <span title="Brand not found — will be saved without brand">{row.brandName} ⚠</span>) : <em className="bulk-empty">—</em>}</td>
+                          <td>{row.brandName ? (row.brandId ? row.brandName : <span title="New brand — will be created during import">{row.brandName} ＋</span>) : <em className="bulk-empty">—</em>}</td>
                           <td>{row.unitLabel || <em className="bulk-empty">—</em>}</td>
                           <td>₹{(row.priceCents / 100).toFixed(2)}</td>
                           <td>{row.stockQuantity}</td>
