@@ -346,6 +346,11 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       .slice(0, 12);
   }, [products]);
 
+  const activeTempCategory = useMemo(
+    () => (tempCategoryKey ? tempCategories.find((t) => t.autoKey === tempCategoryKey) ?? null : null),
+    [tempCategoryKey, tempCategories],
+  );
+
   const filteredProducts = useMemo(() => {
     const term = deferredSearch.trim();
     const tempIds = activeTempCategory ? new Set(activeTempCategory.productIds) : null;
@@ -587,11 +592,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     Boolean(brandFilter) ||
     Boolean(tempCategoryKey) ||
     forceCartView;
-
-  const activeTempCategory = useMemo(
-    () => (tempCategoryKey ? tempCategories.find((t) => t.autoKey === tempCategoryKey) ?? null : null),
-    [tempCategoryKey, tempCategories],
-  );
 
   function handleGoHome() {
     setCategory('All');
