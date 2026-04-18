@@ -6,12 +6,13 @@ import {
   apiGetCompanyPublic,
   apiGetProducts,
   apiListAddresses,
+  apiListBrands,
   apiListCategories,
   apiListPublicCoupons,
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { CouponPreview, PublicCoupon } from '../services/api';
+import type { Brand, CouponPreview, PublicCoupon } from '../services/api';
 import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
@@ -59,6 +60,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [initialLoading, setInitialLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
+  const [brandFilter, setBrandFilter] = useState<string | null>(null);
+  const [brandsList, setBrandsList] = useState<Brand[]>([]);
   const [cart, setCart] = useState<Record<string, number>>(() => {
     const stored = localStorage.getItem(CART_STORAGE_KEY);
     return stored ? (JSON.parse(stored) as Record<string, number>) : {};
@@ -144,6 +147,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       })
       .finally(() => setInitialLoading(false));
     apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
+    apiListBrands().then(setBrandsList).catch(() => {});
   }, []);
 
   // Fetch live weather to tailor the "perfect for today" picks. Prefers
@@ -275,6 +279,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     }));
   }, [categoryRows]);
 
+  // Brand tiles: only brands that have at least one in-stock active product.
+  const brandTiles = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of products) {
+      if (!p.isActive || p.stockQuantity <= 0 || !p.brand) continue;
+      counts.set(p.brand, (counts.get(p.brand) ?? 0) + 1);
+    }
+    return brandsList
+      .filter((b) => counts.has(b.name))
+      .map((b) => ({ name: b.name, productCount: counts.get(b.name) ?? 0 }))
+      .sort((a, b) => b.productCount - a.productCount);
+  }, [brandsList, products]);
+
   const offerProducts = useMemo(
     () => products.filter((p) => p.isOnOffer && p.isActive && p.stockQuantity > 0),
     [products]
@@ -312,7 +329,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const filteredProducts = useMemo(() => {
     const term = deferredSearch.trim();
     const byCategory = products.filter(
-      (product) => category === 'All' || product.category === category,
+      (product) =>
+        (category === 'All' || product.category === category) &&
+        (!brandFilter || product.brand === brandFilter),
     );
     if (!term) return byCategory;
     return fuzzyRank(term, byCategory, (product) => [
@@ -540,11 +559,16 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
   const canTrackFromHero = Boolean(trackingCode.trim() || latestOrder?.publicId);
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
-  const isBrowsing = category !== 'All' || Boolean(deferredSearch.trim()) || forceCartView;
+  const isBrowsing =
+    category !== 'All' ||
+    Boolean(deferredSearch.trim()) ||
+    Boolean(brandFilter) ||
+    forceCartView;
 
   function handleGoHome() {
     setCategory('All');
     setSearch('');
+    setBrandFilter(null);
     setForceCartView(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -976,6 +1000,46 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           </section>
           </LazyMount>
 
+          {brandTiles.length > 0 && (
+            <LazyMount placeholderHeight={220}>
+              <section className="brand-strip">
+                <div className="brand-strip__head">
+                  <span className="brand-strip__eyebrow">🏷️ Shop by brand</span>
+                  <h2>Find your favourite brands</h2>
+                  <p>Tap a brand to filter the catalog.</p>
+                </div>
+                <div className="brand-strip__row">
+                  {brandTiles.map((b) => {
+                    const initials = b.name
+                      .split(/\s+/)
+                      .map((w) => w[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase();
+                    return (
+                      <button
+                        key={b.name}
+                        type="button"
+                        className="brand-tile"
+                        onClick={() => {
+                          setBrandFilter(b.name);
+                          setCategory('All');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                      >
+                        <span className="brand-tile__avatar" aria-hidden>{initials}</span>
+                        <span className="brand-tile__name">{b.name}</span>
+                        <span className="brand-tile__count">
+                          {b.productCount} item{b.productCount === 1 ? '' : 's'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            </LazyMount>
+          )}
+
           <LazyMount placeholderHeight={400}>
           <footer className="home-footer">
             <div className="home-footer__top">
@@ -1069,7 +1133,18 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           <div className="section-heading">
             <div>
               <p className="eyebrow">Catalog</p>
-              <h2>Shop fresh groceries and daily essentials.</h2>
+              <h2>
+                {brandFilter ? `${brandFilter} products` : 'Shop fresh groceries and daily essentials.'}
+              </h2>
+              {brandFilter && (
+                <button
+                  type="button"
+                  className="active-filter"
+                  onClick={() => setBrandFilter(null)}
+                >
+                  Brand: {brandFilter} <span aria-hidden>✕</span>
+                </button>
+              )}
             </div>
             <p>{filteredProducts.length} items ready for checkout</p>
           </div>
@@ -1099,6 +1174,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </div>
                 <div className="product-card__body">
                   <div className="product-card__meta">
+                    {product.brand && (
+                      <span className="product-card__brand">{product.brand}</span>
+                    )}
                     <span>{product.category}</span>
                     <span>{product.unitLabel}</span>
                   </div>
