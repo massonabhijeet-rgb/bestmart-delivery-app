@@ -973,10 +973,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   // ── Bulk image upload helpers ────────────────────────────────────────────
 
   function handleBulkImageFiles(files: FileList | File[]) {
-    const arr = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    const IMAGE_EXT = /\.(jpe?g|png|webp|gif|bmp|avif)$/i;
+    const arr = Array.from(files).filter(
+      (f) => f.type.startsWith('image/') || IMAGE_EXT.test(f.name),
+    );
     setBulkImageFiles((prev) => {
-      const existing = new Set(prev.map((f) => f.name));
-      return [...prev, ...arr.filter((f) => !existing.has(f.name))];
+      const existing = new Set(prev.map((f) => f.name.toLowerCase()));
+      return [...prev, ...arr.filter((f) => !existing.has(f.name.toLowerCase()))];
     });
     setBulkImageResult(null);
   }
@@ -986,9 +989,28 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setBulkImageUploading(true);
     setBulkImageResult(null);
     try {
-      const result = await apiBulkUploadProductImages(bulkImageFiles);
-      setBulkImageResult(result);
-      if (result.matched > 0) await loadDashboard();
+      // Backend caps each request at 100 files (multer.array limit).
+      // Chunk smaller (50) to keep server memory/sharp load manageable.
+      const CHUNK = 50;
+      const merged = {
+        total: 0,
+        matched: 0,
+        unmatched: 0,
+        failed: 0,
+        results: [] as BulkImageUploadResult['results'],
+      };
+      for (let i = 0; i < bulkImageFiles.length; i += CHUNK) {
+        const chunk = bulkImageFiles.slice(i, i + CHUNK);
+        const res = await apiBulkUploadProductImages(chunk);
+        merged.total += res.total;
+        merged.matched += res.matched;
+        merged.unmatched += res.unmatched;
+        merged.failed += res.failed;
+        merged.results.push(...res.results);
+        // partial progress so user sees movement on big folders
+        setBulkImageResult({ ...merged });
+      }
+      if (merged.matched > 0) await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Bulk image upload failed');
     } finally {
@@ -2317,11 +2339,36 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 style={{ display: 'none' }}
                 onChange={(e) => e.target.files && handleBulkImageFiles(e.target.files)}
               />
+              <input
+                id="bulk-image-folder-input"
+                type="file"
+                multiple
+                style={{ display: 'none' }}
+                ref={(el) => {
+                  if (el) {
+                    el.setAttribute('webkitdirectory', '');
+                    el.setAttribute('directory', '');
+                  }
+                }}
+                onChange={(e) => e.target.files && handleBulkImageFiles(e.target.files)}
+              />
               {bulkImageFiles.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>🖼</div>
-                  <div>Drop images here or <span style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}>browse</span></div>
-                  <div style={{ fontSize: 12, marginTop: 4 }}>PNG, JPG, WebP — up to 100 files</div>
+                  <div>
+                    Drop images here,{' '}
+                    <span style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}>browse files</span>{' '}or{' '}
+                    <span
+                      style={{ color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        document.getElementById('bulk-image-folder-input')?.click();
+                      }}
+                    >
+                      pick a folder
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>PNG, JPG, WebP — folders are scanned recursively, uploaded in batches of 50</div>
                 </div>
               ) : (
                 <div style={{ width: '100%' }}>
@@ -2371,6 +2418,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 onClick={handleBulkImageUpload}
               >
                 {bulkImageUploading ? 'Uploading…' : `Upload ${bulkImageFiles.length > 0 ? bulkImageFiles.length + ' image' + (bulkImageFiles.length !== 1 ? 's' : '') : 'images'}`}
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={bulkImageUploading}
+                onClick={() => document.getElementById('bulk-image-folder-input')?.click()}
+              >
+                📁 Pick folder
               </button>
             </div>
           </div>
