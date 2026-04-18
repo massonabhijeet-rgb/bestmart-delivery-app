@@ -84,6 +84,8 @@ interface BulkProductRow {
   name: string;
   categoryName: string;
   categoryId: number | null;
+  brandName: string;
+  brandId: number | null;
   unitLabel: string;
   description: string;
   priceCents: number;
@@ -994,7 +996,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Inventory');
 
-    const headers = ['name', 'category', 'unitLabel', 'description', 'price', 'originalPrice', 'stockQuantity', 'badge'];
+    const headers = ['name', 'category', 'brand', 'unitLabel', 'description', 'price', 'originalPrice', 'stockQuantity', 'badge'];
     ws.addRow(headers);
 
     // Header styling
@@ -1009,6 +1011,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     ws.columns = [
       { width: 28 }, // name
       { width: 22 }, // category
+      { width: 22 }, // brand
       { width: 16 }, // unitLabel
       { width: 42 }, // description
       { width: 10 }, // price
@@ -1017,19 +1020,40 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       { width: 14 }, // badge
     ];
 
-    // Dropdown for category — rows 2 to 1000
+    // Dropdown for category (column B) and brand (column C) — rows 2 to 1000.
+    // Excel data-validation list strings have a hard limit (~255 chars). If we
+    // overflow, we drop the dropdown and let the parser do free-text matching.
     const categoryNames = categories.map((c) => c.name);
-    const listFormula = `"${categoryNames.join(',')}"`;
+    const categoryFormula = `"${categoryNames.join(',')}"`;
+    const useCategoryDropdown = categoryFormula.length <= 255;
+
+    const brandNames = brands.map((b) => b.name);
+    const brandFormula = `"${brandNames.join(',')}"`;
+    const useBrandDropdown = brandNames.length > 0 && brandFormula.length <= 255;
+
     for (let r = 2; r <= 1000; r++) {
-      ws.getCell(`B${r}`).dataValidation = {
-        type: 'list',
-        allowBlank: true,
-        formulae: [listFormula],
-        showErrorMessage: true,
-        errorStyle: 'error',
-        errorTitle: 'Invalid category',
-        error: 'Pick a category from the dropdown list.',
-      };
+      if (useCategoryDropdown) {
+        ws.getCell(`B${r}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: [categoryFormula],
+          showErrorMessage: true,
+          errorStyle: 'error',
+          errorTitle: 'Invalid category',
+          error: 'Pick a category from the dropdown list.',
+        };
+      }
+      if (useBrandDropdown) {
+        ws.getCell(`C${r}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: [brandFormula],
+          showErrorMessage: true,
+          errorStyle: 'warning',
+          errorTitle: 'Unknown brand',
+          error: 'Pick a brand from the dropdown, or leave blank.',
+        };
+      }
     }
 
     const buffer = await wb.xlsx.writeBuffer();
@@ -1071,7 +1095,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (dataRows.length < 2) return [];
     const [headerRow, ...bodyRows] = dataRows;
     const col = (name: string) => headerRow.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase());
-    const iName = col('name'), iCat = col('category'), iUnit = col('unitlabel'),
+    const iName = col('name'), iCat = col('category'), iBrand = col('brand'), iUnit = col('unitlabel'),
       iDesc = col('description'), iPrice = col('price'), iOriginal = col('originalprice'),
       iStock = col('stockquantity'), iBadge = col('badge');
 
@@ -1084,6 +1108,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       const errs: string[] = [];
       const name = (row[iName] ?? '').trim();
       const categoryName = (row[iCat] ?? '').trim();
+      const brandName = iBrand !== -1 ? (row[iBrand] ?? '').trim() : '';
       const unitLabel = (row[iUnit] ?? '').trim();
       const description = (row[iDesc] ?? '').trim();
       const priceRaw = parseFloat(row[iPrice] ?? '');
@@ -1102,11 +1127,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       const matchedCat = categories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase());
       if (categoryName && !matchedCat) errs.push(`Category "${categoryName}" not found`);
 
+      const matchedBrand = brandName ? brands.find((b) => b.name.toLowerCase() === brandName.toLowerCase()) : null;
+
       return {
         rowNum: idx + 2,
         name,
         categoryName,
         categoryId: matchedCat?.id ?? null,
+        brandName: matchedBrand?.name ?? brandName,
+        brandId: matchedBrand?.id ?? null,
         unitLabel,
         description,
         priceCents: Math.round((priceRaw || 0) * 100),
@@ -1176,6 +1205,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           await apiAddProduct({
             name: row.name,
             categoryId: row.categoryId!,
+            brandId: row.brandId,
             unitLabel: row.unitLabel,
             description: row.description,
             priceCents: row.priceCents,
@@ -2425,6 +2455,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         <th>#</th>
                         <th>Name</th>
                         <th>Category</th>
+                        <th>Brand</th>
                         <th>Unit</th>
                         <th>Price</th>
                         <th>Stock</th>
@@ -2438,6 +2469,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           <td className="bulk-table__num">{row.rowNum}</td>
                           <td>{row.name || <em className="bulk-empty">—</em>}</td>
                           <td>{row.categoryName || <em className="bulk-empty">—</em>}</td>
+                          <td>{row.brandName ? (row.brandId ? row.brandName : <span title="Brand not found — will be saved without brand">{row.brandName} ⚠</span>) : <em className="bulk-empty">—</em>}</td>
                           <td>{row.unitLabel || <em className="bulk-empty">—</em>}</td>
                           <td>₹{(row.priceCents / 100).toFixed(2)}</td>
                           <td>{row.stockQuantity}</td>
