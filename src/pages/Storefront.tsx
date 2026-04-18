@@ -13,6 +13,8 @@ import {
   apiListCategories,
   apiListPublicCoupons,
   apiListTempCategories,
+  apiLogClick,
+  apiLogSearch,
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
@@ -349,6 +351,18 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     observer.observe(node);
     return () => observer.disconnect();
   }, [homeRails, visibleRailCount]);
+
+  // Fire-and-forget: log settled search queries to the backend so popular
+  // searches can bias category ranking on the home page (Phase 2). Debounced
+  // via useDeferredValue + a 700ms idle window to avoid logging every keystroke.
+  useEffect(() => {
+    const q = deferredSearch.trim();
+    if (q.length < 2) return;
+    const handle = window.setTimeout(() => {
+      void apiLogSearch(q);
+    }, 700);
+    return () => window.clearTimeout(handle);
+  }, [deferredSearch]);
 
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -806,8 +820,15 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     Boolean(tempCategoryKey) ||
     forceCartView;
 
-  function renderRailCard(product: Product) {
+  function renderRailCard(product: Product, source: string, railCategoryId?: number | null) {
     const inCart = cart[product.uniqueId];
+    const logClick = () => {
+      void apiLogClick({
+        productId: product.id,
+        categoryId: railCategoryId ?? product.categoryId ?? null,
+        source,
+      });
+    };
     return (
       <article key={product.uniqueId} className="daily-essential-card">
         <div className="daily-essential-card__thumb">
@@ -846,7 +867,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               type="button"
               className="daily-essential-card__add"
               disabled={product.stockQuantity <= 0}
-              onClick={() => updateQuantity(product.uniqueId, 1)}
+              onClick={() => {
+                logClick();
+                updateQuantity(product.uniqueId, 1);
+              }}
             >
               {product.stockQuantity <= 0 ? 'Sold out' : '+ Add'}
             </button>
@@ -1377,7 +1401,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                   </div>
                 </div>
                 <div className="home-rail__row">
-                  {homeRails.bestsellers.map(renderRailCard)}
+                  {homeRails.bestsellers.map((p) => renderRailCard(p, 'home_rail_bestsellers'))}
                 </div>
               </section>
             </LazyMount>
@@ -1403,7 +1427,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                     </button>
                   </div>
                   <div className="home-rail__row">
-                    {rail.products.map(renderRailCard)}
+                    {rail.products.map((p) => renderRailCard(p, 'home_rail_category', rail.id))}
                   </div>
                 </section>
               </LazyMount>

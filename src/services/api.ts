@@ -396,6 +396,39 @@ export async function apiGetHomeRails(): Promise<HomeRails> {
   return request<HomeRails>('/products/home-rails');
 }
 
+export async function apiLogSearch(query: string, categoryId?: number | null): Promise<void> {
+  const q = query.trim();
+  if (q.length < 2) return;
+  try {
+    await request<void>('/products/search/log', {
+      method: 'POST',
+      body: JSON.stringify({ query: q, categoryId: categoryId ?? undefined }),
+    });
+  } catch {
+    // best-effort; do not surface to UI
+  }
+}
+
+export async function apiLogClick(opts: {
+  productId?: number | null;
+  categoryId?: number | null;
+  source: string;
+}): Promise<void> {
+  if (!opts.source) return;
+  try {
+    await request<void>('/products/click/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        productId: opts.productId ?? undefined,
+        categoryId: opts.categoryId ?? undefined,
+        source: opts.source,
+      }),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 export interface BulkImportRowInput {
   rowNum: number;
   name: string;

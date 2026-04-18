@@ -571,6 +571,43 @@ async function createTables(client: PoolClient) {
     CREATE INDEX IF NOT EXISTS idx_orders_company_created
       ON orders(company_id, created_date DESC);
   `);
+
+  // Search telemetry (Phase 2 ranking signal). One row per search submitted
+  // from the storefront. user_id is nullable — we log anonymous searches too.
+  // created_date indexed desc so the 7-day aggregation stays cheap.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS search_events (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      query TEXT NOT NULL,
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_events_company_created
+      ON search_events(company_id, created_date DESC);
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS click_events (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      source TEXT NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_click_events_company_created
+      ON click_events(company_id, created_date DESC);
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_click_events_user_created
+      ON click_events(user_id, created_date DESC) WHERE user_id IS NOT NULL;
+  `);
 }
 
 async function seedCompany(client: PoolClient) {
@@ -2046,6 +2083,156 @@ export interface HomeRails {
   categoryRails: HomeRailsCategory[];
 }
 
+// Record a user search for ranking / popular-searches telemetry. Stored with
+// trimmed, length-capped query text; we don't want 10KB blobs in this table.
+export async function logSearchEvent(
+  companyId: number,
+  rawQuery: string,
+  opts: { userId?: number | null; categoryId?: number | null } = {},
+): Promise<void> {
+  const query = rawQuery.trim().slice(0, 120);
+  if (query.length < 2) return;
+  await pool.query(
+    `INSERT INTO search_events (company_id, user_id, query, category_id)
+     VALUES ($1, $2, $3, $4);`,
+    [companyId, opts.userId ?? null, query, opts.categoryId ?? null],
+  );
+}
+
+// Map of categoryId → sum of popular-query frequencies that match the
+// category name. Used as a ranking signal in getHomeRails. Only considers
+// the top 50 queries in the last N days to keep the join bounded.
+export async function getCategorySearchScores(
+  companyId: number,
+  days = 7,
+): Promise<Map<number, number>> {
+  const result = await pool.query(
+    `WITH popular AS (
+       SELECT lower(btrim(query)) AS q, COUNT(*)::int AS freq
+       FROM search_events
+       WHERE company_id = $1
+         AND created_date >= NOW() - ($2 || ' days')::INTERVAL
+         AND length(btrim(query)) >= 2
+       GROUP BY lower(btrim(query))
+       ORDER BY freq DESC
+       LIMIT 50
+     )
+     SELECT c.id AS "categoryId", SUM(p.freq)::int AS "searchScore"
+     FROM popular p
+     JOIN categories c ON (
+       lower(c.name) LIKE '%' || p.q || '%'
+       OR p.q LIKE '%' || lower(c.name) || '%'
+     )
+     WHERE c.company_id = $1
+       AND c.is_hidden IS NOT TRUE
+     GROUP BY c.id;`,
+    [companyId, days],
+  );
+  const map = new Map<number, number>();
+  for (const row of result.rows) {
+    map.set(Number(row.categoryId), Number(row.searchScore));
+  }
+  return map;
+}
+
+// Record a product click/tap from the storefront. `source` labels the origin
+// (e.g. 'home_rail', 'category_grid', 'quick_view') so we can later attribute
+// CTR by surface. Best-effort: caller swallows errors.
+export async function logClickEvent(
+  companyId: number,
+  opts: {
+    userId?: number | null;
+    productId?: number | null;
+    categoryId?: number | null;
+    source: string;
+  },
+): Promise<void> {
+  const source = opts.source.trim().slice(0, 40);
+  if (!source) return;
+  await pool.query(
+    `INSERT INTO click_events (company_id, user_id, product_id, category_id, source)
+     VALUES ($1, $2, $3, $4, $5);`,
+    [
+      companyId,
+      opts.userId ?? null,
+      opts.productId ?? null,
+      opts.categoryId ?? null,
+      source,
+    ],
+  );
+}
+
+// Map of categoryId → click count in the last N days. Feeds getHomeRails as
+// an additive ranking signal (log-scaled, capped) so a breakout category can
+// rise without being drowned out by a spike.
+export async function getCategoryClickScores(
+  companyId: number,
+  days = 7,
+): Promise<Map<number, number>> {
+  const result = await pool.query(
+    `SELECT category_id AS "categoryId", COUNT(*)::int AS clicks
+     FROM click_events
+     WHERE company_id = $1
+       AND created_date >= NOW() - ($2 || ' days')::INTERVAL
+       AND category_id IS NOT NULL
+     GROUP BY category_id;`,
+    [companyId, days],
+  );
+  const map = new Map<number, number>();
+  for (const row of result.rows) {
+    map.set(Number(row.categoryId), Number(row.clicks));
+  }
+  return map;
+}
+
+// Per-user category affinity over the last N days, built from both clicks and
+// actual order line items (heavier weight on purchases). Used only when a
+// logged-in user hits /home-rails; anonymous traffic skips this and falls back
+// to the shared cache. Returns categoryId → affinity score.
+export async function getUserCategoryAffinity(
+  companyId: number,
+  userId: number,
+  days = 90,
+): Promise<Map<number, number>> {
+  const result = await pool.query(
+    `WITH ordered AS (
+       SELECT p.category_id AS category_id, SUM(oi.quantity)::int AS units
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       JOIN products p ON p.id = oi.product_id
+       WHERE o.company_id = $1
+         AND o.user_id = $2
+         AND o.status <> 'cancelled'
+         AND o.created_date >= NOW() - ($3 || ' days')::INTERVAL
+         AND p.category_id IS NOT NULL
+       GROUP BY p.category_id
+     ),
+     clicked AS (
+       SELECT category_id, COUNT(*)::int AS clicks
+       FROM click_events
+       WHERE company_id = $1
+         AND user_id = $2
+         AND category_id IS NOT NULL
+         AND created_date >= NOW() - ($3 || ' days')::INTERVAL
+       GROUP BY category_id
+     )
+     SELECT
+       COALESCE(ordered.category_id, clicked.category_id) AS "categoryId",
+       COALESCE(ordered.units, 0) AS "units",
+       COALESCE(clicked.clicks, 0) AS "clicks"
+     FROM ordered
+     FULL OUTER JOIN clicked ON clicked.category_id = ordered.category_id;`,
+    [companyId, userId, days],
+  );
+  const map = new Map<number, number>();
+  for (const row of result.rows) {
+    const units = Number(row.units);
+    const clicks = Number(row.clicks);
+    map.set(Number(row.categoryId), units * 3 + clicks);
+  }
+  return map;
+}
+
 // Categories that get a weekend boost (Fri–Sun). Matched case-insensitively
 // against category name by substring, so "Cold Drinks", "Soft Drinks", "Chips
 // & Namkeen" etc. all qualify. Keep these lowercase.
@@ -2061,7 +2248,11 @@ const WEEKEND_BOOST_KEYWORDS = [
 // ordering so new catalog items still appear.
 export async function getHomeRails(
   companyId: number,
-  { limit = 8, days = 30 }: { limit?: number; days?: number } = {},
+  {
+    limit = 8,
+    days = 30,
+    userId = null,
+  }: { limit?: number; days?: number; userId?: number | null } = {},
 ): Promise<HomeRails> {
   const soldCte = `
     sold AS (
@@ -2085,30 +2276,34 @@ export async function getHomeRails(
       AND c.is_hidden IS NOT TRUE
   `;
 
-  const [globalRes, perCatRes] = await Promise.all([
-    pool.query(
-      `WITH ${soldCte}
-       SELECT ${PRODUCT_SELECT_COLUMNS}, COALESCE(s.units_sold, 0)::int AS "unitsSold"
-       ${baseJoinWhere}
-       ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
-       LIMIT $2;`,
-      [companyId, limit, days],
-    ),
-    pool.query(
-      `WITH ${soldCte},
-       ranked AS (
-         SELECT ${PRODUCT_SELECT_COLUMNS},
-                COALESCE(s.units_sold, 0)::int AS "unitsSold",
-                ROW_NUMBER() OVER (
-                  PARTITION BY p.category_id
-                  ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
-                ) AS rn
+  const [globalRes, perCatRes, searchScoreMap, clickScoreMap, userAffinityMap] =
+    await Promise.all([
+      pool.query(
+        `WITH ${soldCte}
+         SELECT ${PRODUCT_SELECT_COLUMNS}, COALESCE(s.units_sold, 0)::int AS "unitsSold"
          ${baseJoinWhere}
-       )
-       SELECT * FROM ranked WHERE rn <= $2;`,
-      [companyId, limit, days],
-    ),
-  ]);
+         ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+         LIMIT $2;`,
+        [companyId, limit, days],
+      ),
+      pool.query(
+        `WITH ${soldCte},
+         ranked AS (
+           SELECT ${PRODUCT_SELECT_COLUMNS},
+                  COALESCE(s.units_sold, 0)::int AS "unitsSold",
+                  ROW_NUMBER() OVER (
+                    PARTITION BY p.category_id
+                    ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+                  ) AS rn
+           ${baseJoinWhere}
+         )
+         SELECT * FROM ranked WHERE rn <= $2;`,
+        [companyId, limit, days],
+      ),
+      getCategorySearchScores(companyId, 7),
+      getCategoryClickScores(companyId, 7),
+      userId ? getUserCategoryAffinity(companyId, userId, 90) : Promise.resolve(new Map<number, number>()),
+    ]);
 
   // Group per-category rows by categoryId. Also collect per-row unitsSold and
   // stockQuantity so we can score the rail before mapping to Product shape.
@@ -2163,6 +2358,34 @@ export async function getHomeRails(
     // penalties are tuned to move a rail a few slots, not dominate.
     const signals: string[] = [];
     let score = c.totalUnitsSold;
+
+    const searchHits = searchScoreMap.get(c.id) ?? 0;
+    if (searchHits > 0) {
+      // Log-scaled so a viral query can't swamp the ranking. 1 hit → +1,
+      // 3 → ~+3, 7 → ~+4.5, 31 → ~+7. Cap at +10 to leave headroom for
+      // real-sales dominance once traffic is meaningful.
+      const contribution = Math.min(10, Math.log2(1 + searchHits) * 2);
+      score += contribution;
+      signals.push('searched');
+    }
+
+    const clicks = clickScoreMap.get(c.id) ?? 0;
+    if (clicks > 0) {
+      // Same log shape as search, capped lower — clicks are noisier than
+      // deliberate queries so we want them to nudge, not lead.
+      const contribution = Math.min(8, Math.log2(1 + clicks) * 1.5);
+      score += contribution;
+      signals.push('clicked');
+    }
+
+    const affinity = userAffinityMap.get(c.id) ?? 0;
+    if (affinity > 0) {
+      // Per-user boost: a strong repeat-buyer gets meaningful re-ordering.
+      // Cap at +15 so a new user's browsing can still beat one old favorite.
+      const contribution = Math.min(15, Math.log2(1 + affinity) * 3);
+      score += contribution;
+      signals.push('for-you');
+    }
 
     if (isWeekend && isParty) {
       score += 3;

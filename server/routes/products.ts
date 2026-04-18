@@ -16,6 +16,8 @@ import {
   getInventorySummary,
   getProductByUniqueId,
   getStorefrontSpotlight,
+  logClickEvent,
+  logSearchEvent,
   hardDeleteProduct,
   listProducts,
   listProductNameIndex,
@@ -230,13 +232,66 @@ router.get('/home-rails', attachUserIfPresent, async (req: AuthenticatedRequest,
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
   if (!companyId) return res.status(404).json({ error: 'Company not found' });
 
-  const cacheKey = `bm:products:home-rails:${companyId}:all`;
+  // Per-user cache when logged in (shorter TTL because affinity drifts with
+  // every order); shared anonymous cache otherwise. Both fan-out from the
+  // same bm:products:* invalidation pattern on product writes.
+  const userId = req.user?.id ?? null;
+  const cacheKey = userId
+    ? `bm:products:home-rails:${companyId}:u${userId}`
+    : `bm:products:home-rails:${companyId}:all`;
+  const ttl = userId ? 300 : 600;
+
   const cached = await cacheGet<unknown>(cacheKey);
   if (cached) return res.json(cached);
 
-  const rails = await getHomeRails(companyId, { limit: 8, days: 30 });
-  await cacheSet(cacheKey, rails, 600);
+  const rails = await getHomeRails(companyId, { limit: 8, days: 30, userId });
+  await cacheSet(cacheKey, rails, ttl);
   return res.json(rails);
+});
+
+// Fire-and-forget search logging from the storefront. Anonymous users are
+// tracked with user_id=null. Popular queries feed category-level ranking in
+// getHomeRails via getCategorySearchScores.
+router.post('/search/log', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  if (!companyId) return res.status(204).end();
+
+  const { query, categoryId } = req.body ?? {};
+  if (typeof query !== 'string') return res.status(204).end();
+
+  try {
+    await logSearchEvent(companyId, query, {
+      userId: req.user?.id,
+      categoryId: typeof categoryId === 'number' ? categoryId : undefined,
+    });
+  } catch (err) {
+    console.error('logSearchEvent failed:', err);
+  }
+  return res.status(204).end();
+});
+
+// Fire-and-forget click logging for CTR + per-user personalization. Called
+// from rail card taps and search-result clicks on the storefront.
+router.post('/click/log', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  if (!companyId) return res.status(204).end();
+
+  const { productId, categoryId, source } = req.body ?? {};
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    return res.status(204).end();
+  }
+
+  try {
+    await logClickEvent(companyId, {
+      userId: req.user?.id,
+      productId: typeof productId === 'number' ? productId : undefined,
+      categoryId: typeof categoryId === 'number' ? categoryId : undefined,
+      source,
+    });
+  } catch (err) {
+    console.error('logClickEvent failed:', err);
+  }
+  return res.status(204).end();
 });
 
 router.get(
