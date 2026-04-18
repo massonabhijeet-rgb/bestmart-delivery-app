@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   apiCancelOrder,
@@ -369,6 +369,44 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       product.unitLabel,
     ]);
   }, [products, category, deferredSearch, brandFilter, activeTempCategory]);
+
+  // ── Catalog windowing ────────────────────────────────────────────────
+  // Don't render thousands of product cards on first paint. Show the first
+  // PAGE_SIZE, then mount more in chunks as the user nears the bottom.
+  const PAGE_SIZE = 24;
+  const [displayedCount, setDisplayedCount] = useState(PAGE_SIZE);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  // Reset window when filter/search changes so the user sees the new top results.
+  useEffect(() => {
+    setDisplayedCount(PAGE_SIZE);
+  }, [category, deferredSearch, brandFilter, tempCategoryKey]);
+  // IntersectionObserver to grow the window when the sentinel scrolls into view.
+  useEffect(() => {
+    if (displayedCount >= filteredProducts.length) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setDisplayedCount(filteredProducts.length);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setDisplayedCount((n) => Math.min(n + PAGE_SIZE, filteredProducts.length));
+            break;
+          }
+        }
+      },
+      { rootMargin: '600px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [displayedCount, filteredProducts.length]);
+  const visibleProducts = useMemo(
+    () => filteredProducts.slice(0, displayedCount),
+    [filteredProducts, displayedCount],
+  );
 
   const cartItems = useMemo(() => {
     return products
@@ -904,6 +942,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           )}
 
           {moodPicks.length > 0 && (
+            <LazyMount placeholderHeight={300}>
             <section className={`weather-picks weather-picks--${mood}`}>
               <div className="weather-picks__head">
                 <span className="weather-picks__eyebrow">
@@ -964,6 +1003,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 ))}
               </div>
             </section>
+            </LazyMount>
           )}
 
           {dailyEssentials.length > 0 && (
@@ -1285,7 +1325,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           </div>
 
           <div className="product-grid">
-            {filteredProducts.map((product) => (
+            {visibleProducts.map((product) => (
               <article
                 className={
                   product.stockQuantity <= 0 ? 'product-card product-card--sold-out' : 'product-card'
@@ -1375,6 +1415,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </article>
             ))}
           </div>
+          {displayedCount < filteredProducts.length ? (
+            <div
+              ref={loadMoreRef}
+              className="catalog-load-more"
+              aria-hidden="true"
+              style={{ height: 1 }}
+            />
+          ) : null}
         </div>
 
         <aside className="cart-panel">
