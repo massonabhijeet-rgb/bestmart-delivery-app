@@ -145,24 +145,24 @@ p {
 
 .app-loading__orb,
 .page-loader__orb,
-.store-loading__orb,
-.busy-overlay__spinner {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
+.store-loading__orb {
+  width: 160px;
+  height: 42px;
   border: none !important;
-  background:
-    conic-gradient(from 180deg at 50% 50%,
-      var(--c-teal, #0d9488) 0deg,
-      color-mix(in srgb, var(--c-teal, #0d9488) 30%, transparent) 270deg,
-      transparent 360deg) !important;
-  animation: bm-spin 0.9s linear infinite !important;
-  -webkit-mask: radial-gradient(circle at center, transparent 22px, #000 23px);
-          mask: radial-gradient(circle at center, transparent 22px, #000 23px);
+  background: url('/bestmart-logo.svg') center / contain no-repeat !important;
+  animation: bm-logo-pulse 1.4s ease-in-out infinite !important;
+  -webkit-mask: none !important;
+          mask: none !important;
+  border-radius: 0 !important;
 }
 
 @keyframes bm-spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes bm-logo-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50%      { opacity: 1;    transform: scale(1); }
 }
 
 /* ═══════════════════════════════════════════
@@ -2912,6 +2912,84 @@ textarea {
   align-items: start;
 }
 
+.store-layout--no-cart {
+  grid-template-columns: 1fr;
+}
+
+/* Floating cart FAB (shown on category/browse view) */
+.cart-fab {
+  position: fixed;
+  left: 20px;
+  bottom: 22px;
+  z-index: 1100;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px 12px 14px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1565C0, #42A5F5);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  box-shadow: 0 12px 28px -6px rgba(21, 101, 192, 0.55);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.cart-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 34px -6px rgba(21, 101, 192, 0.6);
+}
+.cart-fab:focus-visible {
+  outline: 2px solid #FF9800;
+  outline-offset: 3px;
+}
+.cart-fab__icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.cart-fab__badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 11px;
+  background: #FF9800;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cart-panel__heading-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.cart-panel__close {
+  background: transparent;
+  border: none;
+  color: #1565C0;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.cart-panel__close:hover {
+  background: rgba(21, 101, 192, 0.08);
+}
+
+@media (max-width: 640px) {
+  .cart-fab {
+    left: 14px;
+    bottom: 16px;
+    padding: 10px 14px 10px 12px;
+  }
+}
+
 .catalog-panel,
 .cart-panel {
   padding: var(--sp-5) var(--sp-6);
@@ -5524,13 +5602,12 @@ textarea {
   from { transform: scale(0.92); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
-/* .busy-overlay__spinner sizing — unified style lives near .app-loading__orb */
 .busy-overlay__spinner {
-  width: 32px !important;
-  height: 32px !important;
+  width: 72px;
+  height: 20px;
   flex-shrink: 0;
-  -webkit-mask: radial-gradient(circle at center, transparent 12px, #000 13px) !important;
-          mask: radial-gradient(circle at center, transparent 12px, #000 13px) !important;
+  background: url('/bestmart-logo.svg') center / contain no-repeat;
+  animation: bm-logo-pulse 1.4s ease-in-out infinite;
 }
 .busy-overlay__label {
   font-size: 0.95rem;

@@ -2,6 +2,10 @@ node_modules
 dist
 .DS_Store
 .env
+.env.production
 uploads/*
 !uploads/products/
 !uploads/products/.gitkeep
+.claude/
+product-images/
+*.tsbuildinfo

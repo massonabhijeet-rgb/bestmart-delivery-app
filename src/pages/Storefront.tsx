@@ -1407,7 +1407,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       {error ? <div className="message message--error">{error}</div> : null}
 
       {!initialLoading && isBrowsing ? (
-      <section className="store-layout">
+      <section className={`store-layout${forceCartView ? '' : ' store-layout--no-cart'}`}>
         <div className="catalog-panel">
           <div className="section-heading">
             <div>
@@ -1562,13 +1562,24 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           ) : null}
         </div>
 
+        {forceCartView ? (
         <aside className="cart-panel">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Checkout</p>
               <h2>Your cart</h2>
             </div>
-            <p>{cartItems.length} line items</p>
+            <div className="cart-panel__heading-actions">
+              <p>{cartItems.length} line items</p>
+              <button
+                type="button"
+                className="cart-panel__close"
+                onClick={() => setForceCartView(false)}
+                aria-label="Close cart and keep shopping"
+              >
+                ← Keep shopping
+              </button>
+            </div>
           </div>
 
           <div className="cart-list">
@@ -1868,6 +1879,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             </button>
           </form>
         </aside>
+        ) : null}
       </section>
       ) : null}
 
@@ -1913,6 +1925,17 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         </section>
       ) : null}
       </div>
+      {isBrowsing && !forceCartView && cartCount > 0 ? (
+        <button
+          type="button"
+          className="cart-fab"
+          onClick={handleOpenCart}
+          aria-label={`Open cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}
+        >
+          <span className="cart-fab__icon" aria-hidden>🛒</span>
+          <span className="cart-fab__badge">{cartCount}</span>
+        </button>
+      ) : null}
       {quickView ? (
         <QuickViewModal
           anchor={quickView}
