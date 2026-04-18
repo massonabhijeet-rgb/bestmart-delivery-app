@@ -284,6 +284,46 @@ export async function apiGetProducts(includeInactive = false) {
   return data.products;
 }
 
+export interface ProductsPage {
+  products: Product[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface ProductsPageQuery {
+  page?: number;
+  pageSize?: number;
+  category?: string | null;
+  brand?: string | null;
+  q?: string | null;
+  ids?: string[] | null;
+}
+
+export async function apiGetProductsPage(opts: ProductsPageQuery = {}): Promise<ProductsPage> {
+  const params = new URLSearchParams();
+  if (opts.page) params.set('page', String(opts.page));
+  if (opts.pageSize) params.set('pageSize', String(opts.pageSize));
+  if (opts.category && opts.category !== 'All') params.set('category', opts.category);
+  if (opts.brand) params.set('brand', opts.brand);
+  if (opts.q && opts.q.trim()) params.set('q', opts.q.trim());
+  if (opts.ids && opts.ids.length > 0) params.set('ids', opts.ids.join(','));
+  const qs = params.toString();
+  return request<ProductsPage>(`/products/page${qs ? `?${qs}` : ''}`);
+}
+
+export interface StorefrontSpotlight {
+  offerProducts: Product[];
+  dailyEssentials: Product[];
+  moodPicks: Product[];
+}
+
+export async function apiGetStorefrontSpotlight(mood: string | null): Promise<StorefrontSpotlight> {
+  const qs = mood ? `?mood=${encodeURIComponent(mood)}` : '';
+  return request<StorefrontSpotlight>(`/products/spotlight${qs}`);
+}
+
 export interface BulkImportRowInput {
   rowNum: number;
   name: string;
@@ -390,6 +430,7 @@ export interface TempCategory {
   priority: number;
   expiresAt: string;
   productIds: string[];
+  products: Product[];
 }
 
 export async function apiListTempCategories(mood: WeatherMoodTag | null) {

@@ -13,7 +13,9 @@ import {
   deactivateProduct,
   getDefaultCompanyId,
   getProductByUniqueId,
+  getStorefrontSpotlight,
   listProducts,
+  listProductsPage,
   listSlowMovers,
   setProductOffer,
   updateProduct,
@@ -93,6 +95,47 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const result = { products: filtered };
   await cacheSet(cacheKey, result, TTL.PRODUCTS);
   return res.json(result);
+});
+
+// Storefront-only paged list. Inactive/hidden are excluded server-side.
+// Short Redis TTL keyed by every filter so a category / search combo doesn't
+// pollute another's cache.
+router.get('/page', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+  const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(String(req.query.pageSize ?? '24'), 10) || 24));
+  const category = req.query.category ? String(req.query.category) : null;
+  const brand = req.query.brand ? String(req.query.brand) : null;
+  const search = req.query.q ? String(req.query.q) : null;
+  const idsRaw = req.query.ids ? String(req.query.ids) : null;
+  const ids = idsRaw
+    ? idsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+
+  const cacheKey = `bm:products:page:${companyId}:${page}:${pageSize}:${category ?? ''}:${brand ?? ''}:${search ?? ''}:${ids ? ids.join(',') : ''}`;
+  const cached = await cacheGet<unknown>(cacheKey);
+  if (cached) return res.json(cached);
+
+  const result = await listProductsPage({ companyId, page, pageSize, category, brand, search, ids });
+  await cacheSet(cacheKey, result, 60); // 1 min — short to keep stock fresh
+  return res.json(result);
+});
+
+// Bundle of homepage-strip products in one round-trip.
+router.get('/spotlight', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
+  const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+  if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+  const mood = req.query.mood ? String(req.query.mood) : null;
+  const cacheKey = `bm:products:spotlight:${companyId}:${mood ?? 'none'}`;
+  const cached = await cacheGet<unknown>(cacheKey);
+  if (cached) return res.json(cached);
+
+  const spotlight = await getStorefrontSpotlight(companyId, mood, 12);
+  await cacheSet(cacheKey, spotlight, 120); // 2 min
+  return res.json(spotlight);
 });
 
 router.get(
@@ -177,7 +220,7 @@ router.post(
         brandId: payload.brandId ?? null,
       });
 
-      await cacheDelPattern(`bm:products:list:${req.user.companyId}:*`);
+      await cacheDelPattern(`bm:products:*:${req.user.companyId}:*`);
       return res.status(201).json({ product });
     } catch (error) {
       console.error('Create product error:', error);
@@ -238,7 +281,7 @@ router.put(
       }
 
       await Promise.all([
-        cacheDelPattern(`bm:products:list:${req.user.companyId}:*`),
+        cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
         cacheDel(key.productDetail(req.user.companyId, uniqueId)),
       ]);
       return res.json({ product });
@@ -266,7 +309,7 @@ router.delete(
       return res.status(404).json({ error: 'Product not found' });
     }
     await Promise.all([
-      cacheDelPattern(`bm:products:list:${req.user.companyId}:*`),
+      cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
       cacheDel(key.productDetail(req.user.companyId, uniqueId)),
     ]);
     return res.json({ message: 'Product archived' });
@@ -328,7 +371,7 @@ router.patch(
         return res.status(404).json({ error: 'Product not found' });
       }
       await Promise.all([
-        cacheDelPattern(`bm:products:list:${req.user.companyId}:*`),
+        cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
         cacheDel(key.productDetail(req.user.companyId, uniqueId)),
       ]);
       return res.json({ product });
@@ -398,7 +441,7 @@ router.post(
       const result = await bulkImportProducts(req.user.companyId, rows);
 
       if (result.created > 0 || result.brandsCreated > 0) {
-        await cacheDelPattern(`bm:products:list:${req.user.companyId}:*`);
+        await cacheDelPattern(`bm:products:*:${req.user.companyId}:*`);
       }
 
       return res.json(result);
@@ -442,7 +485,7 @@ router.post(
       const updated = await updateProductImage(uniqueId, req.user.companyId, s3Url);
 
       await Promise.all([
-        cacheDelPattern(`bm:products:list:${req.user.companyId}:*`),
+        cacheDelPattern(`bm:products:*:${req.user.companyId}:*`),
         cacheDel(key.productDetail(req.user.companyId, uniqueId)),
       ]);
       return res.json({
@@ -489,7 +532,7 @@ router.post(
           const s3Url = await uploadToS3(`products/${product.uniqueId}.webp`, webpBuffer, 'image/webp');
           await updateProductImage(product.uniqueId, req.user!.companyId, s3Url);
           await Promise.all([
-            cacheDelPattern(`bm:products:list:${req.user!.companyId}:*`),
+            cacheDelPattern(`bm:products:*:${req.user!.companyId}:*`),
             cacheDel(key.productDetail(req.user!.companyId, product.uniqueId)),
           ]);
           results.push({ filename: file.originalname, matched: product.name, status: 'ok' });

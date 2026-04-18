@@ -1659,6 +1659,173 @@ export async function listProducts(companyId: number, includeInactive = false) {
   return result.rows.map(mapProduct);
 }
 
+// Server-side paged + filtered listing used by the public storefront catalog.
+// Inactive and hidden-category products are always excluded — this isn't an
+// admin path. Search is a case-insensitive substring across name/description.
+export interface ListProductsPageOpts {
+  companyId: number;
+  page: number;
+  pageSize: number;
+  category?: string | null;
+  brand?: string | null;
+  search?: string | null;
+  ids?: string[] | null;
+}
+export interface ListProductsPageResult {
+  products: ReturnType<typeof mapProduct>[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export async function listProductsPage(opts: ListProductsPageOpts): Promise<ListProductsPageResult> {
+  const page = Math.max(1, Math.floor(opts.page));
+  const pageSize = Math.max(1, Math.min(100, Math.floor(opts.pageSize)));
+  const offset = (page - 1) * pageSize;
+
+  const where: string[] = [
+    'p.company_id = $1',
+    'p.is_active = TRUE',
+    'p.stock_quantity >= 0',
+    'c.is_hidden IS NOT TRUE',
+  ];
+  const params: unknown[] = [opts.companyId];
+
+  if (opts.category && opts.category !== 'All') {
+    params.push(opts.category);
+    where.push(`c.name = $${params.length}`);
+  }
+  if (opts.brand) {
+    params.push(opts.brand);
+    where.push(`b.name = $${params.length}`);
+  }
+  if (opts.search && opts.search.trim()) {
+    params.push(`%${opts.search.trim()}%`);
+    where.push(`(p.name ILIKE $${params.length} OR p.description ILIKE $${params.length})`);
+  }
+  if (opts.ids && opts.ids.length > 0) {
+    params.push(opts.ids);
+    where.push(`p.unique_id = ANY($${params.length}::uuid[])`);
+  }
+
+  const whereSql = where.join(' AND ');
+
+  const countRes = await pool.query<{ total: string }>(
+    `SELECT COUNT(*)::text AS total
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN brands b ON b.id = p.brand_id
+     WHERE ${whereSql};`,
+    params,
+  );
+  const total = parseInt(countRes.rows[0]?.total ?? '0', 10);
+
+  params.push(pageSize);
+  params.push(offset);
+  const listRes = await pool.query(
+    `SELECT ${PRODUCT_SELECT_COLUMNS}
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN brands b ON b.id = p.brand_id
+     WHERE ${whereSql}
+     ORDER BY p.is_on_offer DESC, c.name, p.name
+     LIMIT $${params.length - 1} OFFSET $${params.length};`,
+    params,
+  );
+
+  const products = listRes.rows.map(mapProduct);
+  return { products, total, page, pageSize, hasMore: offset + products.length < total };
+}
+
+// Bundle of products needed by the storefront homepage strips, fetched in
+// one round-trip so the storefront doesn't have to pull the whole catalog.
+export interface StorefrontSpotlight {
+  offerProducts: ReturnType<typeof mapProduct>[];
+  dailyEssentials: ReturnType<typeof mapProduct>[];
+  moodPicks: ReturnType<typeof mapProduct>[];
+}
+
+const DAILY_ESSENTIAL_KEYWORDS = [
+  'dairy', 'bread', 'egg', 'milk',
+  'fruit', 'vegetable',
+  'atta', 'rice', 'dal',
+  'tea', 'coffee',
+];
+
+const MOOD_KEYWORDS: Record<string, string[]> = {
+  hot: ['cold', 'juice', 'ice cream', 'frozen', 'sherbet', 'lassi', 'cool', 'soda', 'water', 'fruit'],
+  warm: ['juice', 'cold', 'salad', 'fruit', 'yogurt', 'curd', 'lassi'],
+  cool: ['tea', 'coffee', 'soup', 'biscuit', 'cookie', 'snack'],
+  cold: ['tea', 'coffee', 'soup', 'ghee', 'jaggery', 'honey', 'spice', 'masala', 'noodle', 'instant'],
+  rainy: ['tea', 'coffee', 'soup', 'pakora', 'biscuit', 'masala', 'noodle', 'instant'],
+};
+
+export async function getStorefrontSpotlight(
+  companyId: number,
+  mood: string | null,
+  limit = 12,
+): Promise<StorefrontSpotlight> {
+  const baseWhere = `
+    p.company_id = $1
+    AND p.is_active = TRUE
+    AND p.stock_quantity > 0
+    AND c.is_hidden IS NOT TRUE
+  `;
+
+  const offerRes = await pool.query(
+    `SELECT ${PRODUCT_SELECT_COLUMNS}
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN brands b ON b.id = p.brand_id
+     WHERE ${baseWhere} AND p.is_on_offer = TRUE
+     ORDER BY p.updated_date DESC
+     LIMIT $2;`,
+    [companyId, limit],
+  );
+
+  const dailyClauses = DAILY_ESSENTIAL_KEYWORDS.map((_, i) =>
+    `(c.name ILIKE $${i + 2} OR p.name ILIKE $${i + 2})`,
+  ).join(' OR ');
+  const dailyParams = [companyId, ...DAILY_ESSENTIAL_KEYWORDS.map((k) => `%${k}%`), limit];
+  const dailyRes = await pool.query(
+    `SELECT ${PRODUCT_SELECT_COLUMNS}
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN brands b ON b.id = p.brand_id
+     WHERE ${baseWhere} AND (${dailyClauses})
+     ORDER BY p.is_on_offer DESC, p.name
+     LIMIT $${dailyParams.length};`,
+    dailyParams,
+  );
+
+  let moodPicks: ReturnType<typeof mapProduct>[] = [];
+  const moodWords = mood ? MOOD_KEYWORDS[mood] : null;
+  if (moodWords && moodWords.length > 0) {
+    const moodClauses = moodWords.map((_, i) =>
+      `(p.name ILIKE $${i + 2} OR p.description ILIKE $${i + 2} OR c.name ILIKE $${i + 2})`,
+    ).join(' OR ');
+    const moodParams = [companyId, ...moodWords.map((w) => `%${w}%`), limit];
+    const moodRes = await pool.query(
+      `SELECT ${PRODUCT_SELECT_COLUMNS}
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN brands b ON b.id = p.brand_id
+       WHERE ${baseWhere} AND (${moodClauses})
+       ORDER BY p.is_on_offer DESC, p.name
+       LIMIT $${moodParams.length};`,
+      moodParams,
+    );
+    moodPicks = moodRes.rows.map(mapProduct);
+  }
+
+  return {
+    offerProducts: offerRes.rows.map(mapProduct),
+    dailyEssentials: dailyRes.rows.map(mapProduct),
+    moodPicks,
+  };
+}
+
 export interface SlowMoverSuggestion {
   uniqueId: string;
   name: string;
@@ -2311,6 +2478,9 @@ export interface TempCategoryRecord {
   priority: number;
   expiresAt: string;
   productIds: string[]; // product unique_ids matching this temp category right now
+  // Inlined product summaries so the storefront can render the strip
+  // without separately fetching the full catalog.
+  products: ReturnType<typeof mapProduct>[];
 }
 
 interface TempCategoryDef {
@@ -2554,26 +2724,14 @@ export async function listActiveTempCategories(
   );
   if (result.rowCount === 0) return [];
 
-  // Pull the active product catalog once and bucket products into each temp category.
-  const productRows = await pool.query<{
-    uniqueId: string;
-    name: string;
-    category: string | null;
-    description: string;
-    priceCents: number;
-    isOnOffer: boolean;
-    offerPriceCents: number | null;
-  }>(
+  // Pull the active product catalog once. We keep full mapProduct rows so the
+  // storefront can render the strip without separately fetching the catalog.
+  const productRows = await pool.query(
     `
-      SELECT p.unique_id AS "uniqueId",
-             p.name,
-             c.name AS "category",
-             p.description,
-             p.price_cents AS "priceCents",
-             p.is_on_offer AS "isOnOffer",
-             p.offer_price_cents AS "offerPriceCents"
+      SELECT ${PRODUCT_SELECT_COLUMNS}
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
       WHERE p.company_id = $1
         AND p.is_active = TRUE
         AND p.stock_quantity > 0
@@ -2581,12 +2739,26 @@ export async function listActiveTempCategories(
     `,
     [companyId]
   );
+  const fullProducts = productRows.rows.map(mapProduct);
+  const matchingRows = fullProducts.map((p) => ({
+    uniqueId: p.uniqueId,
+    name: p.name,
+    category: p.category,
+    description: p.description,
+    priceCents: p.priceCents,
+    isOnOffer: p.isOnOffer,
+    offerPriceCents: p.offerPriceCents,
+  }));
+  const productByUniqueId = new Map(fullProducts.map((p) => [p.uniqueId, p]));
 
   return result.rows
-    .map((row) => ({
-      ...row,
-      productIds: pickProductIdsForKeywords(productRows.rows, row.keywords ?? []),
-    }))
+    .map((row) => {
+      const productIds = pickProductIdsForKeywords(matchingRows, row.keywords ?? []);
+      const products = productIds
+        .map((id) => productByUniqueId.get(id))
+        .filter((p): p is ReturnType<typeof mapProduct> => Boolean(p));
+      return { ...row, productIds, products };
+    })
     .filter((row) => row.productIds.length > 0);
 }
 

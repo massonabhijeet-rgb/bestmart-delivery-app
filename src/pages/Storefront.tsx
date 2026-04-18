@@ -4,7 +4,8 @@ import {
   apiCancelOrder,
   apiCreateOrder,
   apiGetCompanyPublic,
-  apiGetProducts,
+  apiGetProductsPage,
+  apiGetStorefrontSpotlight,
   apiListAddresses,
   apiListBrands,
   apiListCategories,
@@ -13,9 +14,8 @@ import {
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { Brand, CouponPreview, PublicCoupon, TempCategory } from '../services/api';
+import type { Brand, CouponPreview, PublicCoupon, StorefrontSpotlight, TempCategory } from '../services/api';
 import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
-import { fuzzyRank } from '../lib/fuzzySearch';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import LazyMount from '../components/LazyMount';
@@ -23,7 +23,6 @@ import {
   MOOD_COPY,
   fetchOpenMeteoMood,
   moodFromIndiaCalendar,
-  pickProductsForMood,
   type WeatherMood,
 } from '../lib/weatherPicks';
 import {
@@ -55,7 +54,11 @@ const CART_STORAGE_KEY = 'bestmart:cart';
 const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
 
 function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrack, onLogout }: StorefrontProps) {
-  const [products, setProducts] = useState<Product[]>([]);
+  // Cache of every product we've seen across spotlight / temp categories /
+  // paged catalog / cart hydration. Lets cards, cart and pickers read product
+  // details without re-fetching the whole catalog up front.
+  const [productCache, setProductCache] = useState<Record<string, Product>>({});
+  const [spotlight, setSpotlight] = useState<StorefrontSpotlight | null>(null);
   const [categoryRows, setCategoryRows] = useState<Category[]>([]);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -100,6 +103,31 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [tempCategories, setTempCategories] = useState<TempCategory[]>([]);
   const [tempCategoryKey, setTempCategoryKey] = useState<string | null>(null);
 
+  // Server-paginated catalog state — only fetched while the user is browsing
+  // (category / brand / search / temp-category drilldown). Replaces the old
+  // "fetch all products on mount" approach so cold load stays cheap.
+  const [pageProducts, setPageProducts] = useState<Product[]>([]);
+  const [pageNum, setPageNum] = useState(1);
+  const [pageTotal, setPageTotal] = useState(0);
+  const [pageHasMore, setPageHasMore] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
+
+  // Merge any product list into the cache so it's available everywhere.
+  function ingestProducts(list: Product[]) {
+    if (list.length === 0) return;
+    setProductCache((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const p of list) {
+        if (next[p.uniqueId] !== p) {
+          next[p.uniqueId] = p;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }
+
   function captureLocation(): Promise<{ latitude: number; longitude: number } | null> {
     if (!('geolocation' in navigator) || !window.isSecureContext) {
       setLocationStatus('error');
@@ -139,10 +167,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   }
 
   useEffect(() => {
-    Promise.all([apiGetCompanyPublic(), apiGetProducts(), apiListCategories()])
-      .then(([companyData, productData, categoryData]) => {
+    Promise.all([apiGetCompanyPublic(), apiListCategories()])
+      .then(([companyData, categoryData]) => {
         setCompany(companyData);
-        setProducts(productData.filter((product) => product.isActive));
         setCategoryRows(categoryData);
       })
       .catch((err) => {
@@ -178,10 +205,31 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     let cancelled = false;
     apiListTempCategories(mood)
       .then((rows) => {
-        if (!cancelled) setTempCategories(rows);
+        if (cancelled) return;
+        setTempCategories(rows);
+        for (const tc of rows) ingestProducts(tc.products);
       })
       .catch(() => {
         if (!cancelled) setTempCategories([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mood]);
+
+  // Homepage strips (offers / daily essentials / mood picks) come from one
+  // bundled spotlight call instead of the full catalog. Re-fetched per mood
+  // so the mood-picks row tracks the current weather.
+  useEffect(() => {
+    let cancelled = false;
+    apiGetStorefrontSpotlight(mood)
+      .then((data) => {
+        if (cancelled) return;
+        setSpotlight(data);
+        ingestProducts([...data.offerProducts, ...data.dailyEssentials, ...data.moodPicks]);
+      })
+      .catch(() => {
+        if (!cancelled) setSpotlight({ offerProducts: [], dailyEssentials: [], moodPicks: [] });
       });
     return () => {
       cancelled = true;
@@ -260,9 +308,23 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   }
 
   const productLookup = useMemo(() => {
-    return new Map(products.map((product) => [product.uniqueId, product]));
-  }, [products]);
+    return new Map(Object.entries(productCache));
+  }, [productCache]);
 
+  // Hydrate cart items that aren't in the cache yet — happens on cold load
+  // when localStorage holds uniqueIds we haven't seen since spotlight only
+  // returns a subset of the catalog. Pull just the missing ones server-side.
+  useEffect(() => {
+    const missing = Object.keys(cart).filter((id) => !productCache[id]);
+    if (missing.length === 0) return;
+    apiGetProductsPage({ ids: missing, pageSize: missing.length })
+      .then((res) => ingestProducts(res.products))
+      .catch(() => {});
+  }, [cart, productCache]);
+
+  // Drop cart entries whose product is sold out or no longer exists. We can
+  // only judge entries we have product data for — missing entries are left
+  // alone until the hydration effect above resolves them.
   useEffect(() => {
     setCart((current) => {
       let changed = false;
@@ -270,7 +332,11 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
       for (const [uniqueId, quantity] of Object.entries(current)) {
         const product = productLookup.get(uniqueId);
-        if (!product || !product.isActive || product.stockQuantity <= 0) {
+        if (!product) {
+          next[uniqueId] = quantity;
+          continue;
+        }
+        if (!product.isActive || product.stockQuantity <= 0) {
           changed = true;
           continue;
         }
@@ -288,10 +354,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     });
   }, [productLookup]);
 
-  const categories = useMemo(() => {
-    return ['All', ...new Set(products.map((product) => product.category))];
-  }, [products]);
-
   const categoryTiles = useMemo(() => {
     return categoryRows.map((row) => ({
       name: row.name,
@@ -299,100 +361,104 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     }));
   }, [categoryRows]);
 
-  // Brand tiles: only brands that have at least one in-stock active product.
+  // Brand tiles: every active brand the company has registered. We no longer
+  // know per-brand product counts up front (catalog isn't loaded), so we just
+  // sort alphabetically and skip the count badge.
   const brandTiles = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const p of products) {
-      if (!p.isActive || p.stockQuantity <= 0 || !p.brand) continue;
-      counts.set(p.brand, (counts.get(p.brand) ?? 0) + 1);
-    }
-    return brandsList
-      .filter((b) => counts.has(b.name))
-      .map((b) => ({ name: b.name, productCount: counts.get(b.name) ?? 0 }))
-      .sort((a, b) => b.productCount - a.productCount);
-  }, [brandsList, products]);
+    return [...brandsList]
+      .map((b) => ({ name: b.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [brandsList]);
 
-  const offerProducts = useMemo(
-    () => products.filter((p) => p.isOnOffer && p.isActive && p.stockQuantity > 0),
-    [products]
-  );
-
-  const moodPicks = useMemo(
-    () => pickProductsForMood(products.filter((p) => p.isActive && p.stockQuantity > 0), mood, 12),
-    [products, mood],
-  );
+  const offerProducts = spotlight?.offerProducts ?? [];
+  const moodPicks = spotlight?.moodPicks ?? [];
+  const dailyEssentials = spotlight?.dailyEssentials ?? [];
 
   const checkoutMood = useMemo(() => moodFromHour(new Date().getHours()), []);
+  const cachedProductsList = useMemo(() => Object.values(productCache), [productCache]);
   const checkoutPicks = useMemo(
-    () => pickCheckoutTreats(products, checkoutMood, cart, 8),
-    [products, checkoutMood, cart],
+    () => pickCheckoutTreats(cachedProductsList, checkoutMood, cart, 8),
+    [cachedProductsList, checkoutMood, cart],
   );
-
-  // Daily essentials: products from the staple-grocery categories.
-  const dailyEssentials = useMemo(() => {
-    const KEYWORDS = [
-      'dairy', 'bread', 'egg', 'milk',
-      'fruit', 'vegetable',
-      'atta', 'rice', 'dal',
-      'tea', 'coffee',
-    ];
-    return products
-      .filter((p) => p.isActive && p.stockQuantity > 0)
-      .filter((p) => {
-        const cat = (p.category ?? '').toLowerCase();
-        const name = p.name.toLowerCase();
-        return KEYWORDS.some((k) => cat.includes(k) || name.includes(k));
-      })
-      .slice(0, 12);
-  }, [products]);
 
   const activeTempCategory = useMemo(
     () => (tempCategoryKey ? tempCategories.find((t) => t.autoKey === tempCategoryKey) ?? null : null),
     [tempCategoryKey, tempCategories],
   );
 
-  const filteredProducts = useMemo(() => {
-    const term = deferredSearch.trim();
-    const tempIds = activeTempCategory ? new Set(activeTempCategory.productIds) : null;
-    const byCategory = products.filter(
-      (product) =>
-        (category === 'All' || product.category === category) &&
-        (!brandFilter || product.brand === brandFilter) &&
-        (!tempIds || tempIds.has(product.uniqueId)),
-    );
-    if (!term) return byCategory;
-    return fuzzyRank(term, byCategory, (product) => [
-      product.name,
-      product.category,
-      product.description,
-      product.unitLabel,
-    ]);
-  }, [products, category, deferredSearch, brandFilter, activeTempCategory]);
-
-  // ── Catalog windowing ────────────────────────────────────────────────
-  // Don't render thousands of product cards on first paint. Show the first
-  // PAGE_SIZE, then mount more in chunks as the user nears the bottom.
+  // ── Server-paginated catalog ──────────────────────────────────────────
+  // Only fetched while the user is browsing (category/brand/search/temp).
+  // Replaces the old "load full catalog and slice client-side" approach.
   const PAGE_SIZE = 24;
-  const [displayedCount, setDisplayedCount] = useState(PAGE_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  // Reset window when filter/search changes so the user sees the new top results.
+
+  // Temp categories already arrive with their product summaries, so when
+  // a temp filter is active we render those directly (no /products/page hit).
+  const visibleProducts = activeTempCategory ? activeTempCategory.products : pageProducts;
+  const visibleTotal = activeTempCategory ? activeTempCategory.products.length : pageTotal;
+  const visibleHasMore = activeTempCategory ? false : pageHasMore;
+  const browsingMode =
+    category !== 'All' ||
+    Boolean(deferredSearch.trim()) ||
+    Boolean(brandFilter);
+
+  // Reset paging whenever the active filter changes.
   useEffect(() => {
-    setDisplayedCount(PAGE_SIZE);
-  }, [category, deferredSearch, brandFilter, tempCategoryKey]);
-  // IntersectionObserver to grow the window when the sentinel scrolls into view.
+    setPageNum(1);
+  }, [category, deferredSearch, brandFilter]);
+
+  // Fetch the requested page of catalog products from the server.
   useEffect(() => {
-    if (displayedCount >= filteredProducts.length) return;
-    const node = loadMoreRef.current;
-    if (!node) return;
-    if (typeof IntersectionObserver === 'undefined') {
-      setDisplayedCount(filteredProducts.length);
+    if (!browsingMode || activeTempCategory) {
+      // Nothing server-paged to load — clear so a stale list doesn't flash
+      // when the user backs out of a filter.
+      setPageProducts([]);
+      setPageTotal(0);
+      setPageHasMore(false);
       return;
     }
+    let cancelled = false;
+    setPageLoading(true);
+    apiGetProductsPage({
+      page: pageNum,
+      pageSize: PAGE_SIZE,
+      category,
+      brand: brandFilter,
+      q: deferredSearch.trim() || null,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        ingestProducts(res.products);
+        setPageProducts((current) => (pageNum === 1 ? res.products : [...current, ...res.products]));
+        setPageTotal(res.total);
+        setPageHasMore(res.hasMore);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (pageNum === 1) {
+          setPageProducts([]);
+          setPageTotal(0);
+        }
+        setPageHasMore(false);
+      })
+      .finally(() => {
+        if (!cancelled) setPageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [browsingMode, activeTempCategory, pageNum, category, brandFilter, deferredSearch]);
+
+  // Sentinel: when the bottom-marker scrolls into view, ask for the next page.
+  useEffect(() => {
+    if (!visibleHasMore || pageLoading) return;
+    const node = loadMoreRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            setDisplayedCount((n) => Math.min(n + PAGE_SIZE, filteredProducts.length));
+            setPageNum((n) => n + 1);
             break;
           }
         }
@@ -401,20 +467,16 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [displayedCount, filteredProducts.length]);
-  const visibleProducts = useMemo(
-    () => filteredProducts.slice(0, displayedCount),
-    [filteredProducts, displayedCount],
-  );
+  }, [visibleHasMore, pageLoading]);
 
   const cartItems = useMemo(() => {
-    return products
-      .filter((product) => cart[product.uniqueId] > 0)
-      .map((product) => ({
-        product,
-        quantity: cart[product.uniqueId],
-      }));
-  }, [products, cart]);
+    return Object.entries(cart)
+      .map(([uniqueId, quantity]) => {
+        const product = productLookup.get(uniqueId);
+        return product ? { product, quantity } : null;
+      })
+      .filter((entry): entry is { product: Product; quantity: number } => entry !== null);
+  }, [cart, productLookup]);
 
   const subtotalCents = cartItems.reduce(
     (sum, item) => sum + lineTotalCents(item.product, item.quantity),
@@ -856,10 +918,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </div>
 
               {tempCategories.map((tc) => {
-                const items = tc.productIds
-                  .map((id) => productLookup.get(id))
-                  .filter((p): p is Product => Boolean(p))
-                  .slice(0, 12);
+                const items = tc.products.slice(0, 12);
                 if (items.length === 0) return null;
                 return (
                   <article key={tc.autoKey} className={`temp-section temp-section--${tc.theme}`}>
@@ -1190,9 +1249,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                       >
                         <span className="brand-tile__avatar" aria-hidden>{initials}</span>
                         <span className="brand-tile__name">{b.name}</span>
-                        <span className="brand-tile__count">
-                          {b.productCount} item{b.productCount === 1 ? '' : 's'}
-                        </span>
                       </button>
                     );
                   })}
@@ -1320,7 +1376,13 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </button>
               )}
             </div>
-            <p>{filteredProducts.length} items ready for checkout</p>
+            <p>
+              {visibleTotal > 0
+                ? `${visibleTotal} item${visibleTotal === 1 ? '' : 's'} ready for checkout`
+                : pageLoading
+                  ? 'Loading…'
+                  : 'No matching items'}
+            </p>
           </div>
 
           <div className="product-grid">
@@ -1413,13 +1475,16 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </article>
             ))}
           </div>
-          {displayedCount < filteredProducts.length ? (
+          {visibleHasMore ? (
             <div
               ref={loadMoreRef}
               className="catalog-load-more"
               aria-hidden="true"
               style={{ height: 1 }}
             />
+          ) : null}
+          {pageLoading && pageProducts.length === 0 ? (
+            <div className="empty-state">Loading products…</div>
           ) : null}
         </div>
 
