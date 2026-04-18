@@ -1952,22 +1952,28 @@ export async function bulkImportProducts(
     }
 
     if (newBrands.size > 0) {
-      const values: string[] = [];
-      const params: unknown[] = [];
-      let i = 1;
-      for (const [slug, name] of newBrands) {
-        values.push(`($${i++}, $${i++}, $${i++})`);
-        params.push(companyId, name, slug);
+      // Postgres caps query params at 65535. Brands use 3 per row → safe chunk size.
+      const BRAND_CHUNK = 5000;
+      const brandList = [...newBrands.entries()];
+      for (let start = 0; start < brandList.length; start += BRAND_CHUNK) {
+        const chunk = brandList.slice(start, start + BRAND_CHUNK);
+        const values: string[] = [];
+        const params: unknown[] = [];
+        let i = 1;
+        for (const [slug, name] of chunk) {
+          values.push(`($${i++}, $${i++}, $${i++})`);
+          params.push(companyId, name, slug);
+        }
+        const insertRes = await client.query<{ id: number; slug: string }>(
+          `INSERT INTO brands (company_id, name, slug)
+           VALUES ${values.join(', ')}
+           ON CONFLICT (company_id, slug) DO NOTHING
+           RETURNING id, slug;`,
+          params,
+        );
+        for (const row of insertRes.rows) brandBySlug.set(row.slug, row.id);
+        result.brandsCreated += insertRes.rowCount ?? 0;
       }
-      const insertRes = await client.query<{ id: number; slug: string }>(
-        `INSERT INTO brands (company_id, name, slug)
-         VALUES ${values.join(', ')}
-         ON CONFLICT (company_id, slug) DO NOTHING
-         RETURNING id, slug;`,
-        params,
-      );
-      for (const row of insertRes.rows) brandBySlug.set(row.slug, row.id);
-      result.brandsCreated = insertRes.rowCount ?? 0;
 
       // Re-fetch any conflicting rows we didn't get back from RETURNING.
       const missing = [...newBrands.keys()].filter((s) => !brandBySlug.has(s));
@@ -1988,11 +1994,8 @@ export async function bulkImportProducts(
     const existingProductSlugs = new Set(productRes.rows.map((r) => r.slug));
     const seenInBatch = new Set<string>();
 
-    // 4. Build the bulk INSERT for surviving rows.
-    const insertValues: string[] = [];
-    const insertParams: unknown[] = [];
-    let p = 1;
-
+    // 4. Resolve every surviving row to an insert-ready tuple.
+    const toInsert: Array<unknown[]> = [];
     for (const row of rows) {
       const catSlug = toSlug(row.categoryName);
       const categoryId = categoryBySlug.get(catSlug);
@@ -2016,10 +2019,7 @@ export async function bulkImportProducts(
       const brandSlug = row.brandName ? toSlug(row.brandName) : '';
       const brandId = brandSlug ? brandBySlug.get(brandSlug) ?? null : null;
 
-      insertValues.push(
-        `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`,
-      );
-      insertParams.push(
+      toInsert.push([
         uuidv4(),
         companyId,
         row.name,
@@ -2035,19 +2035,31 @@ export async function bulkImportProducts(
         row.isActive,
         false, // is_on_offer
         brandId,
-      );
+      ]);
     }
 
-    if (insertValues.length > 0) {
+    // Postgres params cap is 65535; products use 15 per row → 1000/chunk = 15000 params.
+    const PRODUCT_CHUNK = 1000;
+    for (let start = 0; start < toInsert.length; start += PRODUCT_CHUNK) {
+      const chunk = toInsert.slice(start, start + PRODUCT_CHUNK);
+      const values: string[] = [];
+      const params: unknown[] = [];
+      let p = 1;
+      for (const tuple of chunk) {
+        const slots: string[] = [];
+        for (let k = 0; k < tuple.length; k++) slots.push(`$${p++}`);
+        values.push(`(${slots.join(', ')})`);
+        params.push(...tuple);
+      }
       const insertRes = await client.query(
         `INSERT INTO products (
            unique_id, company_id, name, slug, category_id,
            description, unit_label, price_cents, original_price_cents,
            stock_quantity, badge, image_url, is_active, is_on_offer, brand_id
-         ) VALUES ${insertValues.join(', ')};`,
-        insertParams,
+         ) VALUES ${values.join(', ')};`,
+        params,
       );
-      result.created = insertRes.rowCount ?? 0;
+      result.created += insertRes.rowCount ?? 0;
     }
 
     await client.query('COMMIT');
