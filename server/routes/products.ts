@@ -12,9 +12,11 @@ import {
   createProduct,
   deactivateProduct,
   getDefaultCompanyId,
+  getInventorySummary,
   getProductByUniqueId,
   getStorefrontSpotlight,
   listProducts,
+  listProductNameIndex,
   listProductsPage,
   listSlowMovers,
   setProductOffer,
@@ -97,31 +99,105 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   return res.json(result);
 });
 
-// Storefront-only paged list. Inactive/hidden are excluded server-side.
-// Short Redis TTL keyed by every filter so a category / search combo doesn't
-// pollute another's cache.
+// Paged listing.
+// Public (default): inactive & hidden categories excluded.
+// Admin (?admin=1, requires admin/editor): everything visible plus status,
+// categoryId, onOffer, sort filters. Cache key embeds every filter.
 router.get('/page', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
   if (!companyId) return res.status(404).json({ error: 'Company not found' });
 
+  const wantsAdmin = req.query.admin === '1' || req.query.admin === 'true';
+  const isAdmin =
+    wantsAdmin &&
+    !!req.user &&
+    (req.user.role === 'admin' || req.user.role === 'editor') &&
+    req.user.companyId === companyId;
+
   const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
-  const pageSize = Math.max(1, Math.min(100, parseInt(String(req.query.pageSize ?? '24'), 10) || 24));
+  const pageSize = Math.max(1, Math.min(200, parseInt(String(req.query.pageSize ?? '24'), 10) || 24));
   const category = req.query.category ? String(req.query.category) : null;
+  const categoryIdRaw = req.query.categoryId ? Number(req.query.categoryId) : null;
+  const categoryId = Number.isFinite(categoryIdRaw) ? categoryIdRaw : null;
   const brand = req.query.brand ? String(req.query.brand) : null;
   const search = req.query.q ? String(req.query.q) : null;
   const idsRaw = req.query.ids ? String(req.query.ids) : null;
   const ids = idsRaw
     ? idsRaw.split(',').map((s) => s.trim()).filter(Boolean)
     : null;
+  const status = isAdmin && req.query.status
+    ? (String(req.query.status) as 'all' | 'active' | 'archived' | 'low_stock')
+    : null;
+  const onOfferRaw = req.query.onOffer;
+  const onOffer = isAdmin && (onOfferRaw === '1' || onOfferRaw === 'true')
+    ? true
+    : isAdmin && (onOfferRaw === '0' || onOfferRaw === 'false')
+      ? false
+      : null;
+  const sortRaw = req.query.sort ? String(req.query.sort) : null;
+  const sort = (['price_asc','price_desc','stock_asc','stock_desc','created_desc','default'] as const).includes(
+    sortRaw as never,
+  )
+    ? (sortRaw as 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc' | 'created_desc' | 'default')
+    : null;
 
-  const cacheKey = `bm:products:page:${companyId}:${page}:${pageSize}:${category ?? ''}:${brand ?? ''}:${search ?? ''}:${ids ? ids.join(',') : ''}`;
+  const cacheKey = `bm:products:page:${isAdmin ? 'a' : 'p'}:${companyId}:${page}:${pageSize}:${category ?? ''}:${categoryId ?? ''}:${brand ?? ''}:${search ?? ''}:${ids ? ids.join(',') : ''}:${status ?? ''}:${onOffer ?? ''}:${sort ?? ''}`;
   const cached = await cacheGet<unknown>(cacheKey);
   if (cached) return res.json(cached);
 
-  const result = await listProductsPage({ companyId, page, pageSize, category, brand, search, ids });
+  const result = await listProductsPage({
+    companyId, page, pageSize, category, categoryId, brand, search, ids,
+    admin: isAdmin, status, onOffer, sort,
+  });
   await cacheSet(cacheKey, result, 60); // 1 min — short to keep stock fresh
   return res.json(result);
 });
+
+// Admin overview: aggregates + low-stock + recents in one round-trip.
+// Replaces the old pattern of fetching the entire product catalog just to
+// count rows on the Dashboard.
+router.get(
+  '/admin-summary',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+      const cacheKey = `bm:products:adminsummary:${req.user.companyId}`;
+      const cached = await cacheGet<unknown>(cacheKey);
+      if (cached) return res.json(cached);
+      const summary = await getInventorySummary(req.user.companyId);
+      await cacheSet(cacheKey, summary, 60);
+      return res.json(summary);
+    } catch (error) {
+      console.error('Admin summary error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+// Lightweight name index — used by the bulk-image picker to match files to
+// products without pulling the full catalog payload.
+router.get(
+  '/name-index',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+      const cacheKey = `bm:products:nameindex:${req.user.companyId}`;
+      const cached = await cacheGet<unknown>(cacheKey);
+      if (cached) return res.json(cached);
+      const index = await listProductNameIndex(req.user.companyId);
+      const payload = { products: index };
+      await cacheSet(cacheKey, payload, 120);
+      return res.json(payload);
+    } catch (error) {
+      console.error('Name index error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 // Bundle of homepage-strip products in one round-trip.
 router.get('/spotlight', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {

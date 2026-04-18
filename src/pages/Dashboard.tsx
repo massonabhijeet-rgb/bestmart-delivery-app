@@ -19,6 +19,8 @@ import {
   apiCreateUser,
   apiDeleteCategory,
   apiDeleteProduct,
+  apiGetInventorySummary,
+  apiGetProductNameIndex,
   apiGetProducts,
   apiGetSummary,
   apiListCategories,
@@ -46,7 +48,7 @@ import {
   apiUpdateBrand,
   apiDeleteBrand,
 } from '../services/api';
-import type { Brand, BulkImageUploadResult, Coupon, SalesReport, SlowMoverSuggestion } from '../services/api';
+import type { Brand, BulkImageUploadResult, Coupon, InventorySummary, ProductNameIndexEntry, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -134,6 +136,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  // Lazy-loaded only when admin opens inventory/offers tab — keeps the
+  // initial dashboard load light. Aggregates come from inventorySummary.
+  const [productsLoaded, setProductsLoaded] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [inventorySummary, setInventorySummary] = useState<InventorySummary | null>(null);
+  // Lazy index for the bulk-image picker (replaces full-catalog client load).
+  const [productNameIndex, setProductNameIndex] = useState<ProductNameIndexEntry[] | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -163,6 +172,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [showBulkImagePanel, setShowBulkImagePanel] = useState(false);
   const [bulkImageFiles, setBulkImageFiles] = useState<File[]>([]);
   const [bulkImageUploading, setBulkImageUploading] = useState(false);
+  const [bulkImageProgress, setBulkImageProgress] = useState({ done: 0, total: 0 });
   const [bulkImageResult, setBulkImageResult] = useState<BulkImageUploadResult | null>(null);
   const [bulkImageDragging, setBulkImageDragging] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
@@ -306,14 +316,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     },
   });
 
+  // Mount load: aggregates (summary, inventorySummary), orders, categories,
+  // brands, team — but NOT the full product catalog. Products are lazy-loaded
+  // on first visit to inventory/offers (mirrors the storefront pattern).
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [summaryData, productData, orderData, teamData, categoryData, riderData, brandData] =
+      const [summaryData, invSummaryData, orderData, teamData, categoryData, riderData, brandData] =
         await Promise.all([
           apiGetSummary(),
-          apiGetProducts(true),
+          canManageCatalog ? apiGetInventorySummary() : Promise.resolve(null),
           apiListOrders(),
           canManageTeam ? apiListTeam() : Promise.resolve([]),
           apiListCategories(),
@@ -321,7 +334,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           apiListBrands(),
         ]);
       setSummary(summaryData);
-      setProducts(productData);
+      setInventorySummary(invSummaryData);
       setOrders(orderData);
       setTeam(teamData);
       setCategories(categoryData);
@@ -339,10 +352,55 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }, [canManageTeam, canManageCatalog]);
 
+  // Lazy product fetch — fired the first time the admin opens an inventory-
+  // dependent tab. Force=true used after mutations to repopulate.
+  const loadProducts = useCallback(async (force = false) => {
+    if (!canManageCatalog) return;
+    if (productsLoading) return;
+    if (productsLoaded && !force) return;
+    setProductsLoading(true);
+    try {
+      const list = await apiGetProducts(true);
+      setProducts(list);
+      setProductsLoaded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load products');
+    } finally {
+      setProductsLoading(false);
+    }
+  }, [canManageCatalog, productsLoading, productsLoaded]);
+
+  // Refresh both the inventory aggregates and the cached product list (when
+  // present). Called after create/update/delete/offer/import operations.
+  const refreshInventory = useCallback(async () => {
+    if (!canManageCatalog) return;
+    try {
+      const [summary, list] = await Promise.all([
+        apiGetInventorySummary(),
+        productsLoaded ? apiGetProducts(true) : Promise.resolve(null),
+      ]);
+      setInventorySummary(summary);
+      if (list) setProducts(list);
+      // Name index becomes stale on any catalog mutation.
+      setProductNameIndex(null);
+    } catch (err) {
+      console.warn('Refresh inventory failed', err);
+    }
+  }, [canManageCatalog, productsLoaded]);
+
   useEffect(() => {
     void loadDashboard();
     void apiGetCompanyPublic().then(setCompanyInfo).catch(() => {});
   }, [loadDashboard]);
+
+  // First time the admin lands on a tab that needs the full product list,
+  // fetch it. After that it stays cached (and gets refreshed on edits).
+  useEffect(() => {
+    if (!canManageCatalog) return;
+    if (activeTab === 'inventory' || activeTab === 'offers') {
+      void loadProducts();
+    }
+  }, [activeTab, canManageCatalog, loadProducts]);
 
   // Live clock — ticks every minute on the Overview tab.
   useEffect(() => {
@@ -379,7 +437,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if ((activeTab === 'offers' || activeTab === 'overview') && canManageCatalog) {
       void loadSlowMovers();
     }
-  }, [activeTab, canManageCatalog, loadSlowMovers, products.length]);
+  }, [activeTab, canManageCatalog, loadSlowMovers, inventorySummary?.totalProducts]);
 
   const loadSalesReport = useCallback(async (days: 7 | 30 | 90) => {
     if (!canManageTeam) return;
@@ -645,7 +703,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       void savedProduct;
       setNotice(editingId ? 'Product updated.' : 'Product created.');
       closeProductEditor();
-      await loadDashboard();
+      await refreshInventory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save product');
     } finally {
@@ -658,7 +716,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     try {
       await apiDeleteProduct(uniqueId);
       setNotice('Product archived.');
-      await loadDashboard();
+      await refreshInventory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive product');
     } finally {
@@ -786,7 +844,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await apiCreateCategory(name);
       setNotice(`Category "${name}" created.`);
       setNewCategoryName('');
-      await loadDashboard();
+      const cats = await apiListCategories();
+      setCategories(cats);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create category');
     } finally {
@@ -804,7 +863,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setEditingCategoryId(null);
       setEditingCategoryName('');
       setEditingCategoryHidden(false);
-      await loadDashboard();
+      const [cats] = await Promise.all([apiListCategories(), refreshInventory()]);
+      setCategories(cats);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update category');
     } finally {
@@ -813,12 +873,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }
 
   async function handleDeleteCategory(category: Category) {
-    const inCategory = products.filter((p) => p.categoryId === category.id);
+    // Prefer the in-memory product list when present (richer preview); otherwise
+    // fall back to the inventory summary so the prompt still warns about scope.
+    const inCategory = productsLoaded
+      ? products.filter((p) => p.categoryId === category.id)
+      : [];
+    const summaryCount = inventorySummary?.byCategory.find(
+      (c) => c.categoryId === category.id,
+    )?.count ?? 0;
+    const totalCount = productsLoaded ? inCategory.length : summaryCount;
     const preview = inCategory.slice(0, 5).map((p) => `• ${p.name}`).join('\n');
     const more = inCategory.length > 5 ? `\n…and ${inCategory.length - 5} more` : '';
     const productsLine =
-      inCategory.length > 0
-        ? `This will also REMOVE ${inCategory.length} product(s) under this category:\n${preview}${more}\n\n(Products that appear on past orders will be archived instead of deleted so order history stays intact.)\n\n`
+      totalCount > 0
+        ? `This will also REMOVE ${totalCount} product(s) under this category:${preview ? `\n${preview}${more}` : ''}\n\n(Products that appear on past orders will be archived instead of deleted so order history stays intact.)\n\n`
         : '';
 
     const confirmed = await confirm({
@@ -838,7 +906,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       if (result.productsArchived) parts.push(`${result.productsArchived} archived.`);
       setNotice(parts.join(' '));
       setError('');
-      await loadDashboard();
+      const [cats] = await Promise.all([apiListCategories(), refreshInventory()]);
+      setCategories(cats);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete category');
     } finally {
@@ -939,7 +1008,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       await apiUploadCategoryImage(id, file);
       setNotice('Category image uploaded.');
       setCategoryImages((c) => ({ ...c, [id]: null }));
-      await loadDashboard();
+      const cats = await apiListCategories();
+      setCategories(cats);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to upload image');
     } finally {
@@ -972,6 +1042,22 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   // ── Bulk image upload helpers ────────────────────────────────────────────
 
+  // Lazy-load the lightweight name index when the bulk-image panel opens. The
+  // matcher only needs uniqueId/name pairs, so this is much cheaper than the
+  // full product catalog payload.
+  useEffect(() => {
+    if (!showBulkImagePanel || !canManageCatalog) return;
+    if (productNameIndex !== null) return;
+    apiGetProductNameIndex().then(setProductNameIndex).catch(() => {});
+  }, [showBulkImagePanel, canManageCatalog, productNameIndex]);
+
+  const productNameSet = useMemo(() => {
+    const src = productNameIndex
+      ? productNameIndex.map((p) => p.name)
+      : products.map((p) => p.name);
+    return new Set(src.map((n) => n.toLowerCase().trim()));
+  }, [productNameIndex, products]);
+
   // Stable identifier that survives folder uploads where multiple subfolders
   // can contain the same filename. webkitRelativePath is set by browsers when
   // a directory is picked; for plain file picks it's empty so we fall back to
@@ -1002,8 +1088,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   async function handleBulkImageUpload() {
     if (bulkImageFiles.length === 0) return;
+    const totalFiles = bulkImageFiles.length;
     setBulkImageUploading(true);
     setBulkImageResult(null);
+    setBulkImageProgress({ done: 0, total: totalFiles });
     try {
       // Backend caps each request at 100 files (multer.array limit).
       // Chunk smaller (50) to keep server memory/sharp load manageable.
@@ -1025,8 +1113,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         merged.results.push(...res.results);
         // partial progress so user sees movement on big folders
         setBulkImageResult({ ...merged });
+        setBulkImageProgress({ done: Math.min(i + chunk.length, totalFiles), total: totalFiles });
       }
-      if (merged.matched > 0) await loadDashboard();
+      if (merged.matched > 0) await refreshInventory();
       // Clear the picker after upload so the next batch starts fresh and
       // the same file list isn't accidentally re-uploaded. The result
       // panel stays visible so the user can see what happened.
@@ -1036,6 +1125,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError(err instanceof Error ? err.message : 'Bulk image upload failed');
     } finally {
       setBulkImageUploading(false);
+      setBulkImageProgress({ done: 0, total: 0 });
     }
   }
 
@@ -1289,7 +1379,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setBulkResult({ done, failed, errors, skippedExisting, brandsCreated });
     setBulkImporting(false);
     setBulkRows([]);
-    await loadDashboard();
+    await refreshInventory();
   }
 
   const tabs: Array<{ key: DashTab; label: string; badge?: number }> = [
@@ -1417,22 +1507,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
      OVERVIEW
   ──────────────────────────────────────── */
   function renderOverview() {
-    const totalProducts = products.length;
-    const activeProducts = products.filter((p) => p.isActive).length;
-    const archivedProducts = totalProducts - activeProducts;
-    const outOfStock = products.filter((p) => p.isActive && p.stockQuantity <= 0).length;
-    const lowStock = products.filter((p) => p.isActive && p.stockQuantity > 0 && p.stockQuantity <= 5).length;
-    const onOfferCount = products.filter((p) => p.isActive && p.isOnOffer).length;
-    const totalUnits = products
-      .filter((p) => p.isActive)
-      .reduce((sum, p) => sum + (p.stockQuantity ?? 0), 0);
-    const inventoryValueCents = products
-      .filter((p) => p.isActive)
-      .reduce((sum, p) => sum + (p.priceCents ?? 0) * (p.stockQuantity ?? 0), 0);
-    const lowStockList = products
-      .filter((p) => p.isActive && p.stockQuantity <= 5)
-      .sort((a, b) => a.stockQuantity - b.stockQuantity)
-      .slice(0, 3);
+    // All aggregates come from the server summary so we don't need the full
+    // catalog client-side. Falls back to zero while it loads.
+    const totalProducts = inventorySummary?.totalProducts ?? 0;
+    const activeProducts = inventorySummary?.activeProducts ?? 0;
+    const archivedProducts = inventorySummary?.archivedProducts ?? 0;
+    const outOfStock = inventorySummary?.outOfStock ?? 0;
+    const lowStock = inventorySummary?.lowStock ?? 0;
+    const onOfferCount = inventorySummary?.onOfferCount ?? 0;
+    const totalUnits = inventorySummary?.totalUnits ?? 0;
+    const inventoryValueCents = inventorySummary?.inventoryValueCents ?? 0;
+    const lowStockList = (inventorySummary?.lowStockList ?? []).slice(0, 3);
 
     const weatherInfo = weatherSnap ? describeWeatherCode(weatherSnap.weatherCode) : null;
     const dayLabel = now.toLocaleDateString(undefined, {
@@ -1588,25 +1673,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         {/* Lazy-mounted insight grid (two columns on desktop, one on mobile) */}
         <LazyMount placeholderHeight={400}>
           {(() => {
-            const byCat = new Map<string, { name: string; valueCents: number; units: number; count: number }>();
-            for (const p of products) {
-              if (!p.isActive) continue;
-              const key = p.category ?? 'Uncategorised';
-              const entry = byCat.get(key) ?? { name: key, valueCents: 0, units: 0, count: 0 };
-              entry.valueCents += (p.priceCents ?? 0) * (p.stockQuantity ?? 0);
-              entry.units += p.stockQuantity ?? 0;
-              entry.count += 1;
-              byCat.set(key, entry);
-            }
-            const catRows = Array.from(byCat.values())
+            // All aggregates from the server summary; no client-side catalog walk.
+            const catRows = (inventorySummary?.byCategory ?? [])
+              .map((c) => ({ name: c.category, valueCents: c.valueCents, units: c.units, count: c.activeCount }))
+              .filter((r) => r.count > 0)
               .sort((a, b) => b.valueCents - a.valueCents)
               .slice(0, 5);
             const catMax = Math.max(1, ...catRows.map((r) => r.valueCents));
 
-            const recent = [...products]
-              .filter((p) => p.isActive)
-              .sort((a, b) => new Date(b.createdDate).getTime() - new Date(a.createdDate).getTime())
-              .slice(0, 4);
+            const recent = (inventorySummary?.recentProducts ?? []).slice(0, 4);
 
             const topSellers = salesReport?.topProducts.slice(0, 5) ?? [];
             const sellersMax = Math.max(1, ...topSellers.map((x) => x.unitsSold));
@@ -2309,7 +2384,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         <div className="section-box__head">
           <div>
             <h2>{canManageCatalog ? 'Inventory Editor' : 'Inventory'}</h2>
-            <p>{products.length} products · {products.filter((p) => p.isActive).length} active</p>
+            <p>{inventorySummary?.totalProducts ?? 0} products · {inventorySummary?.activeProducts ?? 0} active</p>
           </div>
           {canManageCatalog ? (
             <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
@@ -2373,7 +2448,56 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 }}
                 onChange={(e) => e.target.files && handleBulkImageFiles(e.target.files)}
               />
-              {bulkImageFiles.length === 0 ? (
+              {bulkImageUploading ? (
+                <div
+                  style={{ textAlign: 'center', color: 'var(--text-muted)', width: '100%', padding: '12px 0' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div
+                    aria-hidden
+                    style={{
+                      width: 36,
+                      height: 36,
+                      border: '3px solid var(--border, #e5e7eb)',
+                      borderTopColor: 'var(--accent, #2563eb)',
+                      borderRadius: '50%',
+                      margin: '0 auto 10px',
+                      animation: 'spin 0.8s linear infinite',
+                    }}
+                  />
+                  <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600 }}>
+                    Uploading {bulkImageProgress.done} / {bulkImageProgress.total}
+                  </div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>
+                    Please don't close this panel — replacing existing images on S3.
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      height: 6,
+                      width: '70%',
+                      maxWidth: 320,
+                      background: 'var(--border, #e5e7eb)',
+                      borderRadius: 999,
+                      overflow: 'hidden',
+                      marginLeft: 'auto',
+                      marginRight: 'auto',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: bulkImageProgress.total > 0
+                          ? `${Math.round((bulkImageProgress.done / bulkImageProgress.total) * 100)}%`
+                          : '0%',
+                        background: 'var(--accent, #2563eb)',
+                        transition: 'width 200ms ease-out',
+                      }}
+                    />
+                  </div>
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                </div>
+              ) : bulkImageFiles.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>🖼</div>
                   <div>
@@ -2400,7 +2524,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <div className="bulk-image-file-list">
                     {bulkImageFiles.map((f) => {
                       const matchedName = f.name.replace(/\.[^.]+$/, '');
-                      const matched = products.some((p) => p.name.toLowerCase().trim() === matchedName.toLowerCase().trim());
+                      const matched = productNameSet.has(matchedName.toLowerCase().trim());
                       return (
                         <div key={bulkImageKey(f)} className={`bulk-image-file-row${matched ? ' bulk-image-file-row--matched' : ' bulk-image-file-row--unmatched'}`}>
                           <span className="bulk-image-file-row__dot">{matched ? '✓' : '?'}</span>
@@ -2983,14 +3107,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             </select>
           </div>
 
-          {/* Status filter chips */}
+          {/* Status filter chips — counts come from inventory summary so they
+              don't depend on the products list being loaded yet. */}
           <div className="inv-filters">
             {(
               [
-                { key: 'all', label: 'All', count: products.length },
-                { key: 'active', label: 'Active', count: products.filter((p) => p.isActive).length },
-                { key: 'archived', label: 'Archived', count: products.filter((p) => !p.isActive).length },
-                { key: 'low_stock', label: 'Low Stock', count: products.filter((p) => p.stockQuantity <= 5).length },
+                { key: 'all', label: 'All', count: inventorySummary?.totalProducts ?? 0 },
+                { key: 'active', label: 'Active', count: inventorySummary?.activeProducts ?? 0 },
+                { key: 'archived', label: 'Archived', count: inventorySummary?.archivedProducts ?? 0 },
+                { key: 'low_stock', label: 'Low Stock', count: (inventorySummary?.lowStock ?? 0) + (inventorySummary?.outOfStock ?? 0) },
               ] as Array<{ key: typeof inventoryStatusFilter; label: string; count: number }>
             ).map((f) => (
               <button
@@ -3006,7 +3131,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
             <div className="inv-filter-divider" />
 
-            {/* Category chips — only categories present in current products */}
+            {/* Category chips — only categories that have products. */}
             <button
               type="button"
               className={`chip${inventoryCategoryFilter === 'all' ? ' chip--active' : ''}`}
@@ -3014,28 +3139,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             >
               All categories
             </button>
-            {categories
-              .filter((cat) => products.some((p) => p.categoryId === cat.id))
-              .map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  className={`chip${inventoryCategoryFilter === cat.id ? ' chip--active' : ''}`}
-                  onClick={() => setInventoryCategoryFilter(cat.id)}
-                >
-                  {cat.name}
-                  <span className="chip__count">
-                    {products.filter((p) => p.categoryId === cat.id).length}
-                  </span>
-                </button>
-              ))}
+            {(() => {
+              const counts = new Map<number, number>();
+              for (const c of inventorySummary?.byCategory ?? []) {
+                if (c.categoryId != null) counts.set(c.categoryId, c.count);
+              }
+              return categories
+                .filter((cat) => (counts.get(cat.id) ?? 0) > 0)
+                .map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    className={`chip${inventoryCategoryFilter === cat.id ? ' chip--active' : ''}`}
+                    onClick={() => setInventoryCategoryFilter(cat.id)}
+                  >
+                    {cat.name}
+                    <span className="chip__count">{counts.get(cat.id) ?? 0}</span>
+                  </button>
+                ));
+            })()}
           </div>
 
           {/* Result count */}
           <div className="inv-results-meta">
             {inventorySearch
               ? <>Showing <strong>{filteredProducts.length}</strong> result{filteredProducts.length !== 1 ? 's' : ''} for "<em>{inventorySearch}</em>"</>
-              : <><strong>{filteredProducts.length}</strong> of {products.length} products</>
+              : productsLoading
+                ? <>Loading inventory…</>
+                : <><strong>{filteredProducts.length}</strong> of {inventorySummary?.totalProducts ?? products.length} products</>
             }
             {(inventorySearch || inventoryStatusFilter !== 'all' || inventoryCategoryFilter !== 'all') && (
               <button
@@ -3173,7 +3304,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         <div className="section-box__head">
           <div>
             <h2>Categories</h2>
-            <p>{categories.length} categories · {products.length} products total</p>
+            <p>{categories.length} categories · {inventorySummary?.totalProducts ?? 0} products total</p>
           </div>
         </div>
 
@@ -3207,8 +3338,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           {categories.length === 0 && (
             <p className="empty-state" style={{ gridColumn: '1/-1' }}>No categories yet. Add one above.</p>
           )}
-          {categories.map((cat) => {
-            const productCount = products.filter((p) => p.categoryId === cat.id).length;
+          {(() => {
+            const counts = new Map<number, number>();
+            for (const c of inventorySummary?.byCategory ?? []) {
+              if (c.categoryId != null) counts.set(c.categoryId, c.count);
+            }
+            return categories.map((cat) => {
+            const productCount = counts.get(cat.id) ?? 0;
             const isEditing = editingCategoryId === cat.id;
             const pendingImage = categoryImages[cat.id] ?? null;
             const initials = cat.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -3331,15 +3467,23 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 </div>
               </article>
             );
-          })}
+            });
+          })()}
         </div>
       </div>
     );
   }
 
   async function applySlowMoverSuggestion(s: SlowMoverSuggestion) {
-    const product = products.find((p) => p.uniqueId === s.uniqueId);
-    if (!product) return;
+    // The slow-mover row already carries the fields handleToggleOffer needs
+    // (uniqueId / priceCents / name). Use the cached product when present,
+    // otherwise build a stub so this works even before products are loaded.
+    const cached = products.find((p) => p.uniqueId === s.uniqueId);
+    const product: Product = cached ?? ({
+      uniqueId: s.uniqueId,
+      name: s.name,
+      priceCents: s.priceCents,
+    } as Product);
     await handleToggleOffer(product, true, s.suggestedOfferPriceCents, 'price');
     setDismissedSlowMovers((prev) => new Set(prev).add(s.uniqueId));
   }
@@ -3350,8 +3494,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   function renderOffers() {
     const { onOffer, notOnOffer } = filteredOffers;
-    const totalOnOffer = products.filter((p) => p.isOnOffer).length;
-    const totalNotOnOffer = products.filter((p) => !p.isOnOffer).length;
+    const totalOnOffer = inventorySummary?.onOfferCount ?? 0;
+    const totalNotOnOffer = inventorySummary?.notOnOfferCount ?? 0;
     const visibleSuggestions = slowMovers.filter((s) => !dismissedSlowMovers.has(s.uniqueId));
 
     return (

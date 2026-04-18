@@ -1659,17 +1659,24 @@ export async function listProducts(companyId: number, includeInactive = false) {
   return result.rows.map(mapProduct);
 }
 
-// Server-side paged + filtered listing used by the public storefront catalog.
-// Inactive and hidden-category products are always excluded — this isn't an
-// admin path. Search is a case-insensitive substring across name/description.
+// Server-side paged + filtered listing.
+// Public path (default): inactive and hidden-category products are excluded.
+// Admin path (admin=true): everything is visible; status / categoryId / onOffer
+// can be filtered explicitly. Search is a case-insensitive substring across
+// name/description (plus category/brand on the admin path).
 export interface ListProductsPageOpts {
   companyId: number;
   page: number;
   pageSize: number;
   category?: string | null;
+  categoryId?: number | null;
   brand?: string | null;
   search?: string | null;
   ids?: string[] | null;
+  admin?: boolean;
+  status?: 'all' | 'active' | 'archived' | 'low_stock' | null;
+  onOffer?: boolean | null;
+  sort?: 'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc' | 'created_desc' | null;
 }
 export interface ListProductsPageResult {
   products: ReturnType<typeof mapProduct>[];
@@ -1681,28 +1688,48 @@ export interface ListProductsPageResult {
 
 export async function listProductsPage(opts: ListProductsPageOpts): Promise<ListProductsPageResult> {
   const page = Math.max(1, Math.floor(opts.page));
-  const pageSize = Math.max(1, Math.min(100, Math.floor(opts.pageSize)));
+  const pageSize = Math.max(1, Math.min(200, Math.floor(opts.pageSize)));
   const offset = (page - 1) * pageSize;
 
-  const where: string[] = [
-    'p.company_id = $1',
-    'p.is_active = TRUE',
-    'p.stock_quantity >= 0',
-    'c.is_hidden IS NOT TRUE',
-  ];
+  const where: string[] = ['p.company_id = $1'];
   const params: unknown[] = [opts.companyId];
+
+  if (opts.admin) {
+    if (opts.status === 'active') {
+      where.push('p.is_active = TRUE');
+    } else if (opts.status === 'archived') {
+      where.push('p.is_active = FALSE');
+    } else if (opts.status === 'low_stock') {
+      where.push('p.is_active = TRUE');
+      where.push('p.stock_quantity <= 5');
+    }
+  } else {
+    where.push('p.is_active = TRUE');
+    where.push('p.stock_quantity >= 0');
+    where.push('c.is_hidden IS NOT TRUE');
+  }
 
   if (opts.category && opts.category !== 'All') {
     params.push(opts.category);
     where.push(`c.name = $${params.length}`);
   }
+  if (opts.categoryId != null) {
+    params.push(opts.categoryId);
+    where.push(`p.category_id = $${params.length}`);
+  }
   if (opts.brand) {
     params.push(opts.brand);
     where.push(`b.name = $${params.length}`);
   }
+  if (typeof opts.onOffer === 'boolean') {
+    where.push(`p.is_on_offer = ${opts.onOffer ? 'TRUE' : 'FALSE'}`);
+  }
   if (opts.search && opts.search.trim()) {
     params.push(`%${opts.search.trim()}%`);
-    where.push(`(p.name ILIKE $${params.length} OR p.description ILIKE $${params.length})`);
+    const i = params.length;
+    where.push(
+      `(p.name ILIKE $${i} OR p.description ILIKE $${i} OR c.name ILIKE $${i} OR b.name ILIKE $${i})`,
+    );
   }
   if (opts.ids && opts.ids.length > 0) {
     params.push(opts.ids);
@@ -1710,6 +1737,19 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
   }
 
   const whereSql = where.join(' AND ');
+
+  let orderSql: string;
+  switch (opts.sort) {
+    case 'price_asc': orderSql = 'p.price_cents ASC, p.name'; break;
+    case 'price_desc': orderSql = 'p.price_cents DESC, p.name'; break;
+    case 'stock_asc': orderSql = 'p.stock_quantity ASC, p.name'; break;
+    case 'stock_desc': orderSql = 'p.stock_quantity DESC, p.name'; break;
+    case 'created_desc': orderSql = 'p.created_date DESC, p.name'; break;
+    default:
+      orderSql = opts.admin
+        ? 'p.is_active DESC, p.is_on_offer DESC, c.name, p.name'
+        : 'p.is_on_offer DESC, c.name, p.name';
+  }
 
   const countRes = await pool.query<{ total: string }>(
     `SELECT COUNT(*)::text AS total
@@ -1729,13 +1769,163 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN brands b ON b.id = p.brand_id
      WHERE ${whereSql}
-     ORDER BY p.is_on_offer DESC, c.name, p.name
+     ORDER BY ${orderSql}
      LIMIT $${params.length - 1} OFFSET $${params.length};`,
     params,
   );
 
   const products = listRes.rows.map(mapProduct);
   return { products, total, page, pageSize, hasMore: offset + products.length < total };
+}
+
+// Lightweight name index used by the bulk-image picker so it can match files
+// against product names without pulling the full catalog payload.
+export interface ProductNameIndexEntry {
+  uniqueId: string;
+  name: string;
+  imageUrl: string | null;
+}
+export async function listProductNameIndex(companyId: number): Promise<ProductNameIndexEntry[]> {
+  const result = await pool.query<ProductNameIndexEntry>(
+    `SELECT p.unique_id AS "uniqueId", p.name, p.image_url AS "imageUrl"
+     FROM products p
+     WHERE p.company_id = $1
+     ORDER BY p.name;`,
+    [companyId],
+  );
+  return result.rows;
+}
+
+// One-shot aggregate the admin Dashboard needs (totals, per-category counts,
+// per-status counts, low-stock list, recents, inventory value). Replaces the
+// pattern of loading the entire product list client-side just to count rows.
+export interface InventorySummaryByCategory {
+  categoryId: number;
+  category: string;
+  count: number;
+  activeCount: number;
+  units: number;
+  valueCents: number;
+}
+export interface InventorySummary {
+  totalProducts: number;
+  activeProducts: number;
+  archivedProducts: number;
+  outOfStock: number;
+  lowStock: number;
+  onOfferCount: number;
+  notOnOfferCount: number;
+  totalUnits: number;
+  inventoryValueCents: number;
+  byCategory: InventorySummaryByCategory[];
+  lowStockList: ReturnType<typeof mapProduct>[];
+  recentProducts: ReturnType<typeof mapProduct>[];
+}
+
+export async function getInventorySummary(companyId: number): Promise<InventorySummary> {
+  const [aggRes, byCatRes, lowStockRes, recentRes] = await Promise.all([
+    pool.query<{
+      totalProducts: string;
+      activeProducts: string;
+      archivedProducts: string;
+      outOfStock: string;
+      lowStock: string;
+      onOfferCount: string;
+      notOnOfferCount: string;
+      totalUnits: string;
+      inventoryValueCents: string;
+    }>(
+      `SELECT
+         COUNT(*)::text AS "totalProducts",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE)::text AS "activeProducts",
+         COUNT(*) FILTER (WHERE p.is_active = FALSE)::text AS "archivedProducts",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE AND p.stock_quantity <= 0)::text AS "outOfStock",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE AND p.stock_quantity > 0 AND p.stock_quantity <= 5)::text AS "lowStock",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE AND p.is_on_offer = TRUE)::text AS "onOfferCount",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE AND p.is_on_offer = FALSE)::text AS "notOnOfferCount",
+         COALESCE(SUM(CASE WHEN p.is_active = TRUE THEN p.stock_quantity ELSE 0 END), 0)::text AS "totalUnits",
+         COALESCE(SUM(CASE WHEN p.is_active = TRUE THEN p.stock_quantity * p.price_cents ELSE 0 END), 0)::text AS "inventoryValueCents"
+       FROM products p
+       WHERE p.company_id = $1;`,
+      [companyId],
+    ),
+    pool.query<{
+      categoryId: number;
+      category: string;
+      count: string;
+      activeCount: string;
+      units: string;
+      valueCents: string;
+    }>(
+      `SELECT
+         p.category_id AS "categoryId",
+         COALESCE(c.name, 'Uncategorized') AS "category",
+         COUNT(*)::text AS "count",
+         COUNT(*) FILTER (WHERE p.is_active = TRUE)::text AS "activeCount",
+         COALESCE(SUM(CASE WHEN p.is_active = TRUE THEN p.stock_quantity ELSE 0 END), 0)::text AS "units",
+         COALESCE(SUM(CASE WHEN p.is_active = TRUE THEN p.stock_quantity * p.price_cents ELSE 0 END), 0)::text AS "valueCents"
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       WHERE p.company_id = $1
+       GROUP BY p.category_id, c.name;`,
+      [companyId],
+    ),
+    pool.query(
+      `SELECT ${PRODUCT_SELECT_COLUMNS}
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN brands b ON b.id = p.brand_id
+       WHERE p.company_id = $1
+         AND p.is_active = TRUE
+         AND p.stock_quantity <= 5
+       ORDER BY p.stock_quantity ASC, p.name
+       LIMIT 12;`,
+      [companyId],
+    ),
+    pool.query(
+      `SELECT ${PRODUCT_SELECT_COLUMNS}
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN brands b ON b.id = p.brand_id
+       WHERE p.company_id = $1
+         AND p.is_active = TRUE
+       ORDER BY p.created_date DESC
+       LIMIT 8;`,
+      [companyId],
+    ),
+  ]);
+
+  const agg = aggRes.rows[0] ?? {
+    totalProducts: '0', activeProducts: '0', archivedProducts: '0',
+    outOfStock: '0', lowStock: '0', onOfferCount: '0', notOnOfferCount: '0',
+    totalUnits: '0', inventoryValueCents: '0',
+  };
+
+  const byCategory: InventorySummaryByCategory[] = byCatRes.rows
+    .map((r) => ({
+      categoryId: r.categoryId,
+      category: r.category,
+      count: Number(r.count),
+      activeCount: Number(r.activeCount),
+      units: Number(r.units),
+      valueCents: Number(r.valueCents),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalProducts: Number(agg.totalProducts),
+    activeProducts: Number(agg.activeProducts),
+    archivedProducts: Number(agg.archivedProducts),
+    outOfStock: Number(agg.outOfStock),
+    lowStock: Number(agg.lowStock),
+    onOfferCount: Number(agg.onOfferCount),
+    notOnOfferCount: Number(agg.notOnOfferCount),
+    totalUnits: Number(agg.totalUnits),
+    inventoryValueCents: Number(agg.inventoryValueCents),
+    byCategory,
+    lowStockList: lowStockRes.rows.map(mapProduct),
+    recentProducts: recentRes.rows.map(mapProduct),
+  };
 }
 
 // Bundle of products needed by the storefront homepage strips, fetched in

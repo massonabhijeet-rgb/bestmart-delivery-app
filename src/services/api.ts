@@ -296,9 +296,14 @@ export interface ProductsPageQuery {
   page?: number;
   pageSize?: number;
   category?: string | null;
+  categoryId?: number | null;
   brand?: string | null;
   q?: string | null;
   ids?: string[] | null;
+  admin?: boolean;
+  status?: 'all' | 'active' | 'archived' | 'low_stock' | null;
+  onOffer?: boolean | null;
+  sort?: 'default' | 'price_asc' | 'price_desc' | 'stock_asc' | 'stock_desc' | 'created_desc' | null;
 }
 
 export async function apiGetProductsPage(opts: ProductsPageQuery = {}): Promise<ProductsPage> {
@@ -306,11 +311,55 @@ export async function apiGetProductsPage(opts: ProductsPageQuery = {}): Promise<
   if (opts.page) params.set('page', String(opts.page));
   if (opts.pageSize) params.set('pageSize', String(opts.pageSize));
   if (opts.category && opts.category !== 'All') params.set('category', opts.category);
+  if (opts.categoryId != null) params.set('categoryId', String(opts.categoryId));
   if (opts.brand) params.set('brand', opts.brand);
   if (opts.q && opts.q.trim()) params.set('q', opts.q.trim());
   if (opts.ids && opts.ids.length > 0) params.set('ids', opts.ids.join(','));
+  if (opts.admin) params.set('admin', '1');
+  if (opts.status) params.set('status', opts.status);
+  if (typeof opts.onOffer === 'boolean') params.set('onOffer', opts.onOffer ? '1' : '0');
+  if (opts.sort) params.set('sort', opts.sort);
   const qs = params.toString();
   return request<ProductsPage>(`/products/page${qs ? `?${qs}` : ''}`);
+}
+
+export interface InventorySummaryByCategory {
+  categoryId: number;
+  category: string;
+  count: number;
+  activeCount: number;
+  units: number;
+  valueCents: number;
+}
+
+export interface InventorySummary {
+  totalProducts: number;
+  activeProducts: number;
+  archivedProducts: number;
+  outOfStock: number;
+  lowStock: number;
+  onOfferCount: number;
+  notOnOfferCount: number;
+  totalUnits: number;
+  inventoryValueCents: number;
+  byCategory: InventorySummaryByCategory[];
+  lowStockList: Product[];
+  recentProducts: Product[];
+}
+
+export async function apiGetInventorySummary(): Promise<InventorySummary> {
+  return request<InventorySummary>(`/products/admin-summary`);
+}
+
+export interface ProductNameIndexEntry {
+  uniqueId: string;
+  name: string;
+  imageUrl: string | null;
+}
+
+export async function apiGetProductNameIndex(): Promise<ProductNameIndexEntry[]> {
+  const data = await request<{ products: ProductNameIndexEntry[] }>(`/products/name-index`);
+  return data.products;
 }
 
 export interface StorefrontSpotlight {
