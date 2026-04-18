@@ -3400,41 +3400,44 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <div className="inv-card__meta">
                     {canManageCatalog ? (
                       <>
-                        <select
-                          className="inv-card__inline-select"
-                          value={product.categoryId ?? ''}
-                          disabled={savingFieldId === product.uniqueId || !product.isActive}
-                          onChange={(e) => {
-                            const next = Number(e.target.value);
-                            if (next && next !== product.categoryId) {
-                              void handleInlineProductUpdate(product.uniqueId, { categoryId: next });
-                            }
-                          }}
-                          title="Change category"
-                        >
-                          {categories.map((c) => (
-                            <option key={c.id} value={c.id}>{c.name}</option>
-                          ))}
-                        </select>
-                        <span className="inv-card__dot">·</span>
-                        <select
-                          className="inv-card__inline-select"
-                          value={product.brandId ?? ''}
-                          disabled={savingFieldId === product.uniqueId || !product.isActive}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            const next = raw === '' ? null : Number(raw);
-                            if (next !== product.brandId) {
-                              void handleInlineProductUpdate(product.uniqueId, { brandId: next });
-                            }
-                          }}
-                          title="Change brand"
-                        >
-                          <option value="">No brand</option>
-                          {brands.map((b) => (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                          ))}
-                        </select>
+                        <label className="inv-card__field" title="Change category">
+                          <span className="inv-card__field-label">Category</span>
+                          <select
+                            className="inv-card__inline-select"
+                            value={product.categoryId ?? ''}
+                            disabled={savingFieldId === product.uniqueId || !product.isActive}
+                            onChange={(e) => {
+                              const next = Number(e.target.value);
+                              if (next && next !== product.categoryId) {
+                                void handleInlineProductUpdate(product.uniqueId, { categoryId: next });
+                              }
+                            }}
+                          >
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="inv-card__field" title="Change brand">
+                          <span className="inv-card__field-label">Brand</span>
+                          <select
+                            className="inv-card__inline-select"
+                            value={product.brandId ?? ''}
+                            disabled={savingFieldId === product.uniqueId || !product.isActive}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const next = raw === '' ? null : Number(raw);
+                              if (next !== product.brandId) {
+                                void handleInlineProductUpdate(product.uniqueId, { brandId: next });
+                              }
+                            }}
+                          >
+                            <option value="">No brand</option>
+                            {brands.map((b) => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </label>
                         <span className="inv-card__dot">·</span>
                         <span>{product.unitLabel}</span>
                       </>
