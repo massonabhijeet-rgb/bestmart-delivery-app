@@ -2447,22 +2447,54 @@ const TEMP_CATEGORY_DEFS: TempCategoryDef[] = [
   },
 ];
 
+// Strip pack-size tokens so "Pepsi 250ml" and "Pepsi 500ml" share a group key.
+function normalizeProductKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b\d+(\.\d+)?\s*(ml|l|ltr|litre|litres|g|gm|gms|gram|grams|kg|kgs|pcs?|pack|x)\b/g, '')
+    .replace(/\b\d+(\.\d+)?\s*(ml|l|g|kg)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function pickProductIdsForKeywords(
-  rows: Array<{ uniqueId: string; name: string; category: string | null; description: string }>,
+  rows: Array<{
+    uniqueId: string;
+    name: string;
+    category: string | null;
+    description: string;
+    priceCents: number;
+    isOnOffer: boolean;
+    offerPriceCents: number | null;
+  }>,
   keywords: string[],
   limit = 24,
 ): string[] {
   if (keywords.length === 0) return [];
   const lcKeywords = keywords.map((k) => k.toLowerCase());
-  const out: string[] = [];
+
+  // Group matching variants under a normalized name key; keep the cheapest.
+  const groups = new Map<string, { uniqueId: string; price: number; order: number }>();
+  let order = 0;
   for (const row of rows) {
     const haystack = `${row.name} ${row.category ?? ''} ${row.description}`.toLowerCase();
-    if (lcKeywords.some((k) => haystack.includes(k))) {
-      out.push(row.uniqueId);
-      if (out.length >= limit) break;
+    if (!lcKeywords.some((k) => haystack.includes(k))) continue;
+    const key = normalizeProductKey(row.name) || row.name.toLowerCase();
+    const effective = row.isOnOffer && row.offerPriceCents != null ? row.offerPriceCents : row.priceCents;
+    const existing = groups.get(key);
+    if (!existing || effective < existing.price) {
+      groups.set(key, {
+        uniqueId: row.uniqueId,
+        price: effective,
+        order: existing ? existing.order : order++,
+      });
     }
   }
-  return out;
+
+  return [...groups.values()]
+    .sort((a, b) => a.order - b.order)
+    .slice(0, limit)
+    .map((g) => g.uniqueId);
 }
 
 // Reconciles temp_categories rows with the active definitions for the given moment.
@@ -2528,9 +2560,18 @@ export async function listActiveTempCategories(
     name: string;
     category: string | null;
     description: string;
+    priceCents: number;
+    isOnOffer: boolean;
+    offerPriceCents: number | null;
   }>(
     `
-      SELECT p.unique_id AS "uniqueId", p.name, c.name AS "category", p.description
+      SELECT p.unique_id AS "uniqueId",
+             p.name,
+             c.name AS "category",
+             p.description,
+             p.price_cents AS "priceCents",
+             p.is_on_offer AS "isOnOffer",
+             p.offer_price_cents AS "offerPriceCents"
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE p.company_id = $1
