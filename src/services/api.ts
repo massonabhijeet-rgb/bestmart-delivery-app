@@ -91,6 +91,8 @@ export interface Product {
   offerType: 'price' | 'bogo';
   bogoBuyQty: number;
   bogoGetQty: number;
+  brandId: number | null;
+  brand: string | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -363,6 +365,41 @@ export interface SlowMoverSuggestion {
 export async function apiListSlowMovers() {
   const data = await request<{ suggestions: SlowMoverSuggestion[] }>('/products/slow-movers');
   return data.suggestions;
+}
+
+export interface Brand {
+  id: number;
+  companyId: number;
+  name: string;
+  slug: string;
+  productCount: number;
+  createdDate: string;
+  updatedDate: string;
+}
+
+export async function apiListBrands() {
+  const data = await request<{ brands: Brand[] }>('/brands');
+  return data.brands;
+}
+
+export async function apiCreateBrand(name: string) {
+  const data = await request<{ brand: Brand }>('/brands', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+  return data.brand;
+}
+
+export async function apiUpdateBrand(id: number, name: string) {
+  const data = await request<{ brand: Brand }>(`/brands/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+  return data.brand;
+}
+
+export async function apiDeleteBrand(id: number) {
+  await request<{ ok: boolean }>(`/brands/${id}`, { method: 'DELETE' });
 }
 
 export async function apiToggleProductOffer(

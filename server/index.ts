@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
+import brandRoutes from './routes/brands.js';
 import categoryRoutes from './routes/categories.js';
 import companyRoutes from './routes/company.js';
 import couponRoutes from './routes/coupons.js';
@@ -56,6 +57,7 @@ app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 app.use('/api/auth', authRoutes);
+app.use('/api/brands', brandRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/company', companyRoutes);
 app.use('/api/coupons', couponRoutes);

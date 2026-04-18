@@ -40,6 +40,8 @@ export interface ProductRecord {
   offerType: 'price' | 'bogo';
   bogoBuyQty: number;
   bogoGetQty: number;
+  brandId: number | null;
+  brand: string | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -138,6 +140,7 @@ interface CreateProductInput {
   imageUrl?: string | null;
   isActive?: boolean;
   isOnOffer?: boolean;
+  brandId?: number | null;
 }
 
 interface UpdateProductInput extends CreateProductInput {
@@ -213,6 +216,8 @@ function mapProduct(row: ProductRow): ProductRecord {
     offerType: row.offerType === 'bogo' ? 'bogo' : 'price',
     bogoBuyQty: Math.max(1, Number(row.bogoBuyQty ?? 1)),
     bogoGetQty: Math.max(1, Number(row.bogoGetQty ?? 1)),
+    brandId: row.brandId ?? null,
+    brand: row.brand ?? null,
     createdDate: row.createdDate,
     updatedDate: row.updatedDate,
   };
@@ -297,6 +302,18 @@ async function createTables(client: PoolClient) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS brands (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name VARCHAR(120) NOT NULL,
+      slug VARCHAR(120) NOT NULL,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, slug)
+    );
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS categories (
       id SERIAL PRIMARY KEY,
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -336,6 +353,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS offer_type TEXT NOT NULL DEFAULT 'price';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_buy_qty INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_get_qty INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS brand_id INTEGER REFERENCES brands(id) ON DELETE SET NULL;
   `);
 
   await client.query(`
@@ -1586,6 +1604,8 @@ const PRODUCT_SELECT_COLUMNS = `
   p.offer_type AS "offerType",
   p.bogo_buy_qty AS "bogoBuyQty",
   p.bogo_get_qty AS "bogoGetQty",
+  p.brand_id AS "brandId",
+  b.name AS "brand",
   p.created_date AS "createdDate",
   p.updated_date AS "updatedDate"
 `;
@@ -1596,6 +1616,7 @@ export async function listProducts(companyId: number, includeInactive = false) {
       SELECT ${PRODUCT_SELECT_COLUMNS}
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
       WHERE p.company_id = $1
         AND ($2::boolean = TRUE OR p.is_active = TRUE)
       ORDER BY
@@ -1664,6 +1685,7 @@ export async function listSlowMovers(companyId: number): Promise<SlowMoverSugges
         MAX(CASE WHEN o.status <> 'cancelled' THEN o.created_date END) AS "lastSoldAt"
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
       LEFT JOIN order_items oi ON oi.product_id = p.id
       LEFT JOIN orders o ON o.id = oi.order_id AND o.company_id = p.company_id
       WHERE p.company_id = $1
@@ -1758,6 +1780,7 @@ export async function getProductByUniqueId(uniqueId: string, companyId: number) 
       SELECT ${PRODUCT_SELECT_COLUMNS}
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
       WHERE p.unique_id = $1 AND p.company_id = $2
       LIMIT 1;
     `,
@@ -1775,6 +1798,7 @@ async function readProductWithCategory(
       SELECT ${PRODUCT_SELECT_COLUMNS}
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
       WHERE p.id = $1
       LIMIT 1;
     `,
@@ -1800,9 +1824,10 @@ export async function createProduct(input: CreateProductInput) {
         badge,
         image_url,
         is_active,
-        is_on_offer
+        is_on_offer,
+        brand_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING id;
     `,
     [
@@ -1820,6 +1845,7 @@ export async function createProduct(input: CreateProductInput) {
       input.imageUrl ?? null,
       input.isActive ?? true,
       input.isOnOffer ?? false,
+      input.brandId ?? null,
     ]
   );
   const product = await readProductWithCategory(pool, inserted.rows[0].id);
@@ -1844,6 +1870,7 @@ export async function updateProduct(input: UpdateProductInput) {
         image_url = $12,
         is_active = $13,
         is_on_offer = $14,
+        brand_id = $15,
         updated_date = NOW()
       WHERE unique_id = $1 AND company_id = $2
       RETURNING id;
@@ -1863,6 +1890,7 @@ export async function updateProduct(input: UpdateProductInput) {
       input.imageUrl ?? null,
       input.isActive ?? true,
       input.isOnOffer ?? false,
+      input.brandId ?? null,
     ]
   );
   return updated.rowCount ? readProductWithCategory(pool, updated.rows[0].id) : null;
@@ -1953,6 +1981,85 @@ export async function listCategories(companyId: number) {
     [companyId]
   );
   return result.rows.map(mapCategory);
+}
+
+// ── Brands ───────────────────────────────────────────────────────────
+export interface BrandRecord {
+  id: number;
+  companyId: number;
+  name: string;
+  slug: string;
+  productCount: number;
+  createdDate: string;
+  updatedDate: string;
+}
+
+const BRAND_SELECT = `
+  b.id,
+  b.company_id AS "companyId",
+  b.name,
+  b.slug,
+  COALESCE((SELECT COUNT(*)::int FROM products p WHERE p.brand_id = b.id), 0) AS "productCount",
+  b.created_date AS "createdDate",
+  b.updated_date AS "updatedDate"
+`;
+
+export async function listBrands(companyId: number): Promise<BrandRecord[]> {
+  const result = await pool.query<BrandRecord>(
+    `SELECT ${BRAND_SELECT} FROM brands b WHERE b.company_id = $1 ORDER BY b.name ASC;`,
+    [companyId]
+  );
+  return result.rows;
+}
+
+export async function createBrand(companyId: number, name: string): Promise<BrandRecord> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Brand name is required');
+  const slug = toSlug(trimmed);
+  const inserted = await pool.query<{ id: number }>(
+    `
+      INSERT INTO brands (company_id, name, slug)
+      VALUES ($1, $2, $3)
+      RETURNING id;
+    `,
+    [companyId, trimmed, slug]
+  );
+  const result = await pool.query<BrandRecord>(
+    `SELECT ${BRAND_SELECT} FROM brands b WHERE b.id = $1;`,
+    [inserted.rows[0].id]
+  );
+  return result.rows[0];
+}
+
+export async function updateBrand(
+  companyId: number,
+  id: number,
+  name: string,
+): Promise<BrandRecord | null> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Brand name is required');
+  const slug = toSlug(trimmed);
+  await pool.query(
+    `
+      UPDATE brands
+      SET name = $3, slug = $4, updated_date = NOW()
+      WHERE id = $1 AND company_id = $2;
+    `,
+    [id, companyId, trimmed, slug]
+  );
+  const result = await pool.query<BrandRecord>(
+    `SELECT ${BRAND_SELECT} FROM brands b WHERE b.id = $1 AND b.company_id = $2;`,
+    [id, companyId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function deleteBrand(companyId: number, id: number): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM brands WHERE id = $1 AND company_id = $2;`,
+    [id, companyId]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function getCategoryById(id: number, companyId: number) {

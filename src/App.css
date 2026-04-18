@@ -2102,6 +2102,12 @@ textarea {
   border: 1px solid rgba(255,152,0,0.2);
 }
 
+.inv-card__brand {
+  font-weight: 700;
+  color: var(--c-ink-2, var(--c-ink));
+  letter-spacing: 0.01em;
+}
+
 .inv-card__meta {
   font-size: 0.75rem;
   color: var(--c-ink-3);

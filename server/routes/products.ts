@@ -63,6 +63,11 @@ function normalizeProductPayload(body: Record<string, unknown>) {
     imageUrl: has('imageUrl') ? (body.imageUrl ? String(body.imageUrl).trim() : null) : undefined,
     isActive: has('isActive') ? Boolean(body.isActive) : undefined,
     isOnOffer: has('isOnOffer') ? Boolean(body.isOnOffer) : undefined,
+    brandId: has('brandId')
+      ? body.brandId === '' || body.brandId == null
+        ? null
+        : Number(body.brandId)
+      : undefined,
   };
 }
 
@@ -167,6 +172,7 @@ router.post(
         imageUrl: payload.imageUrl ?? null,
         isActive: payload.isActive ?? true,
         isOnOffer: payload.isOnOffer ?? false,
+        brandId: payload.brandId ?? null,
       });
 
       await cacheDelPattern(`bm:products:list:${req.user.companyId}:*`);
@@ -222,6 +228,7 @@ router.put(
         imageUrl: payload.imageUrl !== undefined ? payload.imageUrl : existing.imageUrl,
         isActive: payload.isActive ?? existing.isActive,
         isOnOffer: payload.isOnOffer ?? existing.isOnOffer,
+        brandId: payload.brandId !== undefined ? payload.brandId : existing.brandId,
       });
 
       if (!product) {

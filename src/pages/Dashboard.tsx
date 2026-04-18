@@ -40,8 +40,12 @@ import {
   apiCreateCoupon,
   apiUpdateCoupon,
   apiDeleteCoupon,
+  apiListBrands,
+  apiCreateBrand,
+  apiUpdateBrand,
+  apiDeleteBrand,
 } from '../services/api';
-import type { BulkImageUploadResult, Coupon, SalesReport, SlowMoverSuggestion } from '../services/api';
+import type { Brand, BulkImageUploadResult, Coupon, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -94,6 +98,7 @@ interface BulkProductRow {
 interface ProductFormState {
   name: string;
   categoryId: string;
+  brandId: string;
   unitLabel: string;
   description: string;
   price: string;
@@ -107,6 +112,7 @@ interface ProductFormState {
 const defaultProductForm: ProductFormState = {
   name: '',
   categoryId: '',
+  brandId: '',
   unitLabel: '',
   description: '',
   price: '',
@@ -222,6 +228,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [riderDrafts, setRiderDrafts] = useState<Record<string, number | ''>>({});
   const [riders, setRiders] = useState<Rider[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [showInlineBrandInput, setShowInlineBrandInput] = useState(false);
+  const [inlineBrandName, setInlineBrandName] = useState('');
+  const [creatingInlineBrand, setCreatingInlineBrand] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
@@ -290,7 +300,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setLoading(true);
     setError('');
     try {
-      const [summaryData, productData, orderData, teamData, categoryData, riderData] =
+      const [summaryData, productData, orderData, teamData, categoryData, riderData, brandData] =
         await Promise.all([
           apiGetSummary(),
           apiGetProducts(true),
@@ -298,6 +308,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           canManageTeam ? apiListTeam() : Promise.resolve([]),
           apiListCategories(),
           canManageCatalog ? apiListRiders() : Promise.resolve([]),
+          apiListBrands(),
         ]);
       setSummary(summaryData);
       setProducts(productData);
@@ -305,6 +316,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setTeam(teamData);
       setCategories(categoryData);
       setRiders(riderData);
+      setBrands(brandData);
       setRiderDrafts(
         Object.fromEntries(
           orderData.map((order) => [order.publicId, order.assignedRiderUserId ?? ''] as const)
@@ -528,6 +540,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setProductImagePreview(null);
     setShowInlineCategoryInput(false);
     setInlineCategoryName('');
+    setShowInlineBrandInput(false);
+    setInlineBrandName('');
   }
 
   function closeProductEditor() {
@@ -558,6 +572,24 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }
 
+  async function handleCreateBrandInline() {
+    const name = inlineBrandName.trim();
+    if (!name) return;
+    setCreatingInlineBrand(true);
+    try {
+      const created = await apiCreateBrand(name);
+      setBrands((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setProductForm((c) => ({ ...c, brandId: String(created.id) }));
+      setInlineBrandName('');
+      setShowInlineBrandInput(false);
+      setNotice(`Brand "${name}" created.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create brand');
+    } finally {
+      setCreatingInlineBrand(false);
+    }
+  }
+
   function toggleOrder(publicId: string) {
     setExpandedOrderId((current) => (current === publicId ? null : publicId));
   }
@@ -576,6 +608,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       const payload = {
         name: productForm.name,
         categoryId: Number(productForm.categoryId),
+        brandId: productForm.brandId ? Number(productForm.brandId) : null,
         unitLabel: productForm.unitLabel,
         description: productForm.description,
         priceCents: Math.round(Number(productForm.price) * 100),
@@ -2555,6 +2588,61 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   </div>
                   <label className="pe-field">
                     <span className="pe-field__label">
+                      Brand
+                      {!showInlineBrandInput && (
+                        <button
+                          type="button"
+                          className="pe-field__link"
+                          onClick={() => setShowInlineBrandInput(true)}
+                        >
+                          + New brand
+                        </button>
+                      )}
+                    </span>
+                    {showInlineBrandInput ? (
+                      <div className="pe-inline-create">
+                        <input
+                          className="pe-field__input"
+                          value={inlineBrandName}
+                          onChange={(e) => setInlineBrandName(e.target.value)}
+                          placeholder="New brand name"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); void handleCreateBrandInline(); }
+                            if (e.key === 'Escape') { setShowInlineBrandInput(false); setInlineBrandName(''); }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="primary-button pe-inline-create__btn"
+                          disabled={!inlineBrandName.trim() || creatingInlineBrand}
+                          onClick={() => void handleCreateBrandInline()}
+                        >
+                          {creatingInlineBrand ? '…' : 'Add'}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button pe-inline-create__btn"
+                          onClick={() => { setShowInlineBrandInput(false); setInlineBrandName(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <select
+                        className="pe-field__input"
+                        value={productForm.brandId}
+                        onChange={(e) => setProductForm((c) => ({ ...c, brandId: e.target.value }))}
+                      >
+                        <option value="">No brand</option>
+                        {brands.map((b) => (
+                          <option key={b.id} value={String(b.id)}>{b.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </label>
+                  <label className="pe-field">
+                    <span className="pe-field__label">
                       Badge
                       <span className="pe-field__hint">shown on storefront card</span>
                     </span>
@@ -2860,6 +2948,12 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                     {product.badge && <span className="inv-card__badge">{product.badge}</span>}
                   </div>
                   <div className="inv-card__meta">
+                    {product.brand && (
+                      <>
+                        <span className="inv-card__brand">{product.brand}</span>
+                        <span className="inv-card__dot">·</span>
+                      </>
+                    )}
                     <span>{product.category ?? 'Uncategorised'}</span>
                     <span className="inv-card__dot">·</span>
                     <span>{product.unitLabel}</span>
@@ -2903,6 +2997,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         setProductForm({
                           name: product.name,
                           categoryId: product.categoryId ? String(product.categoryId) : '',
+                          brandId: product.brandId ? String(product.brandId) : '',
                           unitLabel: product.unitLabel,
                           description: product.description,
                           price: String(product.priceCents / 100),
