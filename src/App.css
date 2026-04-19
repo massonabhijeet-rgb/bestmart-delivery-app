@@ -1711,6 +1711,49 @@ textarea {
   justify-content: center;
 }
 
+.pe-image-preview--dropzone {
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms;
+}
+.pe-image-preview--dropzone:hover {
+  border-color: var(--c-teal);
+  background: var(--c-teal-soft);
+}
+.pe-image-preview--dragging {
+  border-color: var(--c-teal) !important;
+  background: var(--c-teal-soft) !important;
+  border-style: solid;
+}
+.pe-image-preview--uploading {
+  cursor: wait;
+}
+
+.pe-image-preview__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--c-ink-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+  backdrop-filter: blur(2px);
+}
+.pe-image-preview__spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--c-border-strong);
+  border-top-color: var(--c-teal, #1e88e5);
+  animation: pe-spin 720ms linear infinite;
+}
+@keyframes pe-spin {
+  to { transform: rotate(360deg); }
+}
+
 .pe-image-preview__img {
   width: 100%;
   height: 100%;

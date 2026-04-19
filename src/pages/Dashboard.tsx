@@ -170,6 +170,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [productImage, setProductImage] = useState<File | null>(null);
   const [productImagePreview, setProductImagePreview] = useState<string | null>(null);
+  const [uploadingProductImage, setUploadingProductImage] = useState(false);
+  const [productImageDragging, setProductImageDragging] = useState(false);
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('BestMart123!');
   const [staffRole, setStaffRole] = useState<UserRole>('editor');
@@ -733,6 +735,39 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   function toggleOrder(publicId: string) {
     setExpandedOrderId((current) => (current === publicId ? null : publicId));
+  }
+
+  // When editing an existing product, upload the picked/dropped image right
+  // away so admins don't have to click "Save" just to swap a thumbnail. For
+  // new (uncreated) products we keep the File around and upload after the
+  // product is created by handleSaveProduct.
+  async function handleProductImageSelect(file: File | null) {
+    if (!file) {
+      setProductImage(null);
+      setProductImagePreview(null);
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setError('Please choose an image file.');
+      return;
+    }
+    setProductImage(file);
+    setProductImagePreview(URL.createObjectURL(file));
+    if (!editingId) return;
+    setUploadingProductImage(true);
+    setError('');
+    try {
+      const updated = await apiUploadProductImage(editingId, file);
+      setProductForm((c) => ({ ...c, imageUrl: updated.imageUrl ?? c.imageUrl }));
+      setProductImage(null);
+      setProductImagePreview(null);
+      setNotice('Image updated.');
+      await refreshInventory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Image upload failed');
+    } finally {
+      setUploadingProductImage(false);
+    }
   }
 
   async function handleSaveProduct(event: FormEvent<HTMLFormElement>) {
@@ -3200,7 +3235,27 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               <div className="pe-col pe-col--side">
                 <div className="pe-section">
                   <span className="pe-section__label">Media</span>
-                  <div className="pe-image-preview">
+                  <div
+                    className={`pe-image-preview pe-image-preview--dropzone${
+                      productImageDragging ? ' pe-image-preview--dragging' : ''
+                    }${uploadingProductImage ? ' pe-image-preview--uploading' : ''}`}
+                    onClick={() => {
+                      if (uploadingProductImage) return;
+                      document.getElementById('pe-image-input')?.click();
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (!productImageDragging) setProductImageDragging(true);
+                    }}
+                    onDragLeave={() => setProductImageDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setProductImageDragging(false);
+                      const file = e.dataTransfer.files?.[0] ?? null;
+                      if (file) void handleProductImageSelect(file);
+                    }}
+                    title={editingId ? 'Click or drop to upload a new image' : 'Click or drop to attach an image'}
+                  >
                     <img
                       className="pe-image-preview__img"
                       src={productImagePreview || productForm.imageUrl || ''}
@@ -3213,9 +3268,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                     {!productImagePreview && !productForm.imageUrl && (
                       <div className="pe-image-preview__placeholder">
                         <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.4"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M3 15l5-4 4 3 3-2.5L21 16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        <span>No image</span>
+                        <span>
+                          {productImageDragging
+                            ? 'Drop to upload'
+                            : editingId
+                              ? 'Click or drop to upload'
+                              : 'Click or drop to attach'}
+                        </span>
                       </div>
                     )}
+                    {uploadingProductImage && (
+                      <div className="pe-image-preview__overlay">
+                        <span className="pe-image-preview__spinner" aria-hidden="true" />
+                        <span>Uploading…</span>
+                      </div>
+                    )}
+                    <input
+                      id="pe-image-input"
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        void handleProductImageSelect(file);
+                        // Allow re-selecting the same file (onChange only fires
+                        // when the value differs).
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
                   <label className="pe-field">
                     <span className="pe-field__label">Image URL</span>
@@ -3225,23 +3305,6 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       onChange={(e) => setProductForm((c) => ({ ...c, imageUrl: e.target.value }))}
                       placeholder="https://…"
                     />
-                  </label>
-                  <label className="pe-field">
-                    <span className="pe-field__label">Upload file</span>
-                    <label className="pe-upload-btn">
-                      <svg viewBox="0 0 20 20" fill="none"><path d="M10 3v10M6 7l4-4 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M3 15h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-                      {productImage ? productImage.name : 'Choose image…'}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0] ?? null;
-                          setProductImage(file);
-                          setProductImagePreview(file ? URL.createObjectURL(file) : null);
-                        }}
-                      />
-                    </label>
                   </label>
                 </div>
 
