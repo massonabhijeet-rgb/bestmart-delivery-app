@@ -197,6 +197,8 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [hardDeletingId, setHardDeletingId] = useState<string | null>(null);
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [savingFieldId, setSavingFieldId] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
@@ -471,9 +473,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     return () => window.clearTimeout(handle);
   }, [inventorySearch]);
 
-  // Any time a filter/search/sort changes, jump back to page 1.
+  // Any time a filter/search/sort changes, jump back to page 1 and drop any
+  // bulk selection — the selected IDs may not be in the new result set.
   useEffect(() => {
     setInventoryPage(1);
+    setSelectedInventoryIds(new Set());
   }, [inventorySearchDebounced, inventoryCategoryFilter, inventoryStatusFilter, inventorySort]);
 
   // Fetch the current inventory page whenever its inputs change and the tab
@@ -825,6 +829,61 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError(err instanceof Error ? err.message : 'Unable to restore product');
     } finally {
       setRestoringId(null);
+    }
+  }
+
+  // Bulk-delete respects each product's current state: Live items are moved
+  // to trash (soft delete), trash items are hard-deleted. Hard-delete will
+  // silently skip products with past orders on the server — we surface the
+  // skipped count in the notice so admins know why totals don't match.
+  async function handleBulkDelete() {
+    if (selectedInventoryIds.size === 0) return;
+    const selected = inventoryItems.filter((p) => selectedInventoryIds.has(p.uniqueId));
+    if (selected.length === 0) return;
+    const toArchive = selected.filter((p) => p.isActive);
+    const toHardDelete = selected.filter((p) => !p.isActive);
+
+    const parts: string[] = [];
+    if (toArchive.length) parts.push(`${toArchive.length} will be moved to trash`);
+    if (toHardDelete.length) {
+      parts.push(`${toHardDelete.length} will be permanently deleted (items with past orders stay in trash)`);
+    }
+    const confirmed = await confirm({
+      title: `Delete ${selected.length} product${selected.length === 1 ? '' : 's'}?`,
+      message: parts.join('. ') + '.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    setBulkDeleting(true);
+    let failures = 0;
+    try {
+      await Promise.all([
+        ...toArchive.map((p) =>
+          apiDeleteProduct(p.uniqueId).catch(() => {
+            failures += 1;
+          }),
+        ),
+        ...toHardDelete.map((p) =>
+          apiHardDeleteProduct(p.uniqueId).catch(() => {
+            failures += 1;
+          }),
+        ),
+      ]);
+      setSelectedInventoryIds(new Set());
+      const ok = selected.length - failures;
+      if (failures === 0) {
+        setNotice(`${ok} product${ok === 1 ? '' : 's'} deleted.`);
+      } else {
+        setNotice(
+          `${ok} of ${selected.length} deleted. ${failures} skipped (may have past orders or already removed).`,
+        );
+      }
+      await refreshInventory();
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -3394,15 +3453,98 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           </div>
         </div>
 
-        <div className="inventory-list">
+        {canManageCatalog && inventoryItems.length > 0 && (() => {
+          const visibleIds = inventoryItems.map((p) => p.uniqueId);
+          const visibleSelected = visibleIds.filter((id) => selectedInventoryIds.has(id)).length;
+          const allSelected = visibleSelected === visibleIds.length;
+          const someSelected = visibleSelected > 0 && !allSelected;
+          return (
+            <div className="inv-bulk-bar">
+              <label className="inv-bulk-bar__check">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
+                  onChange={(e) => {
+                    setSelectedInventoryIds((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) {
+                        visibleIds.forEach((id) => next.add(id));
+                      } else {
+                        visibleIds.forEach((id) => next.delete(id));
+                      }
+                      return next;
+                    });
+                  }}
+                />
+                <span>
+                  {selectedInventoryIds.size > 0
+                    ? `${selectedInventoryIds.size} selected`
+                    : 'Select all on this page'}
+                </span>
+              </label>
+              {selectedInventoryIds.size > 0 && (
+                <div className="inv-bulk-bar__actions">
+                  <button
+                    type="button"
+                    className="inv-bulk-bar__clear"
+                    onClick={() => setSelectedInventoryIds(new Set())}
+                    disabled={bulkDeleting}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    className="inv-bulk-bar__delete"
+                    onClick={handleBulkDelete}
+                    disabled={bulkDeleting}
+                  >
+                    {bulkDeleting
+                      ? 'Deleting…'
+                      : `Delete ${selectedInventoryIds.size}`}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        <div className={`inventory-list${canManageCatalog ? ' inventory-list--selectable' : ''}`}>
           {!inventoryLoading && inventoryItems.length === 0 && (
             <p className="empty-state">No products match your search.</p>
           )}
           {inventoryItems.map((product) => {
             const stockPct = Math.min(100, Math.round((product.stockQuantity / 100) * 100));
             const isLow = product.stockQuantity <= 5;
+            const isSelected = selectedInventoryIds.has(product.uniqueId);
             return (
-              <article key={product.uniqueId} className={`inv-card${!product.isActive ? ' inv-card--archived' : ''}`}>
+              <article
+                key={product.uniqueId}
+                className={`inv-card${!product.isActive ? ' inv-card--archived' : ''}${isSelected ? ' inv-card--selected' : ''}`}
+              >
+                {canManageCatalog && (
+                  <label
+                    className="inv-card__select"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      aria-label={`Select ${product.name}`}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelectedInventoryIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(product.uniqueId);
+                          else next.delete(product.uniqueId);
+                          return next;
+                        });
+                      }}
+                    />
+                  </label>
+                )}
                 <div className="inv-card__thumb">
                   <img
                     src={product.imageUrl || ''}
