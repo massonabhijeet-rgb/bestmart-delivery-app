@@ -4,6 +4,11 @@ import type { PoolClient } from 'pg';
 import pool from './pool.js';
 import type { OrderStatus, UserRole } from './types.js';
 
+// pg_trgm powers fuzzy similarity() in search. On managed Postgres hosts the
+// DB user may lack permission to CREATE EXTENSION — when that happens we fall
+// back to ILIKE-only search so the endpoint still works.
+let pgTrgmAvailable = false;
+
 export interface DbUser {
   id: number;
   uid: string;
@@ -623,24 +628,39 @@ async function createTables(client: PoolClient) {
 
   // Elasticsearch-like fuzzy/ranked product search. pg_trgm provides similarity()
   // for typo tolerance; GIN trigram indexes make ILIKE '%q%' and similarity()
-  // fast even on large catalogs.
-  await client.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_products_name_trgm
-      ON products USING gin (lower(name) gin_trgm_ops);
-  `);
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_products_description_trgm
-      ON products USING gin (lower(description) gin_trgm_ops);
-  `);
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_categories_name_trgm
-      ON categories USING gin (lower(name) gin_trgm_ops);
-  `);
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS idx_brands_name_trgm
-      ON brands USING gin (lower(name) gin_trgm_ops);
-  `);
+  // fast even on large catalogs. Wrapped in a SAVEPOINT because managed Postgres
+  // providers often deny CREATE EXTENSION to non-superusers — without a
+  // savepoint, a failure here would abort the whole createTables transaction.
+  // When pg_trgm is unavailable listProductsPage falls back to ILIKE-only.
+  await client.query('SAVEPOINT trgm_setup');
+  try {
+    await client.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_name_trgm
+        ON products USING gin (lower(name) gin_trgm_ops);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_products_description_trgm
+        ON products USING gin (lower(description) gin_trgm_ops);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_categories_name_trgm
+        ON categories USING gin (lower(name) gin_trgm_ops);
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_brands_name_trgm
+        ON brands USING gin (lower(name) gin_trgm_ops);
+    `);
+    await client.query('RELEASE SAVEPOINT trgm_setup');
+    pgTrgmAvailable = true;
+  } catch (err) {
+    await client.query('ROLLBACK TO SAVEPOINT trgm_setup');
+    pgTrgmAvailable = false;
+    console.warn(
+      'pg_trgm unavailable — search falling back to ILIKE-only:',
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 async function seedCompany(client: PoolClient) {
@@ -1805,37 +1825,57 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
   // Elasticsearch-like search: fuzzy (pg_trgm similarity) + substring/prefix
   // match across name/description/category/brand, with a relevance score used
   // for ordering. Short queries need a tighter similarity threshold so "egg"
-  // doesn't fuzzy-match unrelated 3-letter words.
+  // doesn't fuzzy-match unrelated 3-letter words. When pg_trgm is unavailable
+  // (see createTables), we fall back to ILIKE-only without similarity().
   let rankSql: string | null = null;
   if (opts.search && opts.search.trim()) {
     const raw = opts.search.trim().toLowerCase();
-    const simThreshold = raw.length <= 3 ? 0.4 : raw.length <= 6 ? 0.3 : 0.22;
     params.push(raw);                const pRaw = params.length;
     params.push(`%${raw}%`);         const pContains = params.length;
     params.push(`${raw}%`);          const pPrefix = params.length;
-    params.push(simThreshold);       const pThreshold = params.length;
 
-    where.push(`(
-      lower(p.name) LIKE $${pContains}
-      OR lower(p.description) LIKE $${pContains}
-      OR lower(c.name) LIKE $${pContains}
-      OR lower(b.name) LIKE $${pContains}
-      OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
-      OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
-      OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
-    )`);
+    if (pgTrgmAvailable) {
+      const simThreshold = raw.length <= 3 ? 0.4 : raw.length <= 6 ? 0.3 : 0.22;
+      params.push(simThreshold);     const pThreshold = params.length;
 
-    rankSql = `(
-      (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
-      + (CASE WHEN lower(p.name) LIKE $${pPrefix} THEN 400 ELSE 0 END)
-      + (CASE WHEN lower(p.name) LIKE $${pContains} THEN 200 ELSE 0 END)
-      + (similarity(lower(p.name), $${pRaw}) * 120)
-      + (CASE WHEN lower(c.name) LIKE $${pContains} THEN 60 ELSE 0 END)
-      + (CASE WHEN lower(b.name) LIKE $${pContains} THEN 50 ELSE 0 END)
-      + (CASE WHEN lower(p.description) LIKE $${pContains} THEN 20 ELSE 0 END)
-      + (similarity(lower(c.name), $${pRaw}) * 30)
-      + (similarity(lower(b.name), $${pRaw}) * 25)
-    )`;
+      where.push(`(
+        lower(p.name) LIKE $${pContains}
+        OR lower(p.description) LIKE $${pContains}
+        OR lower(c.name) LIKE $${pContains}
+        OR lower(b.name) LIKE $${pContains}
+        OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
+        OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
+        OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
+      )`);
+
+      rankSql = `(
+        (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pPrefix} THEN 400 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pContains} THEN 200 ELSE 0 END)
+        + (similarity(lower(p.name), $${pRaw}) * 120)
+        + (CASE WHEN lower(c.name) LIKE $${pContains} THEN 60 ELSE 0 END)
+        + (CASE WHEN lower(b.name) LIKE $${pContains} THEN 50 ELSE 0 END)
+        + (CASE WHEN lower(p.description) LIKE $${pContains} THEN 20 ELSE 0 END)
+        + (similarity(lower(c.name), $${pRaw}) * 30)
+        + (similarity(lower(b.name), $${pRaw}) * 25)
+      )`;
+    } else {
+      where.push(`(
+        lower(p.name) LIKE $${pContains}
+        OR lower(p.description) LIKE $${pContains}
+        OR lower(c.name) LIKE $${pContains}
+        OR lower(b.name) LIKE $${pContains}
+      )`);
+
+      rankSql = `(
+        (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pPrefix} THEN 400 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pContains} THEN 200 ELSE 0 END)
+        + (CASE WHEN lower(c.name) LIKE $${pContains} THEN 60 ELSE 0 END)
+        + (CASE WHEN lower(b.name) LIKE $${pContains} THEN 50 ELSE 0 END)
+        + (CASE WHEN lower(p.description) LIKE $${pContains} THEN 20 ELSE 0 END)
+      )`;
+    }
   }
   if (opts.ids && opts.ids.length > 0) {
     params.push(opts.ids);
