@@ -1827,12 +1827,17 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
   // for ordering. Short queries need a tighter similarity threshold so "egg"
   // doesn't fuzzy-match unrelated 3-letter words. When pg_trgm is unavailable
   // (see createTables), we fall back to ILIKE-only without similarity().
+  //
+  // Rank-only params (prefix pattern) are deferred into rankExtraParams and
+  // only appended before the list query — the count query would otherwise
+  // receive params it doesn't reference, and Postgres errors out with
+  // "could not determine data type of parameter".
   let rankSql: string | null = null;
+  const rankExtraParams: unknown[] = [];
   if (opts.search && opts.search.trim()) {
     const raw = opts.search.trim().toLowerCase();
     params.push(raw);                const pRaw = params.length;
     params.push(`%${raw}%`);         const pContains = params.length;
-    params.push(`${raw}%`);          const pPrefix = params.length;
 
     if (pgTrgmAvailable) {
       const simThreshold = raw.length <= 3 ? 0.4 : raw.length <= 6 ? 0.3 : 0.22;
@@ -1847,6 +1852,11 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
         OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
         OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
       )`);
+
+      // pPrefix position is only known once we append rankExtraParams before
+      // the list query, so rankSql references it via ${pPrefix} at build time.
+      const pPrefix = params.length + 1;
+      rankExtraParams.push(`${raw}%`);
 
       rankSql = `(
         (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
@@ -1866,6 +1876,9 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
         OR lower(c.name) LIKE $${pContains}
         OR lower(b.name) LIKE $${pContains}
       )`);
+
+      const pPrefix = params.length + 1;
+      rankExtraParams.push(`${raw}%`);
 
       rankSql = `(
         (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
@@ -1918,6 +1931,9 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
   );
   const total = parseInt(countRes.rows[0]?.total ?? '0', 10);
 
+  // Append rank-only params (prefix pattern) before pageSize/offset so the
+  // list query references them; count above never referenced them.
+  for (const p of rankExtraParams) params.push(p);
   params.push(pageSize);
   params.push(offset);
   const listRes = await pool.query(
