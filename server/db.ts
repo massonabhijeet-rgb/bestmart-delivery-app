@@ -1587,6 +1587,15 @@ export async function createUser(input: CreateUserInput) {
   return result.rows[0];
 }
 
+// Self-service account deletion for App Store compliance. All child rows
+// are already set to CASCADE (user_addresses, user_devices, coupon_redemptions)
+// or SET NULL (orders.created_by_user_id, search_events, click_events) so
+// order history stays for admin/analytics but is anonymised to the deleted user.
+export async function deleteUserById(userId: number): Promise<boolean> {
+  const result = await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+  return (result.rowCount ?? 0) > 0;
+}
+
 export interface UserAddress {
   id: number;
   fullName: string;

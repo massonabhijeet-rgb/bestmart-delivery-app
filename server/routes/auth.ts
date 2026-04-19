@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import {
   createUser,
+  deleteUserById,
   findUserByEmail,
   getDefaultCompanyId,
   incrementFailedAttempts,
@@ -169,6 +170,30 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res) => {
       phone: details?.phone ?? null,
     },
   });
+});
+
+// Self-service account deletion. Admin accounts are not deletable from the
+// mobile app — if the only admin deletes themselves the storefront becomes
+// unmanageable. Admins must be removed by another admin from the web console.
+router.delete('/me', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.user.role === 'admin') {
+    return res.status(403).json({
+      error: 'Admin accounts cannot be deleted from the app. Contact support.',
+    });
+  }
+  try {
+    const deleted = await deleteUserById(req.user.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 router.get('/addresses', authenticateToken, async (req: AuthenticatedRequest, res) => {
