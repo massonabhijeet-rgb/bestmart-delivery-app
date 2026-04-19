@@ -39,6 +39,10 @@ export const key = {
   ordersSummary: (companyId: number) => `bm:orders:summary:${companyId}`,
 };
 
+export function getRedis(): Redis | null {
+  return redis;
+}
+
 export async function cacheGet<T>(cacheKey: string): Promise<T | null> {
   if (!redis) return null;
   try {

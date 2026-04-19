@@ -2,9 +2,11 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import {
+  createPhoneUser,
   createUser,
   deleteUserById,
   findUserByEmail,
+  findUserByPhoneE164,
   getDefaultCompanyId,
   incrementFailedAttempts,
   listRiders,
@@ -14,6 +16,7 @@ import {
   resetFailedAttempts,
 } from '../db.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { normalizePhoneIN, sendOtp, verifyOtp } from '../otp.js';
 import type { AuthenticatedRequest, UserRole } from '../types.js';
 
 const router = Router();
@@ -147,6 +150,107 @@ router.post('/signup', async (req, res) => {
     });
   } catch (error) {
     console.error('Signup error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Phone-OTP login. Two-step flow:
+//   1) POST /otp/send { phone } → MSG91 dispatches a 6-digit code, returns
+//      { requestId, expiresIn }. Rate-limited per phone and per IP.
+//   2) POST /otp/verify { phone, otp, requestId } → on success, find-or-create
+//      a customer keyed by E.164 phone and return { token, user } in the same
+//      shape as /login.
+router.post('/otp/send', async (req, res) => {
+  try {
+    const { phone } = req.body as { phone?: string };
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+    const phoneE164 = normalizePhoneIN(phone);
+    if (!phoneE164) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number' });
+    }
+    const ip =
+      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
+
+    const result = await sendOtp(phoneE164, ip);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({
+      requestId: result.requestId,
+      expiresIn: result.expiresIn,
+      ...(result.devOtp ? { devOtp: result.devOtp } : {}),
+    });
+  } catch (error) {
+    console.error('OTP send error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/otp/verify', async (req, res) => {
+  try {
+    const { phone, otp, requestId } = req.body as {
+      phone?: string;
+      otp?: string;
+      requestId?: string;
+    };
+    if (!phone || !otp || !requestId) {
+      return res.status(400).json({ error: 'Phone, OTP, and requestId are required' });
+    }
+    const phoneE164 = normalizePhoneIN(phone);
+    if (!phoneE164) {
+      return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number' });
+    }
+    const cleanOtp = otp.trim();
+    if (!/^\d{4,8}$/.test(cleanOtp)) {
+      return res.status(400).json({ error: 'Invalid OTP format' });
+    }
+
+    const verify = await verifyOtp(phoneE164, cleanOtp, requestId);
+    if (!verify.ok) {
+      return res.status(verify.status).json({ error: verify.error });
+    }
+
+    let user = await findUserByPhoneE164(phoneE164);
+    if (!user) {
+      const companyId = await getDefaultCompanyId();
+      if (!companyId) {
+        return res.status(500).json({ error: 'Store is not available right now' });
+      }
+      user = await createPhoneUser({ phoneE164, companyId });
+      if (!user) {
+        return res.status(500).json({ error: 'Failed to create account' });
+      }
+    }
+
+    if (user.lockedAt) {
+      return res.status(423).json({
+        error: 'Account locked. Contact the administrator.',
+      });
+    }
+
+    const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
+      expiresIn: '7d',
+    });
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        uid: user.uid,
+        email: user.email,
+        companyId: user.companyId,
+        companyName: user.companyName,
+        role: user.role,
+        fullName: user.fullName,
+        phone: user.phone,
+      },
+    });
+  } catch (error) {
+    console.error('OTP verify error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

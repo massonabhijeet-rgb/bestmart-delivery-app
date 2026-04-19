@@ -286,6 +286,7 @@ async function createTables(client: PoolClient) {
   await client.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 VARCHAR(16) UNIQUE;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin', 'editor', 'viewer', 'rider'));
@@ -1594,6 +1595,52 @@ export async function createUser(input: CreateUserInput) {
 export async function deleteUserById(userId: number): Promise<boolean> {
   const result = await pool.query('DELETE FROM users WHERE id = $1', [userId]);
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function findUserByPhoneE164(phoneE164: string) {
+  const result = await pool.query(
+    `
+      SELECT
+        u.id,
+        u.uid,
+        u.email,
+        u.password,
+        u.role,
+        u.company_id AS "companyId",
+        c.name AS "companyName",
+        u.failed_attempts AS "failedAttempts",
+        u.locked_at AS "lockedAt",
+        u.full_name AS "fullName",
+        u.phone AS "phone"
+      FROM users u
+      JOIN companies c ON c.id = u.company_id
+      WHERE u.phone_e164 = $1
+      LIMIT 1;
+    `,
+    [phoneE164]
+  );
+  return result.rowCount ? mapUser(result.rows[0]) : null;
+}
+
+// Phone-OTP signup. Creates a customer (role 'viewer') keyed by E.164 phone.
+// The email column is NOT NULL UNIQUE, so we generate a placeholder local-domain
+// address derived from the phone — never displayed to the user. The bcrypt
+// password is random; this account can only log in via OTP.
+export async function createPhoneUser(input: {
+  phoneE164: string;
+  companyId: number;
+}) {
+  const placeholderEmail = `phone-${input.phoneE164.replace(/[^0-9]/g, '')}@phone.bestmart.local`;
+  const randomPassword = uuidv4() + uuidv4();
+  const passwordHash = await bcrypt.hash(randomPassword, 10);
+  await pool.query(
+    `
+      INSERT INTO users (uid, email, password, role, company_id, phone, phone_e164)
+      VALUES ($1, $2, $3, 'viewer', $4, $5, $6);
+    `,
+    [uuidv4(), placeholderEmail, passwordHash, input.companyId, input.phoneE164, input.phoneE164]
+  );
+  return findUserByPhoneE164(input.phoneE164);
 }
 
 export interface UserAddress {
