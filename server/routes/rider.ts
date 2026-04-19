@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import {
   getOrderByPublicId,
+  getOrderOwnerUserId,
   listRiderOrders,
   updateOrderStatus,
 } from '../db.js';
+import { notifyOrderStatus } from '../push.js';
 import { broadcast, updateRiderLocation } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
@@ -64,6 +66,14 @@ router.post(
       }
 
       broadcast({ type: 'order_updated', payload: order });
+
+      const ownerId = await getOrderOwnerUserId(publicId);
+      void notifyOrderStatus({
+        userId: ownerId,
+        publicId: order.publicId,
+        status: 'delivered',
+      });
+
       return res.json({ order });
     } catch (error) {
       console.error('Rider deliver error:', error);

@@ -9,3 +9,4 @@ uploads/*
 .claude/
 product-images/
 *.tsbuildinfo
+server/secrets/

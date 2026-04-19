@@ -510,6 +510,18 @@ async function createTables(client: PoolClient) {
   `);
 
   await client.query(`
+    CREATE TABLE IF NOT EXISTS user_devices (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      fcm_token TEXT NOT NULL UNIQUE,
+      platform VARCHAR(10) NOT NULL CHECK (platform IN ('ios', 'android')),
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices (user_id);
+  `);
+
+  await client.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       key VARCHAR(64) NOT NULL,
@@ -4228,4 +4240,52 @@ export async function getDashboardSummary(companyId: number) {
     lowStock: stock.rows[0].lowStock,
     topRegions: regions.rows,
   };
+}
+
+export async function getOrderOwnerUserId(publicId: string): Promise<number | null> {
+  const { rows } = await pool.query<{ createdByUserId: number | null }>(
+    `SELECT created_by_user_id AS "createdByUserId" FROM orders WHERE public_id = $1 LIMIT 1`,
+    [publicId]
+  );
+  return rows[0]?.createdByUserId ?? null;
+}
+
+export async function registerUserDevice(
+  userId: number,
+  token: string,
+  platform: 'ios' | 'android'
+) {
+  await pool.query(
+    `
+    INSERT INTO user_devices (user_id, fcm_token, platform)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (fcm_token) DO UPDATE
+      SET user_id = EXCLUDED.user_id,
+          platform = EXCLUDED.platform,
+          updated_date = NOW()
+    `,
+    [userId, token, platform]
+  );
+}
+
+export async function unregisterUserDevice(userId: number, token: string) {
+  await pool.query(
+    `DELETE FROM user_devices WHERE user_id = $1 AND fcm_token = $2`,
+    [userId, token]
+  );
+}
+
+export async function listUserDeviceTokens(userId: number): Promise<string[]> {
+  const { rows } = await pool.query<{ fcm_token: string }>(
+    `SELECT fcm_token FROM user_devices WHERE user_id = $1`,
+    [userId]
+  );
+  return rows.map((r) => r.fcm_token);
+}
+
+export async function removeUserDeviceTokens(tokens: string[]) {
+  if (tokens.length === 0) return;
+  await pool.query(`DELETE FROM user_devices WHERE fcm_token = ANY($1::text[])`, [
+    tokens,
+  ]);
 }

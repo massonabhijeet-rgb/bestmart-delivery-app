@@ -6,6 +6,7 @@ import {
   getDefaultCompanyId,
   getDashboardSummary,
   getOrderByPublicId,
+  getOrderOwnerUserId,
   getSalesReport,
   listOrders,
   listOrdersForUser,
@@ -14,6 +15,7 @@ import {
   upsertUserAddress,
   validateCoupon,
 } from '../db.js';
+import { notifyOrderStatus } from '../push.js';
 import {
   attachUserIfPresent,
   authenticateToken,
@@ -168,6 +170,14 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
     await invalidateOrdersCache(companyId);
     broadcast({ type: 'new_order', payload: order });
 
+    if (req.user) {
+      void notifyOrderStatus({
+        userId: req.user.id,
+        publicId: order.publicId,
+        status: 'placed',
+      });
+    }
+
     return res.status(201).json({ order });
   } catch (error) {
     const raw = error instanceof Error ? error.message : 'Unable to place order at the moment';
@@ -287,6 +297,13 @@ router.post('/:publicId/cancel', async (req, res) => {
     await invalidateOrdersCache(existing.companyId);
     broadcast({ type: 'order_updated', payload: order });
 
+    const ownerId = await getOrderOwnerUserId(publicId);
+    void notifyOrderStatus({
+      userId: ownerId,
+      publicId: order.publicId,
+      status: 'cancelled',
+    });
+
     return res.json({ order });
   } catch (error) {
     console.error('Cancel order error:', error);
@@ -330,6 +347,13 @@ router.patch(
 
       await invalidateOrdersCache(req.user.companyId);
       broadcast({ type: 'order_updated', payload: order });
+
+      const ownerId = await getOrderOwnerUserId(publicId);
+      void notifyOrderStatus({
+        userId: ownerId,
+        publicId: order.publicId,
+        status,
+      });
 
       return res.json({ order });
     } catch (error) {
