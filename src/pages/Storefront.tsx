@@ -126,9 +126,9 @@ const PAYMENT_GROUPS: Array<{ title: string; methods: PaymentMethodEntry[] }> = 
   {
     title: 'Pay online',
     methods: [
-      { value: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe via UPI', icon: '📱', iconUrl: `${PAYMENT_ICON_BASE}/phonepay.png` },
-      { value: 'gpay', label: 'Google Pay', sub: 'Opens GPay via UPI', icon: '🟢', iconUrl: `${PAYMENT_ICON_BASE}/googlepay.png` },
-      { value: 'paytm', label: 'Paytm', sub: 'Opens Paytm via UPI', icon: '🔵', iconUrl: `${PAYMENT_ICON_BASE}/paytm.png` },
+      { value: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe via UPI', icon: '📱', iconUrl: `${PAYMENT_ICON_BASE}/payment-icons/phonepay.png` },
+      { value: 'gpay', label: 'Google Pay', sub: 'Opens GPay via UPI', icon: '🟢', iconUrl: `${PAYMENT_ICON_BASE}/payment-icons/googlepay.png` },
+      { value: 'paytm', label: 'Paytm', sub: 'Opens Paytm via UPI', icon: '🔵', iconUrl: `${PAYMENT_ICON_BASE}/payment-icons/paytm.png` },
       { value: 'razorpay', label: 'Card / Netbanking / Other UPI', sub: 'Pay securely via Razorpay', icon: '💳' },
     ],
   },
