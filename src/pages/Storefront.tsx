@@ -771,53 +771,55 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     setCouponError('');
 
     try {
-      const order = await withBusy('Placing your order…', async () => {
-        let coords = liveLocation
-          ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
-          : null;
-        if (!coords) {
-          try {
-            coords = await captureLocation();
-          } catch {
-            coords = null;
-          }
+      // Location + coupon revalidation run without the busy overlay so it
+      // doesn't cover the browser geolocation prompt.
+      let coords = liveLocation
+        ? { latitude: liveLocation.latitude, longitude: liveLocation.longitude }
+        : null;
+      if (!coords) {
+        try {
+          coords = await captureLocation();
+        } catch {
+          coords = null;
         }
-        if (!coords) {
-          throw new Error(
-            'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
-          );
-        }
+      }
+      if (!coords) {
+        throw new Error(
+          'Please share your delivery location (tap "Use my current location" above) — riders need it to find you.',
+        );
+      }
 
-        // Re-validate the applied coupon right before placing the order so the
-        // user sees a clear coupon-area message if it's no longer eligible
-        // (per-user limit reached, expired, etc) since the apply click.
-        if (appliedCoupon) {
-          try {
-            const fresh = await apiPreviewCoupon(appliedCoupon.code, subtotalCents);
-            setAppliedCoupon(fresh);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Coupon is no longer valid.';
-            setAppliedCoupon(null);
-            setCouponError(msg);
-            setCouponStatus('error');
-            throw new Error('coupon_revalidation_failed');
-          }
+      if (appliedCoupon) {
+        try {
+          const fresh = await apiPreviewCoupon(appliedCoupon.code, subtotalCents);
+          setAppliedCoupon(fresh);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Coupon is no longer valid.';
+          setAppliedCoupon(null);
+          setCouponError(msg);
+          setCouponStatus('error');
+          throw new Error('coupon_revalidation_failed');
         }
+      }
 
-        let razorpayPayload: RazorpaySuccess | null = null;
-        if (checkoutForm.paymentMethod === 'razorpay') {
-          const intent = await apiCreatePaymentIntent(totalCents);
-          razorpayPayload = await openRazorpayCheckout({
-            keyId: intent.keyId,
-            razorpayOrderId: intent.razorpayOrderId,
-            amount: intent.amount,
-            currency: intent.currency,
-            customerName: checkoutForm.customerName,
-            customerPhone: checkoutForm.customerPhone,
-          });
-        }
+      // Razorpay widget must run OUTSIDE withBusy — the BusyOverlay sits
+      // on top of the Razorpay iframe otherwise and blocks card entry.
+      let razorpayPayload: RazorpaySuccess | null = null;
+      if (checkoutForm.paymentMethod === 'razorpay') {
+        const intent = await apiCreatePaymentIntent(totalCents);
+        razorpayPayload = await openRazorpayCheckout({
+          keyId: intent.keyId,
+          razorpayOrderId: intent.razorpayOrderId,
+          amount: intent.amount,
+          currency: intent.currency,
+          customerName: checkoutForm.customerName,
+          customerPhone: checkoutForm.customerPhone,
+        });
+      }
 
-        return apiCreateOrder({
+      const finalCoords = coords;
+      const order = await withBusy('Placing your order…', async () =>
+        apiCreateOrder({
           customerName: checkoutForm.customerName,
           customerPhone: checkoutForm.customerPhone,
           deliveryAddress: checkoutForm.deliveryAddress,
@@ -827,14 +829,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             productId: item.product.uniqueId,
             quantity: item.quantity,
           })),
-          deliveryLatitude: coords.latitude,
-          deliveryLongitude: coords.longitude,
+          deliveryLatitude: finalCoords.latitude,
+          deliveryLongitude: finalCoords.longitude,
           couponCode: appliedCoupon?.code ?? null,
           razorpayOrderId: razorpayPayload?.razorpayOrderId,
           razorpayPaymentId: razorpayPayload?.razorpayPaymentId,
           razorpaySignature: razorpayPayload?.razorpaySignature,
-        });
-      });
+        }),
+      );
 
       setLatestOrder(order);
       setCart({});
