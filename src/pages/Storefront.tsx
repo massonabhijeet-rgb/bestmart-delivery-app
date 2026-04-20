@@ -26,6 +26,7 @@ import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrenc
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import LazyMount from '../components/LazyMount';
+import { AddressPickerModal, type PickedAddress as PickedMapAddress } from '../components/AddressPickerModal';
 import {
   MOOD_COPY,
   fetchOpenMeteoMood,
@@ -273,6 +274,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [trackingCode, setTrackingCode] = useState('');
   const [placingOrder, setPlacingOrder] = useState(false);
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+  const [couponSheetOpen, setCouponSheetOpen] = useState(false);
+  const [addressPickerOpen, setAddressPickerOpen] = useState(false);
+  const [addressPickerAutoLocate, setAddressPickerAutoLocate] = useState(false);
   const paymentIconsReadyRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     const urls = PAYMENT_GROUPS.flatMap((g) =>
@@ -415,8 +419,22 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     });
   }
 
-  function handleShareLocation() {
-    void captureLocation();
+  function openAddressPicker(useCurrent: boolean) {
+    setAddressPickerAutoLocate(useCurrent);
+    setAddressPickerOpen(true);
+  }
+
+  function handleAddressPicked(picked: PickedMapAddress) {
+    setCheckoutForm((current) => ({ ...current, deliveryAddress: picked.addressLine }));
+    setLiveLocation({
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      capturedAt: Date.now(),
+    });
+    setLocationStatus('idle');
+    setLocationError('');
+    setSelectedAddressId('new');
+    setAddressPickerOpen(false);
   }
 
   useEffect(() => {
@@ -2307,17 +2325,96 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               />
             </label>
 
-            <label>
-              <span>Delivery address</span>
-              <textarea
-                value={checkoutForm.deliveryAddress}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, deliveryAddress: event.target.value }))
-                }
-                placeholder="House / apartment / landmark"
-                required
-              />
-            </label>
+            {checkoutForm.deliveryAddress.trim() && liveLocation ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 12,
+                  padding: '12px 14px',
+                  background: 'var(--c-surface, #fff)',
+                  border: '1px solid var(--c-border, #e2e8f0)',
+                  borderRadius: 12,
+                }}
+              >
+                <span style={{ fontSize: 20, lineHeight: '24px' }}>📍</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', fontWeight: 600, letterSpacing: 0.3 }}>
+                    DELIVERING TO
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text, #0f172a)', wordBreak: 'break-word' }}>
+                    {checkoutForm.deliveryAddress.trim()}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', marginTop: 2 }}>
+                    {liveLocation.latitude.toFixed(5)}, {liveLocation.longitude.toFixed(5)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => openAddressPicker(false)}
+                  style={{ fontWeight: 700, fontSize: 13 }}
+                >
+                  Change
+                </button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  padding: 14,
+                  background: 'var(--c-surface, #fff)',
+                  border: '1px solid var(--c-border, #e2e8f0)',
+                  borderRadius: 12,
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text, #0f172a)' }}>
+                  Where should we deliver?
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openAddressPicker(true)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '12px 14px',
+                    background: '#2563eb',
+                    color: '#fff',
+                    border: 0,
+                    borderRadius: 10,
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>📡</span>
+                  Deliver at my current location
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openAddressPicker(false)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '12px 14px',
+                    background: '#fff',
+                    color: '#2563eb',
+                    border: '1px solid #2563eb',
+                    borderRadius: 10,
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>🗺️</span>
+                  No, at a different location
+                </button>
+              </div>
+            )}
 
             <button
               type="button"
@@ -2390,68 +2487,54 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               />
             </label>
 
-            <div className={`location-block${!liveLocation ? ' location-block--required' : ''}`}>
-              <div>
-                <strong>Share live location <span style={{ color: 'var(--c-danger, #ef4444)' }}>*</span></strong>
-                <p>
-                  {liveLocation
-                    ? `Captured (~${liveLocation.latitude.toFixed(5)}, ${liveLocation.longitude.toFixed(5)})`
-                    : 'Required — riders need your exact location to deliver.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                className={liveLocation ? 'secondary-button' : 'primary-button'}
-                onClick={handleShareLocation}
-                disabled={locationStatus === 'capturing'}
-              >
-                {locationStatus === 'capturing'
-                  ? 'Getting location…'
-                  : liveLocation
-                    ? 'Update location'
-                    : 'Use my current location'}
-              </button>
-              {locationStatus === 'error' && locationError ? (
-                <span className="location-block__error">{locationError}</span>
-              ) : null}
-            </div>
+            {locationStatus === 'error' && locationError ? (
+              <span className="location-block__error">{locationError}</span>
+            ) : null}
 
-            {/* Coupon */}
-            <div className="coupon-block">
-              {appliedCoupon ? (
-                <div className="coupon-block__applied">
-                  <div>
-                    <strong>Coupon {appliedCoupon.code} applied</strong>
-                    <p>You're saving {formatCurrency(appliedCoupon.discountCents)}.</p>
-                  </div>
-                  <button type="button" className="ghost-button" onClick={handleRemoveCoupon}>
-                    Remove
-                  </button>
+            <button
+              type="button"
+              onClick={() => setCouponSheetOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                width: '100%',
+                padding: '12px 14px',
+                background: 'var(--c-surface, #fff)',
+                border: '1px solid var(--c-border, #e2e8f0)',
+                borderRadius: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  fontSize: 18,
+                }}
+              >
+                🎟️
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', fontWeight: 600, letterSpacing: 0.3 }}>
+                  COUPON
                 </div>
-              ) : (
-                <>
-                  <label className="coupon-block__row">
-                    <input
-                      type="text"
-                      value={couponInput}
-                      onChange={(e) => { setCouponInput(e.target.value); if (couponError) setCouponError(''); }}
-                      placeholder="Have a coupon code?"
-                      autoCapitalize="characters"
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleApplyCoupon(); } }}
-                    />
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => void handleApplyCoupon()}
-                      disabled={!couponInput.trim() || couponStatus === 'applying' || subtotalCents <= 0}
-                    >
-                      {couponStatus === 'applying' ? 'Applying…' : 'Apply'}
-                    </button>
-                  </label>
-                  {couponError && <span className="coupon-block__error">{couponError}</span>}
-                </>
-              )}
-            </div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text, #0f172a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {appliedCoupon
+                    ? `${appliedCoupon.code} applied · saved ${formatCurrency(appliedCoupon.discountCents)}`
+                    : 'Apply a coupon'}
+                </div>
+              </div>
+              <span style={{ color: '#3b82f6', fontWeight: 700, fontSize: 14 }}>
+                {appliedCoupon ? 'Change ›' : 'View ›'}
+              </span>
+            </button>
 
             <div className="totals-card">
               <div>
@@ -2826,6 +2909,160 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           onClose={() => setQuickView(null)}
           onAdd={(uniqueId, qty) => updateQuantity(uniqueId, qty)}
         />
+      ) : null}
+      <AddressPickerModal
+        open={addressPickerOpen}
+        initialLatitude={liveLocation?.latitude ?? null}
+        initialLongitude={liveLocation?.longitude ?? null}
+        initialAddressLine={checkoutForm.deliveryAddress}
+        fetchCurrentLocationOnOpen={addressPickerAutoLocate}
+        onConfirm={handleAddressPicked}
+        onClose={() => setAddressPickerOpen(false)}
+      />
+      {couponSheetOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setCouponSheetOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.5)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              background: 'var(--c-surface-muted, #f8fafc)',
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              padding: '18px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 900 }}>Apply a coupon</h3>
+              <button
+                type="button"
+                onClick={() => setCouponSheetOpen(false)}
+                aria-label="Close"
+                style={{
+                  background: 'transparent',
+                  border: 0,
+                  fontSize: 24,
+                  cursor: 'pointer',
+                  color: '#64748b',
+                  padding: 4,
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="coupon-block" style={{ background: '#fff', borderRadius: 12, padding: 14, marginBottom: 14 }}>
+              {appliedCoupon ? (
+                <div className="coupon-block__applied">
+                  <div>
+                    <strong>Coupon {appliedCoupon.code} applied</strong>
+                    <p>You're saving {formatCurrency(appliedCoupon.discountCents)}.</p>
+                  </div>
+                  <button type="button" className="ghost-button" onClick={handleRemoveCoupon}>
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <label className="coupon-block__row">
+                    <input
+                      type="text"
+                      value={couponInput}
+                      onChange={(e) => { setCouponInput(e.target.value); if (couponError) setCouponError(''); }}
+                      placeholder="Have a coupon code?"
+                      autoCapitalize="characters"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleApplyCoupon().then(() => {
+                            if (!couponError) setCouponSheetOpen(false);
+                          });
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => {
+                        void handleApplyCoupon().then(() => {
+                          if (!couponError) setCouponSheetOpen(false);
+                        });
+                      }}
+                      disabled={!couponInput.trim() || couponStatus === 'applying' || subtotalCents <= 0}
+                    >
+                      {couponStatus === 'applying' ? 'Applying…' : 'Apply'}
+                    </button>
+                  </label>
+                  {couponError && <span className="coupon-block__error">{couponError}</span>}
+                </>
+              )}
+            </div>
+            {publicCoupons.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-muted, #64748b)', letterSpacing: 0.3, textTransform: 'uppercase' }}>
+                  Available coupons
+                </div>
+                {publicCoupons.map((c) => {
+                  const discountBig = c.discountType === 'percent'
+                    ? `${c.discountValue}% OFF`
+                    : `₹${(c.discountValue / 100).toFixed(0)} OFF`;
+                  const minLabel = c.minSubtotalCents > 0
+                    ? `Min order ₹${(c.minSubtotalCents / 100).toFixed(0)}`
+                    : 'No minimum';
+                  return (
+                    <div
+                      key={c.code}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: 12,
+                        background: '#fff',
+                        borderRadius: 12,
+                        border: '1px dashed #cbd5e1',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a' }}>{discountBig}</div>
+                        <div style={{ fontSize: 12, color: '#475569' }}>
+                          Code <strong>{c.code}</strong> · {minLabel}
+                        </div>
+                        {c.description ? (
+                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{c.description}</div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => {
+                          setCouponInput(c.code);
+                          setCouponError('');
+                        }}
+                      >
+                        Use
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
       ) : null}
     </main>
   );
