@@ -1286,6 +1286,46 @@ export async function listPublicCoupons(companyId: number): Promise<PublicCoupon
   return result.rows;
 }
 
+// Same shape as listPublicCoupons, but when a userId is provided also excludes
+// coupons the user has already exhausted via per-user usage limits — so the
+// checkout coupon sheet only shows codes the signed-in user can actually apply.
+export async function listAvailableCouponsForUser(
+  companyId: number,
+  userId: number | null,
+): Promise<PublicCoupon[]> {
+  if (userId == null) {
+    return listPublicCoupons(companyId);
+  }
+  const result = await pool.query<PublicCoupon>(
+    `
+      SELECT
+        c.code,
+        c.description,
+        c.discount_type AS "discountType",
+        c.discount_value AS "discountValue",
+        c.max_discount_cents AS "maxDiscountCents",
+        c.min_subtotal_cents AS "minSubtotalCents",
+        c.valid_until AS "validUntil"
+      FROM coupons c
+      WHERE c.company_id = $1
+        AND c.is_active = TRUE
+        AND c.valid_from <= NOW()
+        AND (c.valid_until IS NULL OR c.valid_until >= NOW())
+        AND (
+          c.max_total_uses IS NULL
+          OR (SELECT COUNT(*) FROM coupon_redemptions r WHERE r.coupon_id = c.id) < c.max_total_uses
+        )
+        AND (
+          SELECT COUNT(*) FROM coupon_redemptions r
+          WHERE r.coupon_id = c.id AND r.user_id = $2
+        ) < c.max_uses_per_user
+      ORDER BY c.created_date DESC;
+    `,
+    [companyId, userId],
+  );
+  return result.rows;
+}
+
 export async function listCoupons(companyId: number): Promise<CouponRecord[]> {
   const result = await pool.query<CouponRecord>(
     `SELECT ${COUPON_SELECT} FROM coupons c WHERE c.company_id = $1 ORDER BY c.created_date DESC;`,

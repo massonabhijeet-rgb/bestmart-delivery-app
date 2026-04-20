@@ -895,6 +895,11 @@ export async function apiListPublicCoupons() {
   return data.coupons;
 }
 
+export async function apiListAvailableCoupons() {
+  const data = await request<{ coupons: PublicCoupon[] }>('/coupons/available');
+  return data.coupons;
+}
+
 export async function apiPreviewCoupon(code: string, subtotalCents: number) {
   const data = await request<CouponPreview>('/coupons/preview', {
     method: 'POST',

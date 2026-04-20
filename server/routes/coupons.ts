@@ -3,6 +3,7 @@ import {
   createCoupon,
   deleteCoupon,
   getDefaultCompanyId,
+  listAvailableCouponsForUser,
   listCoupons,
   listPublicCoupons,
   updateCoupon,
@@ -29,6 +30,28 @@ router.get('/public', async (_req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Customer-facing: list coupons the *current* user can still apply. When a
+// token is present we filter out codes the user has exhausted (per-user cap
+// hit); without a token this behaves like /public.
+router.get(
+  '/available',
+  attachUserIfPresent,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
+      if (!companyId) return res.status(404).json({ error: 'Company not found' });
+      const coupons = await listAvailableCouponsForUser(
+        companyId,
+        req.user?.id ?? null,
+      );
+      return res.json({ coupons });
+    } catch (err) {
+      console.error('List available coupons error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // Admin: list
 router.get(

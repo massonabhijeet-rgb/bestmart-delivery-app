@@ -14,6 +14,7 @@ import {
   apiListAddresses,
   apiListBrands,
   apiListCategories,
+  apiListAvailableCoupons,
   apiListPublicCoupons,
   apiListTempCategories,
   apiLogClick,
@@ -341,6 +342,11 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [couponStatus, setCouponStatus] = useState<'idle' | 'applying' | 'error'>('idle');
   const [couponError, setCouponError] = useState('');
   const [publicCoupons, setPublicCoupons] = useState<PublicCoupon[]>([]);
+  // Coupons the *current* user can still apply (excludes codes they've already
+  // exhausted via per-user limits). Fetched fresh each time the checkout
+  // coupon sheet opens so the list reflects any redemptions since last open.
+  const [availableCoupons, setAvailableCoupons] = useState<PublicCoupon[]>([]);
+  const [availableCouponsLoading, setAvailableCouponsLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [mood, setMood] = useState<WeatherMood>(() => moodFromIndiaCalendar());
   const [tempCategories, setTempCategories] = useState<TempCategory[]>([]);
@@ -2462,7 +2468,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
             <button
               type="button"
-              onClick={() => setCouponSheetOpen(true)}
+              onClick={() => {
+                setCouponSheetOpen(true);
+                setAvailableCouponsLoading(true);
+                apiListAvailableCoupons()
+                  .then(setAvailableCoupons)
+                  .catch(() => setAvailableCoupons([]))
+                  .finally(() => setAvailableCouponsLoading(false));
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -2996,12 +3009,20 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </>
               )}
             </div>
-            {publicCoupons.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-muted, #64748b)', letterSpacing: 0.3, textTransform: 'uppercase' }}>
-                  Available coupons
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-text-muted, #64748b)', letterSpacing: 0.3, textTransform: 'uppercase' }}>
+                Available for you
+              </div>
+              {availableCouponsLoading ? (
+                <div style={{ fontSize: 13, color: '#64748b', padding: '8px 4px' }}>
+                  Loading coupons…
                 </div>
-                {publicCoupons.map((c) => {
+              ) : availableCoupons.length === 0 ? (
+                <div style={{ fontSize: 13, color: '#64748b', padding: '8px 4px' }}>
+                  No coupons available for you right now. Check back later — or enter a code above if you have one.
+                </div>
+              ) : (
+                availableCoupons.map((c) => {
                   const discountBig = c.discountType === 'percent'
                     ? `${c.discountValue}% OFF`
                     : `₹${(c.discountValue / 100).toFixed(0)} OFF`;
@@ -3042,9 +3063,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                       </button>
                     </div>
                   );
-                })}
-              </div>
-            ) : null}
+                })
+              )}
+            </div>
           </div>
         </div>
       ) : null}
