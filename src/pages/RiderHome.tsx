@@ -4,7 +4,7 @@ import type { Order, User } from '../services/api';
 import { formatCurrency, formatRelativeTime, labelizeStatus } from '../lib/format';
 import { useOrderSocket } from '../hooks/useOrderSocket';
 import { isAudioUnlocked, playOrderAlert, unlockAudio } from '../lib/sound';
-import { confirm } from '../components/ConfirmDialog';
+import { confirm, promptOtp } from '../components/ConfirmDialog';
 
 interface RiderHomeProps {
   user: User;
@@ -178,11 +178,19 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
     });
     if (!confirmed) return;
 
+    // Step 3: customer shares the 4-digit OTP shown on their track page/app.
+    const otp = await promptOtp({
+      title: 'Ask customer for delivery OTP',
+      message: `Customer ${order.customerName} will see a 4-digit OTP on their order page. Enter it to complete delivery.`,
+      confirmLabel: 'Confirm & Deliver',
+    });
+    if (!otp) return;
+
     setDeliveringId(order.publicId);
     setError('');
     setNotice('');
     try {
-      await apiRiderDeliver(order.publicId);
+      await apiRiderDeliver(order.publicId, otp);
       setNotice(`Order ${order.publicId} marked delivered.`);
       await load();
     } catch (err) {

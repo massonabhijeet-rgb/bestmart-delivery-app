@@ -13,7 +13,11 @@ export const PAYMENT_METHOD_VALUES = [
   'cash_on_delivery',
   'upi',
   'card_on_delivery',
+  'razorpay',
 ] as const;
+
+export const PAYMENT_STATUS_VALUES = ['pending', 'paid', 'refunded', 'failed'] as const;
+export type PaymentStatus = (typeof PAYMENT_STATUS_VALUES)[number];
 
 export const DELIVERY_SLOT_VALUES = [
   '20-30 min express',

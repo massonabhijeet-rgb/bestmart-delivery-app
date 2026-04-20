@@ -16,6 +16,7 @@ import deviceRoutes from './routes/devices.js';
 import mobileRoutes from './routes/mobile.js';
 import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
+import paymentRoutes from './routes/payments.js';
 import riderRoutes from './routes/rider.js';
 import { initDatabase } from './db.js';
 import { attachWebSocket } from './ws.js';
@@ -68,6 +69,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/mobile', mobileRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/rider', riderRoutes);
 
 app.get('/api/health', (_req, res) => {

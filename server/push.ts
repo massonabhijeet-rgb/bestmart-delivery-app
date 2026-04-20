@@ -68,7 +68,12 @@ async function sendToUser(userId: number, title: string, body: string, data?: Re
   }
 }
 
-const ORDER_STATUS_COPY: Partial<Record<OrderStatus, { title: string; body: (id: string) => string }>> = {
+interface StatusCopy {
+  title: string;
+  body: (id: string, otp?: string | null) => string;
+}
+
+const ORDER_STATUS_COPY: Partial<Record<OrderStatus, StatusCopy>> = {
   placed: {
     title: 'Order placed',
     body: (id) => `We got your order #${id}. We\u2019ll prep it shortly.`,
@@ -83,7 +88,10 @@ const ORDER_STATUS_COPY: Partial<Record<OrderStatus, { title: string; body: (id:
   },
   out_for_delivery: {
     title: 'Out for delivery',
-    body: (id) => `Order #${id} is on the way.`,
+    body: (id, otp) =>
+      otp
+        ? `Order #${id} is on the way. Share OTP ${otp} with your rider to complete delivery.`
+        : `Order #${id} is on the way.`,
   },
   delivered: {
     title: 'Delivered',
@@ -99,16 +107,24 @@ export async function notifyOrderStatus(params: {
   userId: number | null | undefined;
   publicId: string;
   status: OrderStatus;
+  deliveryOtp?: string | null;
 }) {
   if (!params.userId) return;
   const copy = ORDER_STATUS_COPY[params.status];
   if (!copy) return;
   try {
-    await sendToUser(params.userId, copy.title, copy.body(params.publicId), {
+    const data: Record<string, string> = {
       type: 'order_status',
       orderId: params.publicId,
       status: params.status,
-    });
+    };
+    if (params.deliveryOtp) data.deliveryOtp = params.deliveryOtp;
+    await sendToUser(
+      params.userId,
+      copy.title,
+      copy.body(params.publicId, params.deliveryOtp ?? null),
+      data
+    );
   } catch (error) {
     console.error('[push] notifyOrderStatus failed:', error);
   }

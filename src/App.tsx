@@ -1,5 +1,5 @@
 import { lazy, startTransition, Suspense, useEffect, useState } from 'react';
-import { ConfirmHost, RejectReasonHost, RiderPickerHost } from './components/ConfirmDialog';
+import { ConfirmHost, PromptOtpHost, RejectReasonHost, RiderPickerHost } from './components/ConfirmDialog';
 import { BusyOverlay } from './components/BusyOverlay';
 import LoginPopup from './components/LoginPopup';
 import { apiGetMe, apiLogout } from './services/api';
@@ -279,6 +279,7 @@ function AppWithHost() {
       <ConfirmHost />
       <RejectReasonHost />
       <RiderPickerHost />
+      <PromptOtpHost />
       <BusyOverlay />
     </>
   );

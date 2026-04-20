@@ -225,6 +225,35 @@ function TrackOrder({ trackingCode, onBackToStore, onTrack }: TrackOrderProps) {
               </div>
             ) : null}
 
+            {order.status === 'out_for_delivery' && order.deliveryOtp ? (
+              <div
+                className="message"
+                style={{
+                  background: 'linear-gradient(135deg, #065f46 0%, #10b981 100%)',
+                  color: '#fff',
+                  textAlign: 'center',
+                  padding: '1.1rem 1rem',
+                }}
+              >
+                <div style={{ fontSize: '0.85rem', opacity: 0.85, letterSpacing: '0.1em' }}>
+                  DELIVERY OTP
+                </div>
+                <div
+                  style={{
+                    fontSize: '2.4rem',
+                    fontWeight: 700,
+                    letterSpacing: '0.6rem',
+                    margin: '0.25rem 0',
+                  }}
+                >
+                  {order.deliveryOtp}
+                </div>
+                <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>
+                  Share this with your rider to complete delivery.
+                </div>
+              </div>
+            ) : null}
+
             {canCancel ? (
               <div className="cancel-row">
                 <button

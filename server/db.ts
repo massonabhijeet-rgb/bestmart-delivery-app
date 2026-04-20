@@ -91,6 +91,10 @@ export interface OrderRecord {
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
   cancellationReason: string | null;
+  deliveryOtp: string | null;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  paymentStatus: string;
   createdDate: string;
   updatedDate: string;
   items: Array<{
@@ -171,6 +175,10 @@ interface CreateOrderInput {
   deliveryLongitude?: number | null;
   createdByUserId?: number | null;
   couponCode?: string | null;
+  razorpayOrderId?: string | null;
+  razorpayPaymentId?: string | null;
+  razorpaySignature?: string | null;
+  paymentStatus?: string;
 }
 
 function toSlug(input: string) {
@@ -441,6 +449,11 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_rider_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_otp VARCHAR(6);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(80);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_payment_id VARCHAR(80);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_signature VARCHAR(255);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(20) NOT NULL DEFAULT 'pending';
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -4079,6 +4092,10 @@ async function mapOrder(orderRow: OrderRow) {
     deliveryLatitude: orderRow.deliveryLatitude,
     deliveryLongitude: orderRow.deliveryLongitude,
     cancellationReason: orderRow.cancellationReason ?? null,
+    deliveryOtp: orderRow.deliveryOtp ?? null,
+    razorpayOrderId: orderRow.razorpayOrderId ?? null,
+    razorpayPaymentId: orderRow.razorpayPaymentId ?? null,
+    paymentStatus: orderRow.paymentStatus ?? 'pending',
     createdDate: orderRow.createdDate,
     updatedDate: orderRow.updatedDate,
     items: itemsResult.rows,
@@ -4207,9 +4224,13 @@ export async function createOrder(input: CreateOrderInput) {
           geo_label,
           delivery_latitude,
           delivery_longitude,
-          created_by_user_id
+          created_by_user_id,
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+          payment_status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'placed', NULL, $14, $15, $16, $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'placed', NULL, $14, $15, $16, $17, $18, $19, $20, $21)
         RETURNING
           id,
           public_id AS "publicId",
@@ -4251,6 +4272,10 @@ export async function createOrder(input: CreateOrderInput) {
         input.deliveryLatitude ?? null,
         input.deliveryLongitude ?? null,
         input.createdByUserId ?? null,
+        input.razorpayOrderId ?? null,
+        input.razorpayPaymentId ?? null,
+        input.razorpaySignature ?? null,
+        input.paymentStatus ?? 'pending',
       ]
     );
 
@@ -4335,6 +4360,10 @@ const ORDER_SELECT_COLUMNS = `
   o.delivery_latitude AS "deliveryLatitude",
   o.delivery_longitude AS "deliveryLongitude",
   o.cancellation_reason AS "cancellationReason",
+  o.delivery_otp AS "deliveryOtp",
+  o.razorpay_order_id AS "razorpayOrderId",
+  o.razorpay_payment_id AS "razorpayPaymentId",
+  o.payment_status AS "paymentStatus",
   o.created_date AS "createdDate",
   o.updated_date AS "updatedDate"
 `;
@@ -4504,6 +4533,10 @@ export async function getSalesReport(companyId: number, days: number): Promise<S
   };
 }
 
+function generateDeliveryOtp() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 export async function updateOrderStatus(
   publicId: string,
   companyId: number,
@@ -4532,6 +4565,23 @@ export async function updateOrderStatus(
           : null)
       : null;
 
+  // Generate delivery OTP once when the order goes out for delivery; the
+  // existing value is preserved on subsequent updates so a re-dispatch
+  // keeps the same code the customer already saw on their track page.
+  let otpExpr = 'delivery_otp';
+  const params: unknown[] = [
+    publicId,
+    companyId,
+    status,
+    assignedRiderUserId ?? null,
+    riderName,
+    reasonToWrite,
+  ];
+  if (status === 'out_for_delivery') {
+    otpExpr = 'COALESCE(delivery_otp, $7)';
+    params.push(generateDeliveryOtp());
+  }
+
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
@@ -4540,11 +4590,12 @@ export async function updateOrderStatus(
         assigned_rider_user_id = $4,
         assigned_rider = $5,
         cancellation_reason = $6,
+        delivery_otp = ${otpExpr},
         updated_date = NOW()
       WHERE public_id = $1 AND company_id = $2
       RETURNING id;
     `,
-    [publicId, companyId, status, assignedRiderUserId ?? null, riderName, reasonToWrite]
+    params
   );
   if (!updated.rowCount) return null;
   return getOrderByPublicId(publicId);

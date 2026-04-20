@@ -43,6 +43,9 @@ router.post(
         return res.status(400).json({ error: 'Order ID is required' });
       }
 
+      const { otp: rawOtp } = (req.body ?? {}) as { otp?: string };
+      const otp = typeof rawOtp === 'string' ? rawOtp.trim() : '';
+
       const existing = await getOrderByPublicId(publicId);
       if (!existing) {
         return res.status(404).json({ error: 'Order not found' });
@@ -52,6 +55,14 @@ router.post(
       }
       if (existing.status === 'delivered' || existing.status === 'cancelled') {
         return res.status(400).json({ error: 'Order is already closed' });
+      }
+      if (!existing.deliveryOtp) {
+        return res.status(400).json({
+          error: 'This order has no delivery OTP. Ask the admin to dispatch it again.',
+        });
+      }
+      if (otp !== existing.deliveryOtp) {
+        return res.status(400).json({ error: 'Incorrect delivery OTP' });
       }
 
       const order = await updateOrderStatus(

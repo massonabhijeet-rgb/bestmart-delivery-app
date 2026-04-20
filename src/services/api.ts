@@ -142,6 +142,10 @@ export interface Order {
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
   cancellationReason: string | null;
+  deliveryOtp: string | null;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  paymentStatus: string;
   createdDate: string;
   updatedDate: string;
   items: OrderItem[];
@@ -768,12 +772,38 @@ export async function apiCreateOrder(payload: {
   deliveryLatitude: number;
   deliveryLongitude: number;
   couponCode?: string | null;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  razorpaySignature?: string;
 }) {
   const data = await request<{ order: Order }>('/orders', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
   return data.order;
+}
+
+export interface PaymentConfig {
+  enabled: boolean;
+  keyId: string | null;
+}
+
+export async function apiGetPaymentConfig() {
+  return request<PaymentConfig>('/payments/config');
+}
+
+export interface PaymentIntent {
+  razorpayOrderId: string;
+  amount: number;
+  currency: string;
+  keyId: string;
+}
+
+export async function apiCreatePaymentIntent(amountCents: number) {
+  return request<PaymentIntent>('/payments/create-order', {
+    method: 'POST',
+    body: JSON.stringify({ amountCents }),
+  });
 }
 
 export type CouponDiscountType = 'percent' | 'flat';
@@ -923,9 +953,10 @@ export async function apiListRiderOrders() {
   return data.orders;
 }
 
-export async function apiRiderDeliver(publicId: string) {
+export async function apiRiderDeliver(publicId: string, otp: string) {
   const data = await request<{ order: Order }>(`/rider/orders/${publicId}/deliver`, {
     method: 'POST',
+    body: JSON.stringify({ otp }),
   });
   return data.order;
 }

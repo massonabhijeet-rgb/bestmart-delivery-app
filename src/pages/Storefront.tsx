@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   apiCancelOrder,
   apiCreateOrder,
+  apiCreatePaymentIntent,
   apiGetActiveCampaign,
   apiGetCompanyPublic,
   apiGetHomeRails,
@@ -91,6 +92,71 @@ function formatUnitPrice(p: Product): string | null {
 }
 
 const FOOTER_USEFUL_LINKS = ['Blog', 'Partner', 'Recipes'];
+
+interface RazorpaySuccess {
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}
+
+interface RazorpayCheckoutPayload {
+  keyId: string;
+  razorpayOrderId: string;
+  amount: number;
+  currency: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string | null;
+}
+
+// Opens the Razorpay checkout widget loaded via <script> in index.html and
+// resolves when the user completes (or dismisses) payment. Rejects if
+// checkout.js isn't on the page (e.g. offline / CSP).
+function openRazorpayCheckout(payload: RazorpayCheckoutPayload): Promise<RazorpaySuccess> {
+  return new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Razorpay = (window as any).Razorpay;
+    if (!Razorpay) {
+      reject(new Error('Online payment is unavailable right now. Please choose another method.'));
+      return;
+    }
+    let settled = false;
+    const rzp = new Razorpay({
+      key: payload.keyId,
+      amount: payload.amount,
+      currency: payload.currency,
+      order_id: payload.razorpayOrderId,
+      name: 'BestMart',
+      description: 'Order payment',
+      prefill: {
+        name: payload.customerName,
+        contact: payload.customerPhone,
+        email: payload.customerEmail ?? '',
+      },
+      theme: { color: '#10b981' },
+      modal: {
+        ondismiss: () => {
+          if (settled) return;
+          settled = true;
+          reject(new Error('Payment cancelled'));
+        },
+      },
+      handler: (response: {
+        razorpay_payment_id: string;
+        razorpay_order_id: string;
+        razorpay_signature: string;
+      }) => {
+        settled = true;
+        resolve({
+          razorpayOrderId: response.razorpay_order_id,
+          razorpayPaymentId: response.razorpay_payment_id,
+          razorpaySignature: response.razorpay_signature,
+        });
+      },
+    });
+    rzp.open();
+  });
+}
 
 function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrack, onLogout }: StorefrontProps) {
   // Cache of every product we've seen across spotlight / temp categories /
@@ -738,6 +804,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           }
         }
 
+        let razorpayPayload: RazorpaySuccess | null = null;
+        if (checkoutForm.paymentMethod === 'razorpay') {
+          const intent = await apiCreatePaymentIntent(totalCents);
+          razorpayPayload = await openRazorpayCheckout({
+            keyId: intent.keyId,
+            razorpayOrderId: intent.razorpayOrderId,
+            amount: intent.amount,
+            currency: intent.currency,
+            customerName: checkoutForm.customerName,
+            customerPhone: checkoutForm.customerPhone,
+          });
+        }
+
         return apiCreateOrder({
           customerName: checkoutForm.customerName,
           customerPhone: checkoutForm.customerPhone,
@@ -751,6 +830,9 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           deliveryLatitude: coords.latitude,
           deliveryLongitude: coords.longitude,
           couponCode: appliedCoupon?.code ?? null,
+          razorpayOrderId: razorpayPayload?.razorpayOrderId,
+          razorpayPaymentId: razorpayPayload?.razorpayPaymentId,
+          razorpaySignature: razorpayPayload?.razorpaySignature,
         });
       });
 
@@ -2075,7 +2157,8 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 }
               >
                 <option value="cash_on_delivery">Cash on delivery</option>
-                <option value="upi">UPI</option>
+                <option value="razorpay">Pay online (UPI / Card / Netbanking)</option>
+                <option value="upi">UPI on delivery</option>
                 <option value="card_on_delivery">Card on delivery</option>
               </select>
             </label>

@@ -231,6 +231,118 @@ export function RejectReasonHost() {
   );
 }
 
+export interface PromptOtpOptions {
+  title?: string;
+  message?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+}
+
+type OtpOpener = (opts: PromptOtpOptions) => Promise<string | null>;
+let currentOtpOpener: OtpOpener | null = null;
+
+// Returns the 4-digit OTP string, or null if cancelled.
+export function promptOtp(opts: PromptOtpOptions = {}): Promise<string | null> {
+  if (!currentOtpOpener) {
+    const raw = window.prompt(opts.message ?? 'Enter delivery OTP');
+    return Promise.resolve(raw != null ? raw.trim() : null);
+  }
+  return currentOtpOpener(opts);
+}
+
+interface PendingOtp {
+  opts: PromptOtpOptions;
+  resolve: (answer: string | null) => void;
+}
+
+export function PromptOtpHost() {
+  const [pending, setPending] = useState<PendingOtp | null>(null);
+  const [otp, setOtp] = useState('');
+
+  useEffect(() => {
+    currentOtpOpener = (opts) =>
+      new Promise((resolve) => {
+        setOtp('');
+        setPending({ opts, resolve });
+      });
+    return () => {
+      currentOtpOpener = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pending) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        pending.resolve(null);
+        setPending(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pending]);
+
+  if (!pending) return null;
+
+  const { opts } = pending;
+  const canSubmit = otp.length === 4;
+
+  const close = (answer: string | null) => {
+    pending.resolve(answer);
+    setPending(null);
+  };
+
+  return (
+    <div
+      className="confirm-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close(null);
+      }}
+    >
+      <div className="confirm-dialog confirm-dialog--default">
+        <div className="confirm-dialog__body">
+          <h3 className="confirm-dialog__title">{opts.title ?? 'Enter delivery OTP'}</h3>
+          <p className="confirm-dialog__message">
+            {opts.message ?? 'Ask the customer to share the 4-digit OTP shown in their app.'}
+          </p>
+          <input
+            className="confirm-dialog__textarea"
+            value={otp}
+            onChange={(e) => {
+              const next = e.target.value.replace(/\D/g, '').slice(0, 4);
+              setOtp(next);
+            }}
+            inputMode="numeric"
+            maxLength={4}
+            placeholder="0000"
+            autoFocus
+            style={{ fontSize: '1.4rem', letterSpacing: '0.5rem', textAlign: 'center' }}
+          />
+        </div>
+        <div className="confirm-dialog__actions">
+          <button
+            type="button"
+            className="confirm-dialog__btn confirm-dialog__btn--ghost"
+            onClick={() => close(null)}
+          >
+            {opts.cancelLabel ?? 'Cancel'}
+          </button>
+          <button
+            type="button"
+            className="confirm-dialog__btn confirm-dialog__btn--primary confirm-dialog__btn--default"
+            disabled={!canSubmit}
+            onClick={() => close(otp)}
+          >
+            {opts.confirmLabel ?? 'Mark Delivered'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface PendingRiderPick {
   opts: PickRiderOptions;
   resolve: (answer: number | null) => void;

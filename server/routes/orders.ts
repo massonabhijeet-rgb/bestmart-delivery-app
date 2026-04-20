@@ -16,6 +16,7 @@ import {
   validateCoupon,
 } from '../db.js';
 import { notifyOrderStatus } from '../push.js';
+import { verifyRazorpaySignature } from '../razorpay.js';
 import {
   attachUserIfPresent,
   authenticateToken,
@@ -69,6 +70,9 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       deliveryLatitude,
       deliveryLongitude,
       couponCode,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
     } = req.body as {
       customerName?: string;
       customerPhone?: string;
@@ -81,6 +85,9 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       deliveryLatitude?: number | null;
       deliveryLongitude?: number | null;
       couponCode?: string | null;
+      razorpayOrderId?: string;
+      razorpayPaymentId?: string;
+      razorpaySignature?: string;
     };
 
     const validLat =
@@ -113,6 +120,23 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       return res.status(400).json({
         error: 'Please share your delivery location so the rider can find you.',
       });
+    }
+
+    // For online payments we must have a verified Razorpay signature before
+    // writing the order — otherwise a client could claim a paid order without
+    // actually paying.
+    if (paymentMethod === 'razorpay') {
+      if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+        return res.status(400).json({ error: 'Payment details missing' });
+      }
+      const verified = verifyRazorpaySignature({
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature,
+      });
+      if (!verified) {
+        return res.status(400).json({ error: 'Payment verification failed' });
+      }
     }
 
     // Pre-check the coupon (covers code-not-found, expired, inactive, and
@@ -153,6 +177,10 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       deliveryLongitude: deliveryLongitude as number,
       createdByUserId: req.user?.id ?? null,
       couponCode: couponCode ?? null,
+      razorpayOrderId: paymentMethod === 'razorpay' ? razorpayOrderId ?? null : null,
+      razorpayPaymentId: paymentMethod === 'razorpay' ? razorpayPaymentId ?? null : null,
+      razorpaySignature: paymentMethod === 'razorpay' ? razorpaySignature ?? null : null,
+      paymentStatus: paymentMethod === 'razorpay' ? 'paid' : 'pending',
     });
 
     if (req.user?.id) {
@@ -359,6 +387,7 @@ router.patch(
         userId: ownerId,
         publicId: order.publicId,
         status,
+        deliveryOtp: status === 'out_for_delivery' ? order.deliveryOtp : null,
       });
 
       return res.json({ order });
