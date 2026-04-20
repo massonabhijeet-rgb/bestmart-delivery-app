@@ -8,10 +8,7 @@ import {
   verifyRazorpaySignature,
   verifyWebhookSignature,
 } from '../razorpay.js';
-import {
-  getOrderByPublicId,
-  markOrderPaidByRazorpayOrderId,
-} from '../db.js';
+import { markOrderPaidByRazorpayOrderId } from '../db.js';
 import { broadcast } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
@@ -73,40 +70,42 @@ router.post('/verify', attachUserIfPresent, (req: AuthenticatedRequest, res) => 
   return res.json({ verified: ok });
 });
 
-// Blinkit-style direct UPI launch: look up the pending order, ask Razorpay
-// to mint a UPI intent URL for the chosen app, and hand the URL back to the
-// client so it can `window.location` / url_launcher straight into PhonePe /
-// GPay / Paytm. The real payment confirmation lands on POST /webhook.
+// Blinkit-style direct UPI launch: ask Razorpay for an intent URL tied to
+// an existing Razorpay order, so the client can `window.location` /
+// url_launcher straight into PhonePe / GPay / Paytm. The BestMart order is
+// only committed AFTER this succeeds (if it fails the client falls back to
+// Standard Checkout). The real capture confirmation lands on POST /webhook.
 router.post('/upi-intent', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   try {
     if (!razorpayConfigured()) {
       return res.status(503).json({ error: 'Online payments are not available right now.' });
     }
-    const { publicOrderId, upiApp } = (req.body ?? {}) as {
-      publicOrderId?: string;
-      upiApp?: string;
-    };
+    const { razorpayOrderId, amountCents, upiApp, email, contact } =
+      (req.body ?? {}) as {
+        razorpayOrderId?: string;
+        amountCents?: number;
+        upiApp?: string;
+        email?: string;
+        contact?: string;
+      };
     const allowedApps = ['phonepe', 'google_pay', 'paytm'] as const;
-    if (!publicOrderId || !upiApp || !allowedApps.includes(upiApp as (typeof allowedApps)[number])) {
+    const amount = Math.round(Number(amountCents ?? 0));
+    if (
+      !razorpayOrderId ||
+      !upiApp ||
+      !allowedApps.includes(upiApp as (typeof allowedApps)[number]) ||
+      !Number.isFinite(amount) ||
+      amount < 100
+    ) {
       return res.status(400).json({ error: 'Invalid UPI intent request' });
     }
-    const order = await getOrderByPublicId(publicOrderId);
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    if (!order.razorpayOrderId) {
-      return res.status(400).json({ error: 'Order is not tied to a Razorpay payment' });
-    }
-    if (order.paymentStatus === 'paid') {
-      return res.status(400).json({ error: 'Order is already paid' });
-    }
     const result = await createUpiIntentPayment({
-      razorpayOrderId: order.razorpayOrderId,
-      amountCents: order.totalCents,
+      razorpayOrderId,
+      amountCents: amount,
       upiApp: upiApp as (typeof allowedApps)[number],
-      email: order.customerEmail ?? undefined,
-      contact: order.customerPhone ?? undefined,
-      description: `BestMart order ${order.publicId}`,
+      email: email || undefined,
+      contact: contact || undefined,
+      description: 'BestMart order',
     });
     return res.json({
       intentUrl: result.intentUrl,

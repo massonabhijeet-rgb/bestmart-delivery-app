@@ -813,13 +813,16 @@ export interface UpiIntentResult {
   paymentId: string | null;
 }
 
-export async function apiCreateUpiIntent(
-  publicOrderId: string,
-  upiApp: UpiIntentApp
-) {
+export async function apiCreateUpiIntent(params: {
+  razorpayOrderId: string;
+  amountCents: number;
+  upiApp: UpiIntentApp;
+  email?: string;
+  contact?: string;
+}) {
   return request<UpiIntentResult>('/payments/upi-intent', {
     method: 'POST',
-    body: JSON.stringify({ publicOrderId, upiApp }),
+    body: JSON.stringify(params),
   });
 }
 

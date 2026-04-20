@@ -842,14 +842,18 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         }
       }
 
-      // phonepe / gpay / paytm use the Razorpay S2S UPI Intent API — we
-      // create the Razorpay order, persist a pending BestMart order, then
-      // redirect directly into the UPI app. The webhook flips the order to
-      // paid when Razorpay confirms `payment.captured`.
+      // phonepe / gpay / paytm: try the Razorpay S2S UPI Intent API first
+      // (direct app launch, Blinkit-style). If Razorpay rejects it (e.g. S2S
+      // not enabled on this account), fall back to Standard Checkout with
+      // the chosen app pre-selected so the customer still only sees one tap.
       //
-      // `razorpay` still uses Standard Checkout (cards / netbanking / other
+      // `razorpay` always uses Standard Checkout (cards / netbanking / other
       // UPI apps). It must run OUTSIDE withBusy — the BusyOverlay sits on
       // top of the Razorpay iframe otherwise and blocks card entry.
+      //
+      // Either way, the BestMart order is only committed AFTER payment (or
+      // an accepted pending intent), so a failed payment never leaves a
+      // stale unpaid order behind.
       const uiMethod = checkoutForm.paymentMethod;
       const UPI_APP_MAP: Record<string, PreferredUpiApp> = {
         phonepe: 'phonepe',
@@ -863,6 +867,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       const wirePaymentMethod = isOnlinePayment ? 'razorpay' : uiMethod;
 
       let razorpayPayload: RazorpaySuccess | null = null;
+      let intentLaunchUrl: string | null = null;
       let pendingRazorpayOrderId: string | null = null;
       if (isWidgetPayment) {
         const intent = await apiCreatePaymentIntent(totalCents);
@@ -874,9 +879,32 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           customerName: checkoutForm.customerName,
           customerPhone: checkoutForm.customerPhone,
         });
-      } else if (isIntentPayment) {
+      } else if (isIntentPayment && preferredUpiApp) {
         const intent = await apiCreatePaymentIntent(totalCents);
-        pendingRazorpayOrderId = intent.razorpayOrderId;
+        try {
+          const launch = await apiCreateUpiIntent({
+            razorpayOrderId: intent.razorpayOrderId,
+            amountCents: intent.amount,
+            upiApp: preferredUpiApp,
+            contact: checkoutForm.customerPhone,
+          });
+          intentLaunchUrl = launch.intentUrl;
+          pendingRazorpayOrderId = intent.razorpayOrderId;
+        } catch (intentErr) {
+          // Fall back to Standard Checkout with the chosen UPI app
+          // pre-selected. This reuses the SAME Razorpay order so we don't
+          // double-charge if the user retries.
+          console.warn('[checkout] UPI intent fallback to widget:', intentErr);
+          razorpayPayload = await openRazorpayCheckout({
+            keyId: intent.keyId,
+            razorpayOrderId: intent.razorpayOrderId,
+            amount: intent.amount,
+            currency: intent.currency,
+            customerName: checkoutForm.customerName,
+            customerPhone: checkoutForm.customerPhone,
+            preferredUpiApp,
+          });
+        }
       }
 
       const finalCoords = coords;
@@ -901,24 +929,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         }),
       );
 
-      if (isIntentPayment && preferredUpiApp) {
-        // Hand off to the UPI app. The return trip is best-effort — some apps
-        // don't deep-link back to the browser, so we also capture the order
-        // so users can find it under "My Orders" if they close the tab.
+      if (intentLaunchUrl) {
         setLatestOrder(order);
         setCart({});
         setAppliedCoupon(null);
         setCouponInput('');
-        try {
-          const launch = await apiCreateUpiIntent(order.publicId, preferredUpiApp);
-          window.location.href = launch.intentUrl;
-        } catch (err) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : 'Unable to launch your UPI app. You can retry payment from the order page.',
-          );
-        }
+        window.location.href = intentLaunchUrl;
         return;
       }
 
