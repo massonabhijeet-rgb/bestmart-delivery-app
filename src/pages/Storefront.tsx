@@ -102,6 +102,16 @@ interface RazorpaySuccess {
 
 type PreferredUpiApp = 'phonepe' | 'google_pay' | 'paytm';
 
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  phonepe: 'PhonePe (UPI)',
+  gpay: 'Google Pay (UPI)',
+  paytm: 'Paytm (UPI)',
+  razorpay: 'Card / Netbanking / Other UPI',
+  upi: 'UPI on delivery',
+  card_on_delivery: 'Card on delivery',
+  cash_on_delivery: 'Cash on delivery',
+};
+
 interface RazorpayCheckoutPayload {
   keyId: string;
   razorpayOrderId: string;
@@ -239,7 +249,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     customerPhone: '',
     deliveryAddress: '',
     deliveryNotes: '',
-    paymentMethod: 'cash_on_delivery',
+    paymentMethod: 'phonepe',
   });
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<'new' | number>('new');
@@ -2253,18 +2263,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             <label>
               <span>Payment</span>
               <select
+                id="checkout-payment-select"
                 value={checkoutForm.paymentMethod}
                 onChange={(event) =>
                   setCheckoutForm((current) => ({ ...current, paymentMethod: event.target.value }))
                 }
               >
-                <option value="cash_on_delivery">Cash on delivery</option>
-                <option value="phonepe">PhonePe</option>
-                <option value="gpay">Google Pay</option>
-                <option value="paytm">Paytm</option>
+                <option value="phonepe">PhonePe (UPI)</option>
+                <option value="gpay">Google Pay (UPI)</option>
+                <option value="paytm">Paytm (UPI)</option>
                 <option value="razorpay">Card / Netbanking / Other UPI</option>
                 <option value="upi">UPI on delivery</option>
                 <option value="card_on_delivery">Card on delivery</option>
+                <option value="cash_on_delivery">Cash on delivery</option>
               </select>
             </label>
 
@@ -2381,6 +2392,38 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </button>
               </p>
             ) : null}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '10px 14px',
+                marginBottom: 10,
+                background: 'var(--c-surface-muted, #f1f5f9)',
+                border: '1px solid var(--c-border, #e2e8f0)',
+                borderRadius: 10,
+                fontSize: 14,
+              }}
+            >
+              <span>
+                Paying via <strong>{PAYMENT_METHOD_LABELS[checkoutForm.paymentMethod] ?? checkoutForm.paymentMethod}</strong>
+              </span>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  const el = document.getElementById('checkout-payment-select');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    (el as HTMLSelectElement).focus();
+                  }
+                }}
+                style={{ fontWeight: 600 }}
+              >
+                Change
+              </button>
+            </div>
             <button
               className="primary-button primary-button--wide"
               disabled={placingOrder || cartItems.length === 0 || !user || !liveLocation}
