@@ -3,19 +3,17 @@ import { MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import type { LatLng, Map as LeafletMap } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-export interface PickedAddress {
+export interface PickedLocation {
   latitude: number;
   longitude: number;
-  addressLine: string;
 }
 
 interface AddressPickerModalProps {
   open: boolean;
   initialLatitude?: number | null;
   initialLongitude?: number | null;
-  initialAddressLine?: string;
   fetchCurrentLocationOnOpen?: boolean;
-  onConfirm: (picked: PickedAddress) => void;
+  onConfirm: (picked: PickedLocation) => void;
   onClose: () => void;
 }
 
@@ -55,7 +53,6 @@ export function AddressPickerModal({
   open,
   initialLatitude,
   initialLongitude,
-  initialAddressLine = '',
   fetchCurrentLocationOnOpen = false,
   onConfirm,
   onClose,
@@ -68,21 +65,19 @@ export function AddressPickerModal({
   }, [initialLatitude, initialLongitude]);
 
   const [center, setCenter] = useState<[number, number]>(initialCenter);
-  const [addressLine, setAddressLine] = useState(initialAddressLine);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const autoLocatedRef = useRef(false);
 
-  // Reset state whenever the modal is reopened so we don't leak values from a
-  // previous session (e.g. address text from an earlier pick).
+  // Reset state whenever the modal is reopened so a stale pin from an earlier
+  // pick session doesn't appear in the next open.
   useEffect(() => {
     if (!open) return;
     setCenter(initialCenter);
-    setAddressLine(initialAddressLine);
     setLocationError(null);
     autoLocatedRef.current = false;
-  }, [open, initialCenter, initialAddressLine]);
+  }, [open, initialCenter]);
 
   const fetchCurrent = async () => {
     if (!navigator.geolocation) {
@@ -122,8 +117,6 @@ export function AddressPickerModal({
 
   if (!open) return null;
 
-  const canConfirm = addressLine.trim().length > 0;
-
   return (
     <div
       role="dialog"
@@ -143,7 +136,7 @@ export function AddressPickerModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(560px, 100vw)',
-          height: 'min(720px, 100vh)',
+          height: 'min(640px, 100vh)',
           background: '#fff',
           borderRadius: 16,
           overflow: 'hidden',
@@ -159,7 +152,7 @@ export function AddressPickerModal({
             borderBottom: '1px solid var(--c-border, #e2e8f0)',
           }}
         >
-          <strong style={{ flex: 1, fontSize: 16 }}>Set delivery location</strong>
+          <strong style={{ flex: 1, fontSize: 16 }}>Pin your delivery location</strong>
           <button
             type="button"
             onClick={onClose}
@@ -268,46 +261,29 @@ export function AddressPickerModal({
           <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>
             📍 {center[0].toFixed(5)}, {center[1].toFixed(5)}
           </div>
-          <textarea
-            value={addressLine}
-            onChange={(e) => setAddressLine(e.target.value)}
-            placeholder="Flat / house no., floor, street, landmark…"
-            rows={2}
-            style={{
-              resize: 'vertical',
-              padding: '8px 10px',
-              borderRadius: 10,
-              border: '1px solid var(--c-border, #e2e8f0)',
-              fontFamily: 'inherit',
-              fontSize: 14,
-            }}
-          />
           {locationError ? (
             <span style={{ color: '#ef4444', fontSize: 12 }}>{locationError}</span>
           ) : null}
           <button
             type="button"
-            onClick={() => {
-              if (!canConfirm) return;
+            onClick={() =>
               onConfirm({
                 latitude: center[0],
                 longitude: center[1],
-                addressLine: addressLine.trim(),
-              });
-            }}
-            disabled={!canConfirm}
+              })
+            }
             style={{
               height: 48,
               borderRadius: 12,
               border: 0,
-              background: canConfirm ? '#2563eb' : '#cbd5e1',
+              background: '#2563eb',
               color: '#fff',
               fontSize: 15,
               fontWeight: 800,
-              cursor: canConfirm ? 'pointer' : 'not-allowed',
+              cursor: 'pointer',
             }}
           >
-            Confirm delivery location
+            Continue
           </button>
         </div>
       </div>

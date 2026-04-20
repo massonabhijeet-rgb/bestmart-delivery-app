@@ -26,7 +26,8 @@ import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrenc
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import LazyMount from '../components/LazyMount';
-import { AddressPickerModal, type PickedAddress as PickedMapAddress } from '../components/AddressPickerModal';
+import { AddressPickerModal, type PickedLocation } from '../components/AddressPickerModal';
+import { AddressDetailsModal, type AddressDetails } from '../components/AddressDetailsModal';
 import {
   MOOD_COPY,
   fetchOpenMeteoMood,
@@ -277,6 +278,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [couponSheetOpen, setCouponSheetOpen] = useState(false);
   const [addressPickerOpen, setAddressPickerOpen] = useState(false);
   const [addressPickerAutoLocate, setAddressPickerAutoLocate] = useState(false);
+  const [addressDetailsOpen, setAddressDetailsOpen] = useState(false);
+  // Coords held while we hand off from the map picker to the details modal,
+  // so the user's "Save" press in the details modal can commit them in one
+  // shot — without flashing intermediate state into the checkout summary.
+  const [pendingPickedCoords, setPendingPickedCoords] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
   const paymentIconsReadyRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     const urls = PAYMENT_GROUPS.flatMap((g) =>
@@ -424,17 +433,34 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     setAddressPickerOpen(true);
   }
 
-  function handleAddressPicked(picked: PickedMapAddress) {
-    setCheckoutForm((current) => ({ ...current, deliveryAddress: picked.addressLine }));
+  function handleLocationPicked(picked: PickedLocation) {
+    setPendingPickedCoords(picked);
+    setAddressPickerOpen(false);
+    setAddressDetailsOpen(true);
+  }
+
+  function handleAddressDetailsConfirmed(details: AddressDetails) {
+    if (!pendingPickedCoords) {
+      setAddressDetailsOpen(false);
+      return;
+    }
+    setCheckoutForm((current) => ({
+      ...current,
+      customerName: details.fullName,
+      customerPhone: details.phone,
+      deliveryAddress: details.addressLine,
+      deliveryNotes: details.deliveryNotes,
+    }));
     setLiveLocation({
-      latitude: picked.latitude,
-      longitude: picked.longitude,
+      latitude: pendingPickedCoords.latitude,
+      longitude: pendingPickedCoords.longitude,
       capturedAt: Date.now(),
     });
     setLocationStatus('idle');
     setLocationError('');
     setSelectedAddressId('new');
-    setAddressPickerOpen(false);
+    setAddressDetailsOpen(false);
+    setPendingPickedCoords(null);
   }
 
   useEffect(() => {
@@ -2285,10 +2311,17 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           <form className="checkout-form" onSubmit={handlePlaceOrder}>
             {user && savedAddresses.length > 0 ? (
               <label>
-                <span>Saved addresses</span>
+                <span>Deliver to</span>
                 <select
                   value={String(selectedAddressId)}
-                  onChange={(e) => handleSavedAddressPick(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === 'new') {
+                      openAddressPicker(true);
+                      return;
+                    }
+                    handleSavedAddressPick(v);
+                  }}
                 >
                   {savedAddresses.map((addr) => (
                     <option key={addr.id} value={String(addr.id)}>
@@ -2296,34 +2329,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                       {addr.deliveryAddress.length > 40 ? '…' : ''}
                     </option>
                   ))}
-                  <option value="new">+ Use a different name/phone/address</option>
+                  <option value="new">+ Add a new address</option>
                 </select>
               </label>
             ) : null}
-
-            <label>
-              <span>Name</span>
-              <input
-                value={checkoutForm.customerName}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, customerName: event.target.value }))
-                }
-                placeholder="Customer name"
-                required
-              />
-            </label>
-
-            <label>
-              <span>Phone</span>
-              <input
-                value={checkoutForm.customerPhone}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, customerPhone: event.target.value }))
-                }
-                placeholder="+91 98xxx xxxxx"
-                required
-              />
-            </label>
 
             {checkoutForm.deliveryAddress.trim() && liveLocation ? (
               <div
@@ -2342,7 +2351,12 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                   <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', fontWeight: 600, letterSpacing: 0.3 }}>
                     DELIVERING TO
                   </div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text, #0f172a)', wordBreak: 'break-word' }}>
+                  {(checkoutForm.customerName || checkoutForm.customerPhone) ? (
+                    <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-text, #0f172a)' }}>
+                      {[checkoutForm.customerName, checkoutForm.customerPhone].filter(Boolean).join(' · ')}
+                    </div>
+                  ) : null}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-text, #0f172a)', wordBreak: 'break-word' }}>
                     {checkoutForm.deliveryAddress.trim()}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', marginTop: 2 }}>
@@ -2359,61 +2373,27 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </button>
               </div>
             ) : (
-              <div
+              <button
+                type="button"
+                onClick={() => openAddressPicker(true)}
                 style={{
                   display: 'flex',
-                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   gap: 10,
-                  padding: 14,
-                  background: 'var(--c-surface, #fff)',
-                  border: '1px solid var(--c-border, #e2e8f0)',
+                  padding: '14px',
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 0,
                   borderRadius: 12,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 800,
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-text, #0f172a)' }}>
-                  Where should we deliver?
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openAddressPicker(true)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '12px 14px',
-                    background: '#2563eb',
-                    color: '#fff',
-                    border: 0,
-                    borderRadius: 10,
-                    cursor: 'pointer',
-                    fontSize: 14,
-                    fontWeight: 700,
-                  }}
-                >
-                  <span style={{ fontSize: 18 }}>📡</span>
-                  Deliver at my current location
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openAddressPicker(false)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '12px 14px',
-                    background: '#fff',
-                    color: '#2563eb',
-                    border: '1px solid #2563eb',
-                    borderRadius: 10,
-                    cursor: 'pointer',
-                    fontSize: 14,
-                    fontWeight: 700,
-                  }}
-                >
-                  <span style={{ fontSize: 18 }}>🗺️</span>
-                  No, at a different location
-                </button>
-              </div>
+                <span style={{ fontSize: 18 }}>📍</span>
+                Add a delivery address
+              </button>
             )}
 
             <button
@@ -2475,17 +2455,6 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               </div>
               <span style={{ color: '#3b82f6', fontWeight: 700, fontSize: 14 }}>Change ›</span>
             </button>
-
-            <label>
-              <span>Delivery notes</span>
-              <textarea
-                value={checkoutForm.deliveryNotes}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, deliveryNotes: event.target.value }))
-                }
-                placeholder="Gate code, landmark, call before arrival"
-              />
-            </label>
 
             {locationStatus === 'error' && locationError ? (
               <span className="location-block__error">{locationError}</span>
@@ -2914,10 +2883,25 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         open={addressPickerOpen}
         initialLatitude={liveLocation?.latitude ?? null}
         initialLongitude={liveLocation?.longitude ?? null}
-        initialAddressLine={checkoutForm.deliveryAddress}
         fetchCurrentLocationOnOpen={addressPickerAutoLocate}
-        onConfirm={handleAddressPicked}
+        onConfirm={handleLocationPicked}
         onClose={() => setAddressPickerOpen(false)}
+      />
+      <AddressDetailsModal
+        open={addressDetailsOpen}
+        latitude={pendingPickedCoords?.latitude ?? null}
+        longitude={pendingPickedCoords?.longitude ?? null}
+        initial={{
+          fullName: checkoutForm.customerName,
+          phone: checkoutForm.customerPhone,
+          addressLine: checkoutForm.deliveryAddress,
+          deliveryNotes: checkoutForm.deliveryNotes,
+        }}
+        onConfirm={handleAddressDetailsConfirmed}
+        onClose={() => {
+          setAddressDetailsOpen(false);
+          setPendingPickedCoords(null);
+        }}
       />
       {couponSheetOpen ? (
         <div
