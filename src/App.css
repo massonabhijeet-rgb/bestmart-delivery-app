@@ -9097,3 +9097,143 @@ body {
 .temp-section--diwali    { --theme-from: #f59e0b; --theme-to: #b91c1c; --theme-decor: '🪔'; }
 .temp-section--christmas { --theme-from: #16a34a; --theme-to: #b91c1c; --theme-decor: '🎄'; }
 .temp-section--newyear   { --theme-from: #6366f1; --theme-to: #a855f7; --theme-decor: '🎉'; }
+
+/* ── Campaign overlay admin ────────────────────────────────────────── */
+.campaign-create {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-6);
+  border-bottom: 1px solid var(--c-border);
+}
+.campaign-create__row {
+  display: flex;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.campaign-create__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.campaign-create__field--wide { flex: 2 1 240px; }
+.campaign-create__field--check {
+  flex-direction: row;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.campaign-create__field input[type="text"],
+.campaign-create__field input[type="datetime-local"],
+.campaign-create__field select {
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface-solid);
+  font-size: 14px;
+}
+.campaign-create__hint { color: var(--c-muted); font-size: 12px; }
+
+.campaign-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+}
+.campaign-card {
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface-solid);
+  overflow: hidden;
+  opacity: 0.72;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.campaign-card--active {
+  opacity: 1;
+  border-color: var(--c-accent, #4f46e5);
+}
+.campaign-card__cover {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  background: #0b0b0b;
+}
+.campaign-card__cover img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.campaign-card__placeholder {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--c-muted); font-size: 13px;
+}
+.campaign-card__replace {
+  position: absolute; inset: auto 8px 8px auto;
+  background: rgba(0,0,0,0.6); color: white;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 12px; cursor: pointer;
+}
+.campaign-card__body {
+  padding: var(--sp-3) var(--sp-4);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.campaign-card__title { font-weight: 600; }
+.campaign-card__meta { color: var(--c-muted); font-size: 12px; }
+.campaign-card__actions {
+  display: flex; gap: var(--sp-2);
+  margin-top: 6px;
+}
+
+/* ── Customer campaign popup ───────────────────────────────────────── */
+.campaign-popup__backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+  animation: campaign-pop-fade 0.18s ease-out;
+}
+@keyframes campaign-pop-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.campaign-popup__card {
+  position: relative;
+  width: min(420px, 92vw);
+  max-height: 88vh;
+  background: var(--c-surface-solid, #fff);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  animation: campaign-pop-in 0.26s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes campaign-pop-in {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.campaign-popup__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 76vh;
+  object-fit: contain;
+  cursor: pointer;
+  background: #000;
+}
+.campaign-popup__close {
+  position: absolute;
+  top: 10px; right: 10px;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: white;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.campaign-popup__close:hover { background: rgba(0,0,0,0.75); }

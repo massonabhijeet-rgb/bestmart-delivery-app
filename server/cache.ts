@@ -24,6 +24,7 @@ export const TTL = {
   COMPANY: 1800,       // 30 min
   ORDERS_LIST: 60,     // 1 min
   ORDERS_SUMMARY: 120, // 2 min
+  CAMPAIGN_ACTIVE: 120, // 2 min
 };
 
 // Cache keys
@@ -37,6 +38,7 @@ export const key = {
   mobileBootstrap: () => 'bm:mobile:bootstrap',
   ordersList: (companyId: number) => `bm:orders:list:${companyId}`,
   ordersSummary: (companyId: number) => `bm:orders:summary:${companyId}`,
+  campaignActive: (companyId: number) => `bm:campaign:active:${companyId}`,
 };
 
 export function getRedis(): Redis | null {

@@ -47,12 +47,17 @@ import {
   apiCreateCoupon,
   apiUpdateCoupon,
   apiDeleteCoupon,
+  apiListCampaigns,
+  apiCreateCampaign,
+  apiUpdateCampaign,
+  apiDeleteCampaign,
+  apiUploadCampaignImage,
   apiListBrands,
   apiCreateBrand,
   apiUpdateBrand,
   apiDeleteBrand,
 } from '../services/api';
-import type { Brand, BulkImageUploadResult, Coupon, InventorySummary, ProductNameIndexEntry, SalesReport, SlowMoverSuggestion } from '../services/api';
+import type { Brand, BulkImageUploadResult, Campaign, Coupon, InventorySummary, ProductNameIndexEntry, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
   Category,
   CompanyInfo,
@@ -138,7 +143,7 @@ const defaultProductForm: ProductFormState = {
   variantLinkLabel: '',
 };
 
-type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'team';
+type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'campaigns' | 'team';
 
 function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
@@ -288,6 +293,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [editingCategoryName, setEditingCategoryName] = useState('');
   const [editingCategoryHidden, setEditingCategoryHidden] = useState(false);
   const [categoryImages, setCategoryImages] = useState<Record<number, File | null>>({});
+
+  // ── Campaign overlay admin state ──
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignsLoaded, setCampaignsLoaded] = useState(false);
+  const [campaignForm, setCampaignForm] = useState<{
+    title: string;
+    categoryId: string;
+    isActive: boolean;
+    validFrom: string;
+    validUntil: string;
+  }>({ title: '', categoryId: '', isActive: true, validFrom: '', validUntil: '' });
+  const [campaignImageFile, setCampaignImageFile] = useState<File | null>(null);
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
+  const [campaignBusyId, setCampaignBusyId] = useState<number | null>(null);
   const [orderSearch, setOrderSearch] = useState('');
   const [orderFilter, setOrderFilter] = useState<'all' | 'active' | OrderStatus>('active');
 
@@ -466,6 +485,22 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       void loadProducts();
     }
   }, [activeTab, canManageCatalog, loadProducts]);
+
+  // Lazy-load campaigns when the Overlays tab first opens.
+  useEffect(() => {
+    if (!canManageCatalog) return;
+    if (activeTab !== 'campaigns') return;
+    if (campaignsLoaded) return;
+    (async () => {
+      try {
+        const list = await apiListCampaigns();
+        setCampaigns(list);
+        setCampaignsLoaded(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to load overlays');
+      }
+    })();
+  }, [activeTab, canManageCatalog, campaignsLoaded]);
 
   // Debounce the inventory search input so typing doesn't fire a query per keystroke.
   useEffect(() => {
@@ -1686,6 +1721,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     { key: 'inventory', label: 'Inventory' },
     ...(canManageCatalog ? [{ key: 'categories' as DashTab, label: 'Categories' }] : []),
     ...(canManageCatalog ? [{ key: 'offers' as DashTab, label: "Today's Offers" }] : []),
+    ...(canManageCatalog ? [{ key: 'campaigns' as DashTab, label: 'Overlays' }] : []),
     ...(canManageTeam ? [{ key: 'coupons' as DashTab, label: 'Coupons' }] : []),
     ...(canManageTeam ? [{ key: 'team' as DashTab, label: 'Team' }] : []),
   ];
@@ -1754,6 +1790,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         {activeTab === 'inventory' && renderInventory()}
         {activeTab === 'categories' && renderCategories()}
         {activeTab === 'offers' && renderOffers()}
+        {activeTab === 'campaigns' && renderCampaigns()}
         {activeTab === 'coupons' && renderCoupons()}
         {activeTab === 'team' && renderTeam()}
       </main>
@@ -5553,6 +5590,240 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             })}
           </div>
         )}
+      </div>
+    );
+  }
+
+  async function handleCreateCampaign(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setNotice('');
+    const title = campaignForm.title.trim();
+    const categoryId = campaignForm.categoryId ? Number(campaignForm.categoryId) : null;
+    if (!campaignImageFile) {
+      setError('Pick an overlay image first.');
+      return;
+    }
+    setCreatingCampaign(true);
+    try {
+      const created = await apiCreateCampaign({
+        title,
+        categoryId,
+        isActive: campaignForm.isActive,
+        validFrom: campaignForm.validFrom ? new Date(campaignForm.validFrom).toISOString() : null,
+        validUntil: campaignForm.validUntil ? new Date(campaignForm.validUntil).toISOString() : null,
+      });
+      const withImage = await apiUploadCampaignImage(created.id, campaignImageFile);
+      setCampaigns((prev) => [withImage, ...prev]);
+      setCampaignForm({ title: '', categoryId: '', isActive: true, validFrom: '', validUntil: '' });
+      setCampaignImageFile(null);
+      setNotice('Overlay created.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create overlay');
+    } finally {
+      setCreatingCampaign(false);
+    }
+  }
+
+  async function handleToggleCampaignActive(c: Campaign) {
+    setCampaignBusyId(c.id);
+    try {
+      const updated = await apiUpdateCampaign(c.id, { isActive: !c.isActive });
+      setCampaigns((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update overlay');
+    } finally {
+      setCampaignBusyId(null);
+    }
+  }
+
+  async function handleDeleteCampaign(c: Campaign) {
+    const ok = await confirm({
+      title: 'Delete overlay?',
+      message: `Remove "${c.title || 'Untitled'}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setCampaignBusyId(c.id);
+    try {
+      await apiDeleteCampaign(c.id);
+      setCampaigns((prev) => prev.filter((x) => x.id !== c.id));
+      setNotice('Overlay deleted.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete overlay');
+    } finally {
+      setCampaignBusyId(null);
+    }
+  }
+
+  async function handleReplaceCampaignImage(id: number, file: File) {
+    setCampaignBusyId(id);
+    try {
+      const updated = await apiUploadCampaignImage(id, file);
+      setCampaigns((prev) => prev.map((x) => (x.id === id ? updated : x)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to upload image');
+    } finally {
+      setCampaignBusyId(null);
+    }
+  }
+
+  function renderCampaigns() {
+    const visibleCategories = categories.filter((c) => !c.isHidden);
+    const activeCount = campaigns.filter((c) => c.isActive).length;
+
+    return (
+      <div className="section-box">
+        <div className="section-box__head">
+          <div>
+            <h2>Popup Overlays</h2>
+            <p>
+              {campaigns.length} total · {activeCount} active. Customers see the
+              newest active overlay once per session on the home screen.
+            </p>
+          </div>
+        </div>
+
+        <form className="campaign-create" onSubmit={handleCreateCampaign}>
+          <div className="campaign-create__row">
+            <label className="campaign-create__field campaign-create__field--wide">
+              <span>Title (optional)</span>
+              <input
+                type="text"
+                maxLength={120}
+                value={campaignForm.title}
+                onChange={(e) => setCampaignForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder="e.g. Diwali Deals"
+              />
+            </label>
+            <label className="campaign-create__field">
+              <span>Linked category</span>
+              <select
+                value={campaignForm.categoryId}
+                onChange={(e) => setCampaignForm((f) => ({ ...f, categoryId: e.target.value }))}
+              >
+                <option value="">— None —</option>
+                {visibleCategories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="campaign-create__row">
+            <label className="campaign-create__field">
+              <span>Active from</span>
+              <input
+                type="datetime-local"
+                value={campaignForm.validFrom}
+                onChange={(e) => setCampaignForm((f) => ({ ...f, validFrom: e.target.value }))}
+              />
+            </label>
+            <label className="campaign-create__field">
+              <span>Active until</span>
+              <input
+                type="datetime-local"
+                value={campaignForm.validUntil}
+                onChange={(e) => setCampaignForm((f) => ({ ...f, validUntil: e.target.value }))}
+              />
+            </label>
+            <label className="campaign-create__field campaign-create__field--check">
+              <input
+                type="checkbox"
+                checked={campaignForm.isActive}
+                onChange={(e) => setCampaignForm((f) => ({ ...f, isActive: e.target.checked }))}
+              />
+              <span>Active</span>
+            </label>
+          </div>
+          <div className="campaign-create__row">
+            <label className="campaign-create__field campaign-create__field--wide">
+              <span>Overlay image (portrait works best)</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setCampaignImageFile(e.target.files?.[0] ?? null)}
+              />
+              {campaignImageFile && (
+                <small className="campaign-create__hint">
+                  {campaignImageFile.name} ({Math.round(campaignImageFile.size / 1024)} KB)
+                </small>
+              )}
+            </label>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={creatingCampaign || !campaignImageFile}
+            >
+              {creatingCampaign ? 'Saving…' : 'Add Overlay'}
+            </button>
+          </div>
+        </form>
+
+        <div className="campaign-grid">
+          {!campaignsLoaded && <p className="empty-state">Loading overlays…</p>}
+          {campaignsLoaded && campaigns.length === 0 && (
+            <p className="empty-state">No overlays yet. Add one above.</p>
+          )}
+          {campaigns.map((c) => {
+            const busy = campaignBusyId === c.id;
+            return (
+              <article
+                key={c.id}
+                className={`campaign-card${c.isActive ? ' campaign-card--active' : ''}`}
+              >
+                <div className="campaign-card__cover">
+                  {c.imageUrl
+                    ? <img src={c.imageUrl} alt={c.title || 'Overlay'} loading="lazy" />
+                    : <div className="campaign-card__placeholder">No image</div>}
+                  <label className="campaign-card__replace" title="Replace image">
+                    <span>Replace image</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleReplaceCampaignImage(c.id, file);
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="campaign-card__body">
+                  <div className="campaign-card__title">{c.title || 'Untitled'}</div>
+                  <div className="campaign-card__meta">
+                    {c.categoryName ? `→ ${c.categoryName}` : 'No linked category'}
+                  </div>
+                  {(c.validFrom || c.validUntil) && (
+                    <div className="campaign-card__meta">
+                      {c.validFrom ? formatDateTime(c.validFrom) : '—'}
+                      {' → '}
+                      {c.validUntil ? formatDateTime(c.validUntil) : '—'}
+                    </div>
+                  )}
+                  <div className="campaign-card__actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => handleToggleCampaignActive(c)}
+                      disabled={busy}
+                    >
+                      {c.isActive ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={() => handleDeleteCampaign(c)}
+                      disabled={busy}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </div>
     );
   }

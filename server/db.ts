@@ -515,6 +515,26 @@ async function createTables(client: PoolClient) {
     CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_coupon ON coupon_redemptions (coupon_id);
   `);
 
+  // Festival / special-day popup overlays shown to customers on home load.
+  // Admin creates an image + a linked category; the image becomes a clickable
+  // banner that filters the storefront by that category on tap.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      title VARCHAR(120) NOT NULL DEFAULT '',
+      image_url TEXT,
+      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      valid_from TIMESTAMPTZ,
+      valid_until TIMESTAMPTZ,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaigns_company_active
+      ON campaigns (company_id, is_active);
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS user_devices (
       id SERIAL PRIMARY KEY,
@@ -3796,6 +3816,194 @@ export async function updateCategoryImage(
     [id, companyId, imageUrl]
   );
   return result.rowCount ? mapCategory(result.rows[0]) : null;
+}
+
+// ─── Campaign (festival popup overlay) helpers ───
+export interface CampaignRecord {
+  id: number;
+  companyId: number;
+  title: string;
+  imageUrl: string | null;
+  categoryId: number | null;
+  categorySlug: string | null;
+  categoryName: string | null;
+  isActive: boolean;
+  validFrom: string | null;
+  validUntil: string | null;
+  createdDate: string;
+  updatedDate: string;
+}
+
+const CAMPAIGN_SELECT = `
+  c.id,
+  c.company_id AS "companyId",
+  c.title,
+  c.image_url AS "imageUrl",
+  c.category_id AS "categoryId",
+  cat.slug AS "categorySlug",
+  cat.name AS "categoryName",
+  c.is_active AS "isActive",
+  c.valid_from AS "validFrom",
+  c.valid_until AS "validUntil",
+  c.created_date AS "createdDate",
+  c.updated_date AS "updatedDate"
+`;
+
+export async function listCampaigns(companyId: number): Promise<CampaignRecord[]> {
+  const result = await pool.query<CampaignRecord>(
+    `
+      SELECT ${CAMPAIGN_SELECT}
+      FROM campaigns c
+      LEFT JOIN categories cat ON cat.id = c.category_id
+      WHERE c.company_id = $1
+      ORDER BY c.created_date DESC;
+    `,
+    [companyId]
+  );
+  return result.rows;
+}
+
+// Public: the single active, currently-valid overlay (newest wins).
+export async function getActiveCampaign(companyId: number): Promise<CampaignRecord | null> {
+  const result = await pool.query<CampaignRecord>(
+    `
+      SELECT ${CAMPAIGN_SELECT}
+      FROM campaigns c
+      LEFT JOIN categories cat ON cat.id = c.category_id
+      WHERE c.company_id = $1
+        AND c.is_active = TRUE
+        AND c.image_url IS NOT NULL
+        AND (c.valid_from IS NULL OR c.valid_from <= NOW())
+        AND (c.valid_until IS NULL OR c.valid_until >= NOW())
+      ORDER BY c.created_date DESC
+      LIMIT 1;
+    `,
+    [companyId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function getCampaignById(
+  id: number,
+  companyId: number
+): Promise<CampaignRecord | null> {
+  const result = await pool.query<CampaignRecord>(
+    `
+      SELECT ${CAMPAIGN_SELECT}
+      FROM campaigns c
+      LEFT JOIN categories cat ON cat.id = c.category_id
+      WHERE c.id = $1 AND c.company_id = $2;
+    `,
+    [id, companyId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function createCampaign(
+  companyId: number,
+  input: {
+    title: string;
+    categoryId: number | null;
+    isActive: boolean;
+    validFrom: string | null;
+    validUntil: string | null;
+  }
+): Promise<CampaignRecord> {
+  const inserted = await pool.query<{ id: number }>(
+    `
+      INSERT INTO campaigns (company_id, title, category_id, is_active, valid_from, valid_until)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id;
+    `,
+    [
+      companyId,
+      input.title,
+      input.categoryId,
+      input.isActive,
+      input.validFrom,
+      input.validUntil,
+    ]
+  );
+  const created = await getCampaignById(inserted.rows[0].id, companyId);
+  if (!created) throw new Error('Failed to load created campaign');
+  return created;
+}
+
+export async function updateCampaign(
+  id: number,
+  companyId: number,
+  patch: {
+    title?: string;
+    categoryId?: number | null;
+    isActive?: boolean;
+    validFrom?: string | null;
+    validUntil?: string | null;
+  }
+): Promise<CampaignRecord | null> {
+  const result = await pool.query<{ id: number }>(
+    `
+      UPDATE campaigns
+      SET
+        title = COALESCE($3, title),
+        category_id = CASE WHEN $4::boolean THEN $5::integer ELSE category_id END,
+        is_active = COALESCE($6, is_active),
+        valid_from = CASE WHEN $7::boolean THEN $8::timestamptz ELSE valid_from END,
+        valid_until = CASE WHEN $9::boolean THEN $10::timestamptz ELSE valid_until END,
+        updated_date = NOW()
+      WHERE id = $1 AND company_id = $2
+      RETURNING id;
+    `,
+    [
+      id,
+      companyId,
+      patch.title ?? null,
+      patch.categoryId !== undefined,
+      patch.categoryId ?? null,
+      patch.isActive ?? null,
+      patch.validFrom !== undefined,
+      patch.validFrom ?? null,
+      patch.validUntil !== undefined,
+      patch.validUntil ?? null,
+    ]
+  );
+  if (!result.rowCount) return null;
+  return getCampaignById(id, companyId);
+}
+
+export async function updateCampaignImage(
+  id: number,
+  companyId: number,
+  imageUrl: string
+): Promise<CampaignRecord | null> {
+  const result = await pool.query<{ id: number }>(
+    `
+      UPDATE campaigns
+      SET image_url = $3, updated_date = NOW()
+      WHERE id = $1 AND company_id = $2
+      RETURNING id;
+    `,
+    [id, companyId, imageUrl]
+  );
+  if (!result.rowCount) return null;
+  return getCampaignById(id, companyId);
+}
+
+export async function deleteCampaign(
+  id: number,
+  companyId: number
+): Promise<{ deleted: boolean; imageUrl: string | null }> {
+  const result = await pool.query<{ imageUrl: string | null }>(
+    `
+      DELETE FROM campaigns
+      WHERE id = $1 AND company_id = $2
+      RETURNING image_url AS "imageUrl";
+    `,
+    [id, companyId]
+  );
+  return {
+    deleted: (result.rowCount ?? 0) > 0,
+    imageUrl: result.rows[0]?.imageUrl ?? null,
+  };
 }
 
 

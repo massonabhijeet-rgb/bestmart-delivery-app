@@ -571,6 +571,70 @@ export async function apiUploadCategoryImage(id: number, file: File) {
   return data.category;
 }
 
+// ── Campaign overlay (festivals / special days) ──
+export interface Campaign {
+  id: number;
+  companyId: number;
+  title: string;
+  imageUrl: string | null;
+  categoryId: number | null;
+  categorySlug: string | null;
+  categoryName: string | null;
+  isActive: boolean;
+  validFrom: string | null;
+  validUntil: string | null;
+  createdDate: string;
+  updatedDate: string;
+}
+
+export interface CampaignInput {
+  title: string;
+  categoryId: number | null;
+  isActive: boolean;
+  validFrom: string | null;
+  validUntil: string | null;
+}
+
+export async function apiListCampaigns() {
+  const data = await request<{ campaigns: Campaign[] }>('/campaigns');
+  return data.campaigns;
+}
+
+export async function apiGetActiveCampaign() {
+  const data = await request<{ campaign: Campaign | null }>('/campaigns/active');
+  return data.campaign;
+}
+
+export async function apiCreateCampaign(input: CampaignInput) {
+  const data = await request<{ campaign: Campaign }>('/campaigns', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return data.campaign;
+}
+
+export async function apiUpdateCampaign(id: number, input: Partial<CampaignInput>) {
+  const data = await request<{ campaign: Campaign }>(`/campaigns/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  return data.campaign;
+}
+
+export async function apiDeleteCampaign(id: number) {
+  return request<{ message: string }>(`/campaigns/${id}`, { method: 'DELETE' });
+}
+
+export async function apiUploadCampaignImage(id: number, file: File) {
+  const formData = new FormData();
+  formData.append('campaignImage', file);
+  const data = await request<{ message: string; campaign: Campaign }>(
+    `/campaigns/${id}/upload-image`,
+    { method: 'POST', body: formData }
+  );
+  return data.campaign;
+}
+
 export interface SlowMoverSuggestion {
   uniqueId: string;
   name: string;

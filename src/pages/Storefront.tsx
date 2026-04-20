@@ -3,6 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   apiCancelOrder,
   apiCreateOrder,
+  apiGetActiveCampaign,
   apiGetCompanyPublic,
   apiGetHomeRails,
   apiGetProductsPage,
@@ -18,7 +19,7 @@ import {
   apiPreviewCoupon,
   ApiError,
 } from '../services/api';
-import type { Brand, CouponPreview, HomeRails, PublicCoupon, StorefrontSpotlight, TempCategory } from '../services/api';
+import type { Brand, Campaign, CouponPreview, HomeRails, PublicCoupon, StorefrontSpotlight, TempCategory } from '../services/api';
 import { bogoBillableQty, bogoGet, bogoLabel, effectivePriceCents, formatCurrency, isBogoProduct, lineTotalCents } from '../lib/format';
 import { confirm } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
@@ -104,6 +105,11 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [visibleRailCount, setVisibleRailCount] = useState(RAILS_PER_BATCH);
   const railSentinelRef = useRef<HTMLDivElement | null>(null);
   const [categoryRows, setCategoryRows] = useState<Category[]>([]);
+  // Festival / special-day popup overlay — shown once per browser session.
+  const [activeCampaign, setActiveCampaign] = useState<Campaign | null>(null);
+  const [campaignDismissed, setCampaignDismissed] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('bm:campaign:dismissed') === '1'; } catch { return false; }
+  });
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -250,7 +256,27 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
       .finally(() => setInitialLoading(false));
     apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
     apiListBrands().then(setBrandsList).catch(() => {});
+    apiGetActiveCampaign().then(setActiveCampaign).catch(() => {});
   }, []);
+
+  function dismissCampaign() {
+    setCampaignDismissed(true);
+    try { sessionStorage.setItem('bm:campaign:dismissed', '1'); } catch {}
+  }
+
+  function handleCampaignTap() {
+    const cid = activeCampaign?.categoryId ?? null;
+    if (cid != null) {
+      const match = categoryRows.find((c) => c.id === cid);
+      if (match) {
+        setCategory(match.name);
+        setSearch('');
+        setBrandFilter(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+    dismissCampaign();
+  }
 
   // Fetch live weather to tailor the "perfect for today" picks. Prefers
   // the delivery location if the user already shared it, then falls back
@@ -924,6 +950,32 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
   return (
     <main className="store-shell">
+      {activeCampaign && activeCampaign.imageUrl && !campaignDismissed && (
+        <div
+          className="campaign-popup__backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={activeCampaign.title || 'Special overlay'}
+          onClick={dismissCampaign}
+        >
+          <div className="campaign-popup__card" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="campaign-popup__close"
+              onClick={dismissCampaign}
+              aria-label="Close overlay"
+            >
+              ✕
+            </button>
+            <img
+              src={activeCampaign.imageUrl}
+              alt={activeCampaign.title || 'Special offer'}
+              className="campaign-popup__image"
+              onClick={handleCampaignTap}
+            />
+          </div>
+        </div>
+      )}
       {/* Sticky top bar — back | logo | address | search | login | cart */}
       <header className="store-topbar store-topbar--v2">
         {isBrowsing ? (
