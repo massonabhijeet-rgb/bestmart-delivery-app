@@ -112,6 +112,33 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   cash_on_delivery: 'Cash on delivery',
 };
 
+interface PaymentMethodEntry {
+  value: string;
+  label: string;
+  sub: string;
+  icon: string;
+}
+
+const PAYMENT_GROUPS: Array<{ title: string; methods: PaymentMethodEntry[] }> = [
+  {
+    title: 'Pay online',
+    methods: [
+      { value: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe via UPI', icon: '📱' },
+      { value: 'gpay', label: 'Google Pay', sub: 'Opens GPay via UPI', icon: '🟢' },
+      { value: 'paytm', label: 'Paytm', sub: 'Opens Paytm via UPI', icon: '🔵' },
+      { value: 'razorpay', label: 'Card / Netbanking / Other UPI', sub: 'Pay securely via Razorpay', icon: '💳' },
+    ],
+  },
+  {
+    title: 'Pay on delivery',
+    methods: [
+      { value: 'upi', label: 'UPI on delivery', sub: 'Pay the rider via UPI QR', icon: '🧾' },
+      { value: 'card_on_delivery', label: 'Card on delivery', sub: 'Swipe on arrival', icon: '💳' },
+      { value: 'cash_on_delivery', label: 'Cash on delivery', sub: 'Pay when the order arrives', icon: '💵' },
+    ],
+  },
+];
+
 interface RazorpayCheckoutPayload {
   keyId: string;
   razorpayOrderId: string;
@@ -242,6 +269,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [quickViewLoading, setQuickViewLoading] = useState(false);
   const [trackingCode, setTrackingCode] = useState('');
   const [placingOrder, setPlacingOrder] = useState(false);
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
   const [checkoutForm, setCheckoutForm] = useState<CheckoutForm>({
@@ -2260,24 +2288,47 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               />
             </label>
 
-            <label>
-              <span>Payment</span>
-              <select
-                id="checkout-payment-select"
-                value={checkoutForm.paymentMethod}
-                onChange={(event) =>
-                  setCheckoutForm((current) => ({ ...current, paymentMethod: event.target.value }))
-                }
+            <button
+              type="button"
+              id="checkout-payment-select"
+              onClick={() => setPaymentSheetOpen(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                width: '100%',
+                padding: '12px 14px',
+                background: 'var(--c-surface, #fff)',
+                border: '1px solid var(--c-border, #e2e8f0)',
+                borderRadius: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  fontSize: 18,
+                }}
               >
-                <option value="phonepe">PhonePe (UPI)</option>
-                <option value="gpay">Google Pay (UPI)</option>
-                <option value="paytm">Paytm (UPI)</option>
-                <option value="razorpay">Card / Netbanking / Other UPI</option>
-                <option value="upi">UPI on delivery</option>
-                <option value="card_on_delivery">Card on delivery</option>
-                <option value="cash_on_delivery">Cash on delivery</option>
-              </select>
-            </label>
+                {PAYMENT_GROUPS.flatMap((g) => g.methods).find((m) => m.value === checkoutForm.paymentMethod)?.icon ?? '💳'}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', fontWeight: 600, letterSpacing: 0.3 }}>
+                  PAYMENT METHOD
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text, #0f172a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {PAYMENT_METHOD_LABELS[checkoutForm.paymentMethod] ?? checkoutForm.paymentMethod}
+                </div>
+              </div>
+              <span style={{ color: '#3b82f6', fontWeight: 700, fontSize: 14 }}>Change ›</span>
+            </button>
 
             <label>
               <span>Delivery notes</span>
@@ -2412,13 +2463,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               <button
                 type="button"
                 className="link-button"
-                onClick={() => {
-                  const el = document.getElementById('checkout-payment-select');
-                  if (el) {
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    (el as HTMLSelectElement).focus();
-                  }
-                }}
+                onClick={() => setPaymentSheetOpen(true)}
                 style={{ fontWeight: 600 }}
               >
                 Change
@@ -2440,6 +2485,133 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         </aside>
         ) : null}
       </section>
+      ) : null}
+
+      {paymentSheetOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPaymentSheetOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.5)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 520,
+              background: 'var(--c-surface-muted, #f8fafc)',
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              padding: '18px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ flex: 1, margin: 0, fontSize: 18, fontWeight: 900 }}>Select Payment Method</h3>
+              <button
+                type="button"
+                onClick={() => setPaymentSheetOpen(false)}
+                aria-label="Close"
+                style={{
+                  background: 'transparent',
+                  border: 0,
+                  fontSize: 24,
+                  cursor: 'pointer',
+                  color: '#64748b',
+                  padding: 4,
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+            {PAYMENT_GROUPS.map((group) => (
+              <div
+                key={group.title}
+                style={{
+                  marginBottom: 12,
+                  background: 'var(--c-surface, #fff)',
+                  borderRadius: 14,
+                  border: '1px solid var(--c-border, #e2e8f0)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '12px 14px 6px',
+                    fontSize: 13,
+                    fontWeight: 800,
+                    color: 'var(--c-text, #0f172a)',
+                    letterSpacing: 0.2,
+                  }}
+                >
+                  {group.title}
+                </div>
+                {group.methods.map((method, idx) => {
+                  const selected = checkoutForm.paymentMethod === method.value;
+                  return (
+                    <button
+                      key={method.value}
+                      type="button"
+                      onClick={() => {
+                        setCheckoutForm((current) => ({ ...current, paymentMethod: method.value }));
+                        setPaymentSheetOpen(false);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        width: '100%',
+                        padding: '12px 14px',
+                        background: selected ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
+                        border: 0,
+                        borderTop: idx === 0 ? 0 : '1px solid var(--c-border, #e2e8f0)',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 36,
+                          height: 36,
+                          borderRadius: 10,
+                          background: 'rgba(59, 130, 246, 0.1)',
+                          fontSize: 18,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {method.icon}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text, #0f172a)' }}>
+                          {method.label}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--c-text-muted, #64748b)' }}>{method.sub}</div>
+                      </div>
+                      {selected ? (
+                        <span style={{ color: '#3b82f6', fontWeight: 700 }}>✓</span>
+                      ) : (
+                        <span style={{ color: '#94a3b8', fontWeight: 700 }}>›</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {latestOrder ? (
