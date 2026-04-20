@@ -117,15 +117,18 @@ interface PaymentMethodEntry {
   label: string;
   sub: string;
   icon: string;
+  iconUrl?: string;
 }
+
+const PAYMENT_ICON_BASE = 'https://bestmart-images-prod.s3.eu-north-1.amazonaws.com';
 
 const PAYMENT_GROUPS: Array<{ title: string; methods: PaymentMethodEntry[] }> = [
   {
     title: 'Pay online',
     methods: [
-      { value: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe via UPI', icon: '📱' },
-      { value: 'gpay', label: 'Google Pay', sub: 'Opens GPay via UPI', icon: '🟢' },
-      { value: 'paytm', label: 'Paytm', sub: 'Opens Paytm via UPI', icon: '🔵' },
+      { value: 'phonepe', label: 'PhonePe', sub: 'Opens PhonePe via UPI', icon: '📱', iconUrl: `${PAYMENT_ICON_BASE}/phonepay.png` },
+      { value: 'gpay', label: 'Google Pay', sub: 'Opens GPay via UPI', icon: '🟢', iconUrl: `${PAYMENT_ICON_BASE}/googlepay.png` },
+      { value: 'paytm', label: 'Paytm', sub: 'Opens Paytm via UPI', icon: '🔵', iconUrl: `${PAYMENT_ICON_BASE}/paytm.png` },
       { value: 'razorpay', label: 'Card / Netbanking / Other UPI', sub: 'Pay securely via Razorpay', icon: '💳' },
     ],
   },
@@ -2305,20 +2308,34 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 textAlign: 'left',
               }}
             >
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: 'rgba(59, 130, 246, 0.1)',
-                  fontSize: 18,
-                }}
-              >
-                {PAYMENT_GROUPS.flatMap((g) => g.methods).find((m) => m.value === checkoutForm.paymentMethod)?.icon ?? '💳'}
-              </span>
+              {(() => {
+                const entry = PAYMENT_GROUPS.flatMap((g) => g.methods).find((m) => m.value === checkoutForm.paymentMethod);
+                return (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: 'rgba(59, 130, 246, 0.1)',
+                      fontSize: 18,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {entry?.iconUrl ? (
+                      <img
+                        src={entry.iconUrl}
+                        alt=""
+                        style={{ width: 30, height: 30, objectFit: 'contain' }}
+                      />
+                    ) : (
+                      entry?.icon ?? '💳'
+                    )}
+                  </span>
+                );
+              })()}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 11, color: 'var(--c-text-muted, #64748b)', fontWeight: 600, letterSpacing: 0.3 }}>
                   PAYMENT METHOD
@@ -2590,9 +2607,18 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                           background: 'rgba(59, 130, 246, 0.1)',
                           fontSize: 18,
                           flexShrink: 0,
+                          overflow: 'hidden',
                         }}
                       >
-                        {method.icon}
+                        {method.iconUrl ? (
+                          <img
+                            src={method.iconUrl}
+                            alt=""
+                            style={{ width: 30, height: 30, objectFit: 'contain' }}
+                          />
+                        ) : (
+                          method.icon
+                        )}
                       </span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-text, #0f172a)' }}>
