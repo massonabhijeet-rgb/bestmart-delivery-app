@@ -2310,6 +2310,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             >
               {(() => {
                 const entry = PAYMENT_GROUPS.flatMap((g) => g.methods).find((m) => m.value === checkoutForm.paymentMethod);
+                const hasUrl = !!entry?.iconUrl;
                 return (
                   <span
                     style={{
@@ -2319,16 +2320,19 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                       width: 36,
                       height: 36,
                       borderRadius: 10,
-                      background: 'rgba(59, 130, 246, 0.1)',
+                      background: hasUrl ? '#fff' : 'rgba(59, 130, 246, 0.1)',
+                      border: hasUrl ? '1px solid var(--c-border, #e2e8f0)' : 'none',
                       fontSize: 18,
                       overflow: 'hidden',
+                      padding: hasUrl ? 4 : 0,
+                      boxSizing: 'border-box',
                     }}
                   >
-                    {entry?.iconUrl ? (
+                    {hasUrl ? (
                       <img
-                        src={entry.iconUrl}
+                        src={entry!.iconUrl}
                         alt=""
-                        style={{ width: 30, height: 30, objectFit: 'contain' }}
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                       />
                     ) : (
                       entry?.icon ?? '💳'
@@ -2604,17 +2608,20 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                           width: 36,
                           height: 36,
                           borderRadius: 10,
-                          background: 'rgba(59, 130, 246, 0.1)',
+                          background: method.iconUrl ? '#fff' : 'rgba(59, 130, 246, 0.1)',
+                          border: method.iconUrl ? '1px solid var(--c-border, #e2e8f0)' : 'none',
                           fontSize: 18,
                           flexShrink: 0,
                           overflow: 'hidden',
+                          padding: method.iconUrl ? 4 : 0,
+                          boxSizing: 'border-box',
                         }}
                       >
                         {method.iconUrl ? (
                           <img
                             src={method.iconUrl}
                             alt=""
-                            style={{ width: 30, height: 30, objectFit: 'contain' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                           />
                         ) : (
                           method.icon
