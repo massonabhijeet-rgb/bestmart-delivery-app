@@ -4601,6 +4601,32 @@ export async function updateOrderStatus(
   return getOrderByPublicId(publicId);
 }
 
+// Flip a pending order to paid when Razorpay confirms via webhook. Also
+// records the payment id / signature so we have a full audit trail even
+// though intent-flow payments never round-trip through the browser.
+export async function markOrderPaidByRazorpayOrderId(
+  razorpayOrderId: string,
+  razorpayPaymentId: string,
+  razorpaySignature: string | null
+) {
+  const { rows } = await pool.query<{ publicId: string; companyId: number }>(
+    `
+      UPDATE orders
+      SET
+        payment_status = 'paid',
+        razorpay_payment_id = COALESCE(razorpay_payment_id, $2),
+        razorpay_signature = COALESCE(razorpay_signature, $3),
+        updated_date = NOW()
+      WHERE razorpay_order_id = $1
+        AND payment_status <> 'paid'
+      RETURNING public_id AS "publicId", company_id AS "companyId";
+    `,
+    [razorpayOrderId, razorpayPaymentId, razorpaySignature]
+  );
+  if (!rows.length) return null;
+  return getOrderByPublicId(rows[0].publicId);
+}
+
 export async function getDashboardSummary(companyId: number) {
   const [totals, active, stock, regions] = await Promise.all([
     pool.query(

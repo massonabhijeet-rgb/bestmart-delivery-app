@@ -122,20 +122,29 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       });
     }
 
-    // For online payments we must have a verified Razorpay signature before
-    // writing the order — otherwise a client could claim a paid order without
-    // actually paying.
+    // Two valid razorpay shapes:
+    //   1. Standard Checkout: client returns orderId + paymentId + signature;
+    //      we verify the signature and commit as paid.
+    //   2. UPI intent (Blinkit-style): client only has a razorpay_order_id;
+    //      the real payment confirmation arrives later via webhook, so we
+    //      commit the order with payment_status='pending' and flip it when
+    //      `payment.captured` fires.
+    let razorpayFlow: 'verified' | 'pending' | null = null;
     if (paymentMethod === 'razorpay') {
-      if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      if (razorpayOrderId && razorpayPaymentId && razorpaySignature) {
+        const verified = verifyRazorpaySignature({
+          razorpayOrderId,
+          razorpayPaymentId,
+          razorpaySignature,
+        });
+        if (!verified) {
+          return res.status(400).json({ error: 'Payment verification failed' });
+        }
+        razorpayFlow = 'verified';
+      } else if (razorpayOrderId) {
+        razorpayFlow = 'pending';
+      } else {
         return res.status(400).json({ error: 'Payment details missing' });
-      }
-      const verified = verifyRazorpaySignature({
-        razorpayOrderId,
-        razorpayPaymentId,
-        razorpaySignature,
-      });
-      if (!verified) {
-        return res.status(400).json({ error: 'Payment verification failed' });
       }
     }
 
@@ -178,9 +187,11 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
       createdByUserId: req.user?.id ?? null,
       couponCode: couponCode ?? null,
       razorpayOrderId: paymentMethod === 'razorpay' ? razorpayOrderId ?? null : null,
-      razorpayPaymentId: paymentMethod === 'razorpay' ? razorpayPaymentId ?? null : null,
-      razorpaySignature: paymentMethod === 'razorpay' ? razorpaySignature ?? null : null,
-      paymentStatus: paymentMethod === 'razorpay' ? 'paid' : 'pending',
+      razorpayPaymentId:
+        razorpayFlow === 'verified' ? razorpayPaymentId ?? null : null,
+      razorpaySignature:
+        razorpayFlow === 'verified' ? razorpaySignature ?? null : null,
+      paymentStatus: razorpayFlow === 'verified' ? 'paid' : 'pending',
     });
 
     if (req.user?.id) {

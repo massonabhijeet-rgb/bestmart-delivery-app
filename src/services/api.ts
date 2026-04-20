@@ -806,6 +806,23 @@ export async function apiCreatePaymentIntent(amountCents: number) {
   });
 }
 
+export type UpiIntentApp = 'phonepe' | 'google_pay' | 'paytm';
+
+export interface UpiIntentResult {
+  intentUrl: string;
+  paymentId: string | null;
+}
+
+export async function apiCreateUpiIntent(
+  publicOrderId: string,
+  upiApp: UpiIntentApp
+) {
+  return request<UpiIntentResult>('/payments/upi-intent', {
+    method: 'POST',
+    body: JSON.stringify({ publicOrderId, upiApp }),
+  });
+}
+
 export type CouponDiscountType = 'percent' | 'flat';
 
 export interface Coupon {

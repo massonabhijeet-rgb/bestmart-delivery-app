@@ -4,6 +4,7 @@ import {
   apiCancelOrder,
   apiCreateOrder,
   apiCreatePaymentIntent,
+  apiCreateUpiIntent,
   apiGetActiveCampaign,
   apiGetCompanyPublic,
   apiGetHomeRails,
@@ -841,10 +842,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         }
       }
 
-      // Razorpay widget must run OUTSIDE withBusy — the BusyOverlay sits
-      // on top of the Razorpay iframe otherwise and blocks card entry.
-      // phonepe / gpay / paytm are UI-only selections that resolve to the
-      // 'razorpay' wire-level method + a preferred UPI app for the widget.
+      // phonepe / gpay / paytm use the Razorpay S2S UPI Intent API — we
+      // create the Razorpay order, persist a pending BestMart order, then
+      // redirect directly into the UPI app. The webhook flips the order to
+      // paid when Razorpay confirms `payment.captured`.
+      //
+      // `razorpay` still uses Standard Checkout (cards / netbanking / other
+      // UPI apps). It must run OUTSIDE withBusy — the BusyOverlay sits on
+      // top of the Razorpay iframe otherwise and blocks card entry.
       const uiMethod = checkoutForm.paymentMethod;
       const UPI_APP_MAP: Record<string, PreferredUpiApp> = {
         phonepe: 'phonepe',
@@ -852,11 +857,14 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         paytm: 'paytm',
       };
       const preferredUpiApp = UPI_APP_MAP[uiMethod];
-      const isOnlinePayment = uiMethod === 'razorpay' || Boolean(preferredUpiApp);
+      const isIntentPayment = Boolean(preferredUpiApp);
+      const isWidgetPayment = uiMethod === 'razorpay';
+      const isOnlinePayment = isIntentPayment || isWidgetPayment;
       const wirePaymentMethod = isOnlinePayment ? 'razorpay' : uiMethod;
 
       let razorpayPayload: RazorpaySuccess | null = null;
-      if (isOnlinePayment) {
+      let pendingRazorpayOrderId: string | null = null;
+      if (isWidgetPayment) {
         const intent = await apiCreatePaymentIntent(totalCents);
         razorpayPayload = await openRazorpayCheckout({
           keyId: intent.keyId,
@@ -865,8 +873,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           currency: intent.currency,
           customerName: checkoutForm.customerName,
           customerPhone: checkoutForm.customerPhone,
-          preferredUpiApp,
         });
+      } else if (isIntentPayment) {
+        const intent = await apiCreatePaymentIntent(totalCents);
+        pendingRazorpayOrderId = intent.razorpayOrderId;
       }
 
       const finalCoords = coords;
@@ -884,11 +894,33 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           deliveryLatitude: finalCoords.latitude,
           deliveryLongitude: finalCoords.longitude,
           couponCode: appliedCoupon?.code ?? null,
-          razorpayOrderId: razorpayPayload?.razorpayOrderId,
+          razorpayOrderId:
+            razorpayPayload?.razorpayOrderId ?? pendingRazorpayOrderId ?? undefined,
           razorpayPaymentId: razorpayPayload?.razorpayPaymentId,
           razorpaySignature: razorpayPayload?.razorpaySignature,
         }),
       );
+
+      if (isIntentPayment && preferredUpiApp) {
+        // Hand off to the UPI app. The return trip is best-effort — some apps
+        // don't deep-link back to the browser, so we also capture the order
+        // so users can find it under "My Orders" if they close the tab.
+        setLatestOrder(order);
+        setCart({});
+        setAppliedCoupon(null);
+        setCouponInput('');
+        try {
+          const launch = await apiCreateUpiIntent(order.publicId, preferredUpiApp);
+          window.location.href = launch.intentUrl;
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to launch your UPI app. You can retry payment from the order page.',
+          );
+        }
+        return;
+      }
 
       setLatestOrder(order);
       setCart({});

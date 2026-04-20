@@ -56,6 +56,13 @@ app.use(
     credentials: true,
   })
 );
+// Razorpay webhook signatures are computed over the raw request body, so we
+// must register the raw parser BEFORE express.json() — otherwise JSON parsing
+// normalises the bytes and the HMAC no longer matches.
+app.use(
+  '/api/payments/webhook',
+  express.raw({ type: 'application/json', limit: '1mb' })
+);
 app.use(express.json({ limit: '20mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
