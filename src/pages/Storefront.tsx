@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   apiCancelOrder,
@@ -273,6 +273,34 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
   const [trackingCode, setTrackingCode] = useState('');
   const [placingOrder, setPlacingOrder] = useState(false);
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
+  const paymentIconsReadyRef = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    const urls = PAYMENT_GROUPS.flatMap((g) =>
+      g.methods.map((m) => m.iconUrl).filter((u): u is string => !!u),
+    );
+    if (urls.length === 0) return;
+    paymentIconsReadyRef.current = Promise.all(
+      urls.map(
+        (u) =>
+          new Promise<void>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+            img.src = u;
+          }),
+      ),
+    ).then(() => undefined);
+  }, []);
+  const openPaymentSheet = useCallback(async () => {
+    // Wait up to 3s for S3 icons to finish loading so the modal doesn't pop in
+    // with half-painted brand logos. 3s is a safety cap — on a warm cache this
+    // resolves synchronously.
+    await Promise.race([
+      paymentIconsReadyRef.current,
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    setPaymentSheetOpen(true);
+  }, []);
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
   const [checkoutForm, setCheckoutForm] = useState<CheckoutForm>({
@@ -2294,7 +2322,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             <button
               type="button"
               id="checkout-payment-select"
-              onClick={() => setPaymentSheetOpen(true)}
+              onClick={() => void openPaymentSheet()}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -2464,6 +2492,29 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 </button>
               </p>
             ) : null}
+            {checkoutForm.deliveryAddress.trim() ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '10px 14px',
+                  marginBottom: 8,
+                  background: 'var(--c-surface-muted, #f1f5f9)',
+                  border: '1px solid var(--c-border, #e2e8f0)',
+                  borderRadius: 10,
+                  fontSize: 14,
+                }}
+              >
+                <span style={{ fontSize: 16, lineHeight: '20px' }}>📍</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  Delivering to{' '}
+                  <strong style={{ wordBreak: 'break-word' }}>
+                    {checkoutForm.deliveryAddress.trim()}
+                  </strong>
+                </span>
+              </div>
+            ) : null}
             <div
               style={{
                 display: 'flex',
@@ -2484,7 +2535,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               <button
                 type="button"
                 className="link-button"
-                onClick={() => setPaymentSheetOpen(true)}
+                onClick={() => void openPaymentSheet()}
                 style={{ fontWeight: 600 }}
               >
                 Change
