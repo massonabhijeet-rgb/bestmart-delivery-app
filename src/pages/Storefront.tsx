@@ -99,6 +99,8 @@ interface RazorpaySuccess {
   razorpaySignature: string;
 }
 
+type PreferredUpiApp = 'phonepe' | 'google_pay' | 'paytm';
+
 interface RazorpayCheckoutPayload {
   keyId: string;
   razorpayOrderId: string;
@@ -107,6 +109,15 @@ interface RazorpayCheckoutPayload {
   customerName: string;
   customerPhone: string;
   customerEmail?: string | null;
+  // When set, Razorpay checkout is configured to launch ONLY this UPI app
+  // via intent flow — no card / netbanking tabs are shown.
+  preferredUpiApp?: PreferredUpiApp;
+}
+
+function labelForUpiApp(app: PreferredUpiApp): string {
+  if (app === 'phonepe') return 'PhonePe';
+  if (app === 'google_pay') return 'Google Pay';
+  return 'Paytm';
 }
 
 // Opens the Razorpay checkout widget loaded via <script> in index.html and
@@ -121,7 +132,8 @@ function openRazorpayCheckout(payload: RazorpayCheckoutPayload): Promise<Razorpa
       return;
     }
     let settled = false;
-    const rzp = new Razorpay({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rzpOptions: any = {
       key: payload.keyId,
       amount: payload.amount,
       currency: payload.currency,
@@ -153,7 +165,34 @@ function openRazorpayCheckout(payload: RazorpayCheckoutPayload): Promise<Razorpa
           razorpaySignature: response.razorpay_signature,
         });
       },
-    });
+    };
+
+    if (payload.preferredUpiApp) {
+      rzpOptions.method = {
+        upi: true,
+        card: false,
+        netbanking: false,
+        wallet: false,
+        emi: false,
+        paylater: false,
+      };
+      rzpOptions.config = {
+        display: {
+          blocks: {
+            upi_preferred: {
+              name: `Pay via ${labelForUpiApp(payload.preferredUpiApp)}`,
+              instruments: [
+                { method: 'upi', flows: ['intent'], apps: [payload.preferredUpiApp] },
+              ],
+            },
+          },
+          sequence: ['block.upi_preferred'],
+          preferences: { show_default_blocks: false },
+        },
+      };
+    }
+
+    const rzp = new Razorpay(rzpOptions);
     rzp.open();
   });
 }
@@ -804,8 +843,20 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
 
       // Razorpay widget must run OUTSIDE withBusy — the BusyOverlay sits
       // on top of the Razorpay iframe otherwise and blocks card entry.
+      // phonepe / gpay / paytm are UI-only selections that resolve to the
+      // 'razorpay' wire-level method + a preferred UPI app for the widget.
+      const uiMethod = checkoutForm.paymentMethod;
+      const UPI_APP_MAP: Record<string, PreferredUpiApp> = {
+        phonepe: 'phonepe',
+        gpay: 'google_pay',
+        paytm: 'paytm',
+      };
+      const preferredUpiApp = UPI_APP_MAP[uiMethod];
+      const isOnlinePayment = uiMethod === 'razorpay' || Boolean(preferredUpiApp);
+      const wirePaymentMethod = isOnlinePayment ? 'razorpay' : uiMethod;
+
       let razorpayPayload: RazorpaySuccess | null = null;
-      if (checkoutForm.paymentMethod === 'razorpay') {
+      if (isOnlinePayment) {
         const intent = await apiCreatePaymentIntent(totalCents);
         razorpayPayload = await openRazorpayCheckout({
           keyId: intent.keyId,
@@ -814,6 +865,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           currency: intent.currency,
           customerName: checkoutForm.customerName,
           customerPhone: checkoutForm.customerPhone,
+          preferredUpiApp,
         });
       }
 
@@ -824,7 +876,7 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           customerPhone: checkoutForm.customerPhone,
           deliveryAddress: checkoutForm.deliveryAddress,
           deliveryNotes: checkoutForm.deliveryNotes,
-          paymentMethod: checkoutForm.paymentMethod,
+          paymentMethod: wirePaymentMethod,
           items: cartItems.map((item) => ({
             productId: item.product.uniqueId,
             quantity: item.quantity,
@@ -2159,7 +2211,10 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
                 }
               >
                 <option value="cash_on_delivery">Cash on delivery</option>
-                <option value="razorpay">Pay online (UPI / Card / Netbanking)</option>
+                <option value="phonepe">PhonePe</option>
+                <option value="gpay">Google Pay</option>
+                <option value="paytm">Paytm</option>
+                <option value="razorpay">Card / Netbanking / Other UPI</option>
                 <option value="upi">UPI on delivery</option>
                 <option value="card_on_delivery">Card on delivery</option>
               </select>
