@@ -90,6 +90,7 @@ export interface OrderRecord {
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
+  cancellationReason: string | null;
   createdDate: string;
   updatedDate: string;
   items: Array<{
@@ -439,6 +440,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_longitude DOUBLE PRECISION;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_rider_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -531,6 +533,8 @@ async function createTables(client: PoolClient) {
       created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE campaigns
+      ADD COLUMN IF NOT EXISTS category_ids INTEGER[] NOT NULL DEFAULT '{}';
     CREATE INDEX IF NOT EXISTS idx_campaigns_company_active
       ON campaigns (company_id, is_active);
   `);
@@ -3819,14 +3823,19 @@ export async function updateCategoryImage(
 }
 
 // ─── Campaign (festival popup overlay) helpers ───
+export interface CampaignCategoryRef {
+  id: number;
+  slug: string;
+  name: string;
+}
+
 export interface CampaignRecord {
   id: number;
   companyId: number;
   title: string;
   imageUrl: string | null;
-  categoryId: number | null;
-  categorySlug: string | null;
-  categoryName: string | null;
+  categoryIds: number[];
+  categories: CampaignCategoryRef[];
   isActive: boolean;
   validFrom: string | null;
   validUntil: string | null;
@@ -3834,76 +3843,98 @@ export interface CampaignRecord {
   updatedDate: string;
 }
 
-const CAMPAIGN_SELECT = `
-  c.id,
-  c.company_id AS "companyId",
-  c.title,
-  c.image_url AS "imageUrl",
-  c.category_id AS "categoryId",
-  cat.slug AS "categorySlug",
-  cat.name AS "categoryName",
-  c.is_active AS "isActive",
-  c.valid_from AS "validFrom",
-  c.valid_until AS "validUntil",
-  c.created_date AS "createdDate",
-  c.updated_date AS "updatedDate"
-`;
+// Fetch one row and hydrate its linked categories (preserving insert order).
+async function loadCampaignRow(
+  id: number,
+  companyId: number,
+): Promise<CampaignRecord | null> {
+  const main = await pool.query<{
+    id: number;
+    companyId: number;
+    title: string;
+    imageUrl: string | null;
+    categoryIds: number[] | null;
+    isActive: boolean;
+    validFrom: string | null;
+    validUntil: string | null;
+    createdDate: string;
+    updatedDate: string;
+  }>(
+    `
+      SELECT
+        id,
+        company_id AS "companyId",
+        title,
+        image_url AS "imageUrl",
+        category_ids AS "categoryIds",
+        is_active AS "isActive",
+        valid_from AS "validFrom",
+        valid_until AS "validUntil",
+        created_date AS "createdDate",
+        updated_date AS "updatedDate"
+      FROM campaigns
+      WHERE id = $1 AND company_id = $2;
+    `,
+    [id, companyId]
+  );
+  const row = main.rows[0];
+  if (!row) return null;
+  const ids = row.categoryIds ?? [];
+  let refs: CampaignCategoryRef[] = [];
+  if (ids.length > 0) {
+    const catResult = await pool.query<CampaignCategoryRef>(
+      `SELECT id, slug, name FROM categories WHERE id = ANY($1::int[]);`,
+      [ids]
+    );
+    const byId = new Map(catResult.rows.map((r) => [r.id, r]));
+    refs = ids.map((cid) => byId.get(cid)).filter((r): r is CampaignCategoryRef => !!r);
+  }
+  return { ...row, categoryIds: ids, categories: refs };
+}
 
 export async function listCampaigns(companyId: number): Promise<CampaignRecord[]> {
-  const result = await pool.query<CampaignRecord>(
-    `
-      SELECT ${CAMPAIGN_SELECT}
-      FROM campaigns c
-      LEFT JOIN categories cat ON cat.id = c.category_id
-      WHERE c.company_id = $1
-      ORDER BY c.created_date DESC;
-    `,
+  const result = await pool.query<{ id: number }>(
+    `SELECT id FROM campaigns WHERE company_id = $1 ORDER BY created_date DESC;`,
     [companyId]
   );
-  return result.rows;
+  const rows = await Promise.all(
+    result.rows.map((r) => loadCampaignRow(r.id, companyId))
+  );
+  return rows.filter((r): r is CampaignRecord => !!r);
 }
 
 // Public: the single active, currently-valid overlay (newest wins).
 export async function getActiveCampaign(companyId: number): Promise<CampaignRecord | null> {
-  const result = await pool.query<CampaignRecord>(
+  const result = await pool.query<{ id: number }>(
     `
-      SELECT ${CAMPAIGN_SELECT}
-      FROM campaigns c
-      LEFT JOIN categories cat ON cat.id = c.category_id
-      WHERE c.company_id = $1
-        AND c.is_active = TRUE
-        AND c.image_url IS NOT NULL
-        AND (c.valid_from IS NULL OR c.valid_from <= NOW())
-        AND (c.valid_until IS NULL OR c.valid_until >= NOW())
-      ORDER BY c.created_date DESC
+      SELECT id
+      FROM campaigns
+      WHERE company_id = $1
+        AND is_active = TRUE
+        AND image_url IS NOT NULL
+        AND (valid_from IS NULL OR valid_from <= NOW())
+        AND (valid_until IS NULL OR valid_until >= NOW())
+      ORDER BY created_date DESC
       LIMIT 1;
     `,
     [companyId]
   );
-  return result.rows[0] ?? null;
+  if (!result.rowCount) return null;
+  return loadCampaignRow(result.rows[0].id, companyId);
 }
 
 export async function getCampaignById(
   id: number,
   companyId: number
 ): Promise<CampaignRecord | null> {
-  const result = await pool.query<CampaignRecord>(
-    `
-      SELECT ${CAMPAIGN_SELECT}
-      FROM campaigns c
-      LEFT JOIN categories cat ON cat.id = c.category_id
-      WHERE c.id = $1 AND c.company_id = $2;
-    `,
-    [id, companyId]
-  );
-  return result.rows[0] ?? null;
+  return loadCampaignRow(id, companyId);
 }
 
 export async function createCampaign(
   companyId: number,
   input: {
     title: string;
-    categoryId: number | null;
+    categoryIds: number[];
     isActive: boolean;
     validFrom: string | null;
     validUntil: string | null;
@@ -3911,20 +3942,20 @@ export async function createCampaign(
 ): Promise<CampaignRecord> {
   const inserted = await pool.query<{ id: number }>(
     `
-      INSERT INTO campaigns (company_id, title, category_id, is_active, valid_from, valid_until)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO campaigns (company_id, title, category_ids, is_active, valid_from, valid_until)
+      VALUES ($1, $2, $3::int[], $4, $5, $6)
       RETURNING id;
     `,
     [
       companyId,
       input.title,
-      input.categoryId,
+      input.categoryIds,
       input.isActive,
       input.validFrom,
       input.validUntil,
     ]
   );
-  const created = await getCampaignById(inserted.rows[0].id, companyId);
+  const created = await loadCampaignRow(inserted.rows[0].id, companyId);
   if (!created) throw new Error('Failed to load created campaign');
   return created;
 }
@@ -3934,7 +3965,7 @@ export async function updateCampaign(
   companyId: number,
   patch: {
     title?: string;
-    categoryId?: number | null;
+    categoryIds?: number[];
     isActive?: boolean;
     validFrom?: string | null;
     validUntil?: string | null;
@@ -3945,7 +3976,7 @@ export async function updateCampaign(
       UPDATE campaigns
       SET
         title = COALESCE($3, title),
-        category_id = CASE WHEN $4::boolean THEN $5::integer ELSE category_id END,
+        category_ids = CASE WHEN $4::boolean THEN $5::int[] ELSE category_ids END,
         is_active = COALESCE($6, is_active),
         valid_from = CASE WHEN $7::boolean THEN $8::timestamptz ELSE valid_from END,
         valid_until = CASE WHEN $9::boolean THEN $10::timestamptz ELSE valid_until END,
@@ -3957,8 +3988,8 @@ export async function updateCampaign(
       id,
       companyId,
       patch.title ?? null,
-      patch.categoryId !== undefined,
-      patch.categoryId ?? null,
+      patch.categoryIds !== undefined,
+      patch.categoryIds ?? [],
       patch.isActive ?? null,
       patch.validFrom !== undefined,
       patch.validFrom ?? null,
@@ -3967,7 +3998,7 @@ export async function updateCampaign(
     ]
   );
   if (!result.rowCount) return null;
-  return getCampaignById(id, companyId);
+  return loadCampaignRow(id, companyId);
 }
 
 export async function updateCampaignImage(
@@ -3985,7 +4016,7 @@ export async function updateCampaignImage(
     [id, companyId, imageUrl]
   );
   if (!result.rowCount) return null;
-  return getCampaignById(id, companyId);
+  return loadCampaignRow(id, companyId);
 }
 
 export async function deleteCampaign(
@@ -4047,6 +4078,7 @@ async function mapOrder(orderRow: OrderRow) {
     geoLabel: orderRow.geoLabel,
     deliveryLatitude: orderRow.deliveryLatitude,
     deliveryLongitude: orderRow.deliveryLongitude,
+    cancellationReason: orderRow.cancellationReason ?? null,
     createdDate: orderRow.createdDate,
     updatedDate: orderRow.updatedDate,
     items: itemsResult.rows,
@@ -4302,6 +4334,7 @@ const ORDER_SELECT_COLUMNS = `
   o.geo_label AS "geoLabel",
   o.delivery_latitude AS "deliveryLatitude",
   o.delivery_longitude AS "deliveryLongitude",
+  o.cancellation_reason AS "cancellationReason",
   o.created_date AS "createdDate",
   o.updated_date AS "updatedDate"
 `;
@@ -4475,7 +4508,8 @@ export async function updateOrderStatus(
   publicId: string,
   companyId: number,
   status: OrderStatus,
-  assignedRiderUserId?: number | null
+  assignedRiderUserId?: number | null,
+  cancellationReason?: string | null
 ) {
   // Resolve rider snapshot so orders keep name even if rider user is deleted.
   let riderName: string | null = null;
@@ -4490,6 +4524,14 @@ export async function updateOrderStatus(
     riderName = rider.rows[0].fullName || rider.rows[0].email;
   }
 
+  // Only persist a reason when cancelling; clear it on any non-cancel transition.
+  const reasonToWrite =
+    status === 'cancelled'
+      ? (cancellationReason && cancellationReason.trim()
+          ? cancellationReason.trim().slice(0, 500)
+          : null)
+      : null;
+
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
@@ -4497,11 +4539,12 @@ export async function updateOrderStatus(
         status = $3,
         assigned_rider_user_id = $4,
         assigned_rider = $5,
+        cancellation_reason = $6,
         updated_date = NOW()
       WHERE public_id = $1 AND company_id = $2
       RETURNING id;
     `,
-    [publicId, companyId, status, assignedRiderUserId ?? null, riderName]
+    [publicId, companyId, status, assignedRiderUserId ?? null, riderName, reasonToWrite]
   );
   if (!updated.rowCount) return null;
   return getOrderByPublicId(publicId);

@@ -7724,6 +7724,25 @@ textarea {
   white-space: pre-line;
 }
 
+.confirm-dialog__textarea {
+  margin-top: 12px;
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  border-radius: var(--r-md, 10px);
+  border: 1.5px solid var(--c-border, #d1d5db);
+  background: var(--c-surface-solid, #fff);
+  color: var(--c-ink, #0d1b3e);
+  font: inherit;
+  font-size: 0.92rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.confirm-dialog__textarea:focus {
+  outline: none;
+  border-color: var(--c-accent, #4f46e5);
+}
+
 .confirm-dialog__actions {
   display: flex;
   justify-content: flex-end;
@@ -9128,6 +9147,7 @@ body {
 }
 .campaign-create__field input[type="text"],
 .campaign-create__field input[type="datetime-local"],
+.campaign-create__field input[type="date"],
 .campaign-create__field select {
   padding: 8px 10px;
   border-radius: var(--r-md);
@@ -9136,6 +9156,30 @@ body {
   font-size: 14px;
 }
 .campaign-create__hint { color: var(--c-muted); font-size: 12px; }
+.campaign-create__chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 6px;
+}
+.campaign-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1.5px solid var(--c-border);
+  background: var(--c-surface-solid);
+  color: var(--c-ink);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.campaign-chip:hover { border-color: var(--c-accent, #4f46e5); }
+.campaign-chip--on {
+  background: var(--c-accent, #4f46e5);
+  color: white;
+  border-color: var(--c-accent, #4f46e5);
+}
+.campaign-chip--static { cursor: default; }
+.campaign-card__chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
 
 .campaign-grid {
   display: grid;
@@ -9237,3 +9281,24 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 .campaign-popup__close:hover { background: rgba(0,0,0,0.75); }
+.campaign-popup__chips {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 14px 16px 18px;
+  justify-content: center;
+  background: var(--c-surface-solid, #fff);
+}
+.campaign-popup__chip {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--c-accent, #4f46e5);
+  background: var(--c-accent, #4f46e5);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.campaign-popup__chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}

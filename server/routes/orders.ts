@@ -283,11 +283,15 @@ router.post('/:publicId/cancel', async (req, res) => {
         .json({ error: 'This order can no longer be cancelled' });
     }
 
+    const reason = typeof (req.body as { cancellationReason?: unknown })?.cancellationReason === 'string'
+      ? ((req.body as { cancellationReason?: string }).cancellationReason ?? null)
+      : null;
     const order = await updateOrderStatus(
       publicId,
       existing.companyId,
       'cancelled',
-      existing.assignedRiderUserId
+      existing.assignedRiderUserId,
+      reason
     );
 
     if (!order) {
@@ -325,9 +329,10 @@ router.patch(
         return res.status(400).json({ error: 'Order ID is required' });
       }
 
-      const { status, assignedRiderUserId } = req.body as {
+      const { status, assignedRiderUserId, cancellationReason } = req.body as {
         status?: OrderStatus;
         assignedRiderUserId?: number | null;
+        cancellationReason?: string | null;
       };
 
       if (!status || !ORDER_STATUS_VALUES.includes(status)) {
@@ -338,7 +343,8 @@ router.patch(
         publicId,
         req.user.companyId,
         status,
-        assignedRiderUserId ?? null
+        assignedRiderUserId ?? null,
+        cancellationReason ?? null
       );
 
       if (!order) {

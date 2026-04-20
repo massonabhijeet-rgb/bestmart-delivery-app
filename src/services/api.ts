@@ -141,6 +141,7 @@ export interface Order {
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
+  cancellationReason: string | null;
   createdDate: string;
   updatedDate: string;
   items: OrderItem[];
@@ -572,14 +573,19 @@ export async function apiUploadCategoryImage(id: number, file: File) {
 }
 
 // ── Campaign overlay (festivals / special days) ──
+export interface CampaignCategoryRef {
+  id: number;
+  slug: string;
+  name: string;
+}
+
 export interface Campaign {
   id: number;
   companyId: number;
   title: string;
   imageUrl: string | null;
-  categoryId: number | null;
-  categorySlug: string | null;
-  categoryName: string | null;
+  categoryIds: number[];
+  categories: CampaignCategoryRef[];
   isActive: boolean;
   validFrom: string | null;
   validUntil: string | null;
@@ -589,7 +595,7 @@ export interface Campaign {
 
 export interface CampaignInput {
   title: string;
-  categoryId: number | null;
+  categoryIds: number[];
   isActive: boolean;
   validFrom: string | null;
   validUntil: string | null;
@@ -893,11 +899,16 @@ export async function apiListOrders() {
 export async function apiUpdateOrderStatus(
   publicId: string,
   status: OrderStatus,
-  assignedRiderUserId?: number | null
+  assignedRiderUserId?: number | null,
+  cancellationReason?: string | null
 ) {
   const data = await request<{ order: Order }>(`/orders/${publicId}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status, assignedRiderUserId: assignedRiderUserId ?? null }),
+    body: JSON.stringify({
+      status,
+      assignedRiderUserId: assignedRiderUserId ?? null,
+      cancellationReason: cancellationReason ?? null,
+    }),
   });
   return data.order;
 }

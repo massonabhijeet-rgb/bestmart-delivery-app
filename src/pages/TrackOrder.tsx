@@ -216,6 +216,12 @@ function TrackOrder({ trackingCode, onBackToStore, onTrack }: TrackOrderProps) {
               <div className="message message--error">
                 This order has been cancelled. If you didn't cancel it yourself, the store may
                 have cancelled it — please contact support if you need help.
+                {order.cancellationReason ? (
+                  <>
+                    <br />
+                    <strong>Reason:</strong> {order.cancellationReason}
+                  </>
+                ) : null}
               </div>
             ) : null}
 

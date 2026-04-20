@@ -264,16 +264,13 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
     try { sessionStorage.setItem('bm:campaign:dismissed', '1'); } catch {}
   }
 
-  function handleCampaignTap() {
-    const cid = activeCampaign?.categoryId ?? null;
-    if (cid != null) {
-      const match = categoryRows.find((c) => c.id === cid);
-      if (match) {
-        setCategory(match.name);
-        setSearch('');
-        setBrandFilter(null);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
+  function handleCampaignCategoryTap(categoryId: number) {
+    const match = categoryRows.find((c) => c.id === categoryId);
+    if (match) {
+      setCategory(match.name);
+      setSearch('');
+      setBrandFilter(null);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
     dismissCampaign();
   }
@@ -971,8 +968,22 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
               src={activeCampaign.imageUrl}
               alt={activeCampaign.title || 'Special offer'}
               className="campaign-popup__image"
-              onClick={handleCampaignTap}
+              onClick={dismissCampaign}
             />
+            {activeCampaign.categories && activeCampaign.categories.length > 0 && (
+              <div className="campaign-popup__chips">
+                {activeCampaign.categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    className="campaign-popup__chip"
+                    onClick={() => handleCampaignCategoryTap(cat.id)}
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

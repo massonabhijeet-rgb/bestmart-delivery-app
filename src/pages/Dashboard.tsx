@@ -4,7 +4,7 @@ import { fuzzyRank } from '../lib/fuzzySearch';
 import { playOrderAlert, unlockAudio } from '../lib/sound';
 import { useOrderSocket } from '../hooks/useOrderSocket';
 import type { RiderLocation } from '../hooks/useOrderSocket';
-import { confirm, pickRider } from '../components/ConfirmDialog';
+import { confirm, pickRider, rejectOrder } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import LazyMount from '../components/LazyMount';
 import {
@@ -299,11 +299,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [campaignsLoaded, setCampaignsLoaded] = useState(false);
   const [campaignForm, setCampaignForm] = useState<{
     title: string;
-    categoryId: string;
+    categoryIds: number[];
     isActive: boolean;
     validFrom: string;
     validUntil: string;
-  }>({ title: '', categoryId: '', isActive: true, validFrom: '', validUntil: '' });
+  }>({ title: '', categoryIds: [], isActive: true, validFrom: '', validUntil: '' });
   const [campaignImageFile, setCampaignImageFile] = useState<File | null>(null);
   const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [campaignBusyId, setCampaignBusyId] = useState<number | null>(null);
@@ -978,22 +978,24 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }
 
-  async function handleAdminCancel(publicId: string) {
-    const confirmed = await confirm({
-      title: 'Cancel this order?',
-      message: `Order ${publicId} will be marked cancelled. The customer will see the cancellation on their tracking page.`,
-      confirmLabel: 'Cancel Order',
+  async function handleAdminReject(publicId: string) {
+    const reason = await rejectOrder({
+      title: `Reject order ${publicId}?`,
+      message:
+        'The customer will see this order as rejected on their tracking page along with your reason.',
+      confirmLabel: 'Reject Order',
       cancelLabel: 'Keep Order',
-      tone: 'danger',
+      placeholder: 'e.g. Item out of stock, delivery area not serviced',
+      required: true,
     });
-    if (!confirmed) return;
+    if (reason == null) return;
     setCancellingOrderId(publicId);
     try {
-      await apiUpdateOrderStatus(publicId, 'cancelled', riderDrafts[publicId] || null);
-      setNotice(`Order ${publicId} cancelled. Customer has been notified.`);
+      await apiUpdateOrderStatus(publicId, 'cancelled', riderDrafts[publicId] || null, reason);
+      setNotice(`Order ${publicId} rejected. Customer has been notified.`);
       await loadDashboard();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to cancel order');
+      setError(err instanceof Error ? err.message : 'Unable to reject order');
     } finally {
       setCancellingOrderId(null);
     }
@@ -1018,6 +1020,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   async function handleStatusChange(publicId: string, status: OrderStatus) {
     let riderIdForUpdate: number | null = riderDrafts[publicId] || null;
+
+    if (status === 'cancelled') {
+      await handleAdminReject(publicId);
+      return;
+    }
 
     if (status === 'out_for_delivery') {
       if (riders.length === 0) {
@@ -2689,10 +2696,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             <button
                               type="button"
                               className="danger-button"
-                              onClick={() => handleAdminCancel(order.publicId)}
+                              onClick={() => handleAdminReject(order.publicId)}
                               disabled={cancellingOrderId === order.publicId}
                             >
-                              {cancellingOrderId === order.publicId ? 'Cancelling…' : 'Cancel Order'}
+                              {cancellingOrderId === order.publicId ? 'Rejecting…' : 'Reject Order'}
                             </button>
                           )}
                       </div>
@@ -5599,7 +5606,6 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     setError('');
     setNotice('');
     const title = campaignForm.title.trim();
-    const categoryId = campaignForm.categoryId ? Number(campaignForm.categoryId) : null;
     if (!campaignImageFile) {
       setError('Pick an overlay image first.');
       return;
@@ -5608,14 +5614,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     try {
       const created = await apiCreateCampaign({
         title,
-        categoryId,
+        categoryIds: campaignForm.categoryIds,
         isActive: campaignForm.isActive,
         validFrom: campaignForm.validFrom ? new Date(campaignForm.validFrom).toISOString() : null,
         validUntil: campaignForm.validUntil ? new Date(campaignForm.validUntil).toISOString() : null,
       });
       const withImage = await apiUploadCampaignImage(created.id, campaignImageFile);
       setCampaigns((prev) => [withImage, ...prev]);
-      setCampaignForm({ title: '', categoryId: '', isActive: true, validFrom: '', validUntil: '' });
+      setCampaignForm({ title: '', categoryIds: [], isActive: true, validFrom: '', validUntil: '' });
       setCampaignImageFile(null);
       setNotice('Overlay created.');
     } catch (err) {
@@ -5697,24 +5703,42 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 placeholder="e.g. Diwali Deals"
               />
             </label>
-            <label className="campaign-create__field">
-              <span>Linked category</span>
-              <select
-                value={campaignForm.categoryId}
-                onChange={(e) => setCampaignForm((f) => ({ ...f, categoryId: e.target.value }))}
-              >
-                <option value="">— None —</option>
-                {visibleCategories.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </label>
+          </div>
+          <div className="campaign-create__row">
+            <div className="campaign-create__field campaign-create__field--wide">
+              <span>Linked categories (tap to toggle)</span>
+              <div className="campaign-create__chips">
+                {visibleCategories.length === 0 && (
+                  <small className="campaign-create__hint">No categories available.</small>
+                )}
+                {visibleCategories.map((c) => {
+                  const selected = campaignForm.categoryIds.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`campaign-chip${selected ? ' campaign-chip--on' : ''}`}
+                      onClick={() =>
+                        setCampaignForm((f) => ({
+                          ...f,
+                          categoryIds: selected
+                            ? f.categoryIds.filter((id) => id !== c.id)
+                            : [...f.categoryIds, c.id],
+                        }))
+                      }
+                    >
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
           <div className="campaign-create__row">
             <label className="campaign-create__field">
               <span>Active from</span>
               <input
-                type="datetime-local"
+                type="date"
                 value={campaignForm.validFrom}
                 onChange={(e) => setCampaignForm((f) => ({ ...f, validFrom: e.target.value }))}
               />
@@ -5722,7 +5746,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             <label className="campaign-create__field">
               <span>Active until</span>
               <input
-                type="datetime-local"
+                type="date"
                 value={campaignForm.validUntil}
                 onChange={(e) => setCampaignForm((f) => ({ ...f, validUntil: e.target.value }))}
               />
@@ -5792,7 +5816,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 <div className="campaign-card__body">
                   <div className="campaign-card__title">{c.title || 'Untitled'}</div>
                   <div className="campaign-card__meta">
-                    {c.categoryName ? `→ ${c.categoryName}` : 'No linked category'}
+                    {c.categories && c.categories.length > 0 ? (
+                      <div className="campaign-card__chips">
+                        {c.categories.map((cat) => (
+                          <span key={cat.id} className="campaign-chip campaign-chip--static">
+                            {cat.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      'No linked categories'
+                    )}
                   </div>
                   {(c.validFrom || c.validUntil) && (
                     <div className="campaign-card__meta">

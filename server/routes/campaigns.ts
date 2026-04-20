@@ -90,23 +90,24 @@ router.post(
       }
       const body = req.body as {
         title?: string;
-        categoryId?: number | null;
+        categoryIds?: unknown;
         isActive?: boolean;
         validFrom?: string | null;
         validUntil?: string | null;
       };
       const title = String(body.title ?? '').trim().slice(0, 120);
-      const categoryId =
-        body.categoryId === null || body.categoryId === undefined
-          ? null
-          : Number(body.categoryId);
+      const categoryIds = Array.isArray(body.categoryIds)
+        ? body.categoryIds
+            .map((v) => Number(v))
+            .filter((n): n is number => Number.isFinite(n) && n > 0)
+        : [];
       const isActive = typeof body.isActive === 'boolean' ? body.isActive : true;
       const validFrom = parseDate(body.validFrom) ?? null;
       const validUntil = parseDate(body.validUntil) ?? null;
 
       const campaign = await createCampaign(req.user.companyId, {
         title,
-        categoryId: Number.isFinite(categoryId) ? (categoryId as number) : null,
+        categoryIds,
         isActive,
         validFrom,
         validUntil,
@@ -136,21 +137,19 @@ router.put(
       }
       const body = req.body as {
         title?: string;
-        categoryId?: number | null;
+        categoryIds?: unknown;
         isActive?: boolean;
         validFrom?: string | null;
         validUntil?: string | null;
       };
       const patch: Parameters<typeof updateCampaign>[2] = {};
       if (typeof body.title === 'string') patch.title = body.title.trim().slice(0, 120);
-      if ('categoryId' in body) {
-        const cid = body.categoryId;
-        patch.categoryId =
-          cid === null || cid === undefined
-            ? null
-            : Number.isFinite(Number(cid))
-              ? Number(cid)
-              : null;
+      if ('categoryIds' in body) {
+        patch.categoryIds = Array.isArray(body.categoryIds)
+          ? body.categoryIds
+              .map((v) => Number(v))
+              .filter((n): n is number => Number.isFinite(n) && n > 0)
+          : [];
       }
       if (typeof body.isActive === 'boolean') patch.isActive = body.isActive;
       const from = parseDate(body.validFrom);

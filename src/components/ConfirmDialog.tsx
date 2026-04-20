@@ -119,6 +119,118 @@ export function ConfirmHost() {
   );
 }
 
+export interface RejectReasonOptions {
+  title?: string;
+  message?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  placeholder?: string;
+  required?: boolean;
+}
+
+type RejectReasonOpener = (opts: RejectReasonOptions) => Promise<string | null>;
+let currentRejectReasonOpener: RejectReasonOpener | null = null;
+
+// Returns the trimmed reason, or null if the admin cancelled.
+export function rejectOrder(opts: RejectReasonOptions = {}): Promise<string | null> {
+  if (!currentRejectReasonOpener) {
+    const raw = window.prompt(opts.message ?? 'Reason for rejection?');
+    return Promise.resolve(raw != null ? raw.trim() : null);
+  }
+  return currentRejectReasonOpener(opts);
+}
+
+interface PendingRejectReason {
+  opts: RejectReasonOptions;
+  resolve: (answer: string | null) => void;
+}
+
+export function RejectReasonHost() {
+  const [pending, setPending] = useState<PendingRejectReason | null>(null);
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    currentRejectReasonOpener = (opts) =>
+      new Promise((resolve) => {
+        setReason('');
+        setPending({ opts, resolve });
+      });
+    return () => {
+      currentRejectReasonOpener = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pending) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        pending.resolve(null);
+        setPending(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pending]);
+
+  if (!pending) return null;
+
+  const { opts } = pending;
+  const required = opts.required ?? true;
+  const trimmed = reason.trim();
+  const canSubmit = required ? trimmed.length > 0 : true;
+
+  const close = (answer: string | null) => {
+    pending.resolve(answer);
+    setPending(null);
+  };
+
+  return (
+    <div
+      className="confirm-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close(null);
+      }}
+    >
+      <div className="confirm-dialog confirm-dialog--danger">
+        <div className="confirm-dialog__body">
+          <h3 className="confirm-dialog__title">{opts.title ?? 'Reject order'}</h3>
+          <p className="confirm-dialog__message">
+            {opts.message ?? 'Let the customer know why this order is being rejected.'}
+          </p>
+          <textarea
+            className="confirm-dialog__textarea"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={opts.placeholder ?? 'e.g. Item out of stock'}
+            rows={3}
+            maxLength={500}
+            autoFocus
+          />
+        </div>
+        <div className="confirm-dialog__actions">
+          <button
+            type="button"
+            className="confirm-dialog__btn confirm-dialog__btn--ghost"
+            onClick={() => close(null)}
+          >
+            {opts.cancelLabel ?? 'Keep Order'}
+          </button>
+          <button
+            type="button"
+            className="confirm-dialog__btn confirm-dialog__btn--primary confirm-dialog__btn--danger"
+            disabled={!canSubmit}
+            onClick={() => close(trimmed)}
+          >
+            {opts.confirmLabel ?? 'Reject Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface PendingRiderPick {
   opts: PickRiderOptions;
   resolve: (answer: number | null) => void;
