@@ -8349,6 +8349,147 @@ textarea {
   background: #b85f00 !important;
 }
 
+.rider-order-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rider-order-card__upi-btn {
+  width: 100%;
+  justify-content: center;
+  background: #eef9f0;
+  border: 1px solid #97d4a6;
+  color: #115e2a;
+  font-weight: 600;
+}
+
+.rider-order-card__upi-btn:hover:not(:disabled) {
+  background: #daf0de;
+}
+
+.rider-order-card__paid-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  background: #e8f6ec;
+  color: #1b6b32;
+  border: 1px solid #b5dcbf;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  align-self: flex-start;
+}
+
+.rider-upi-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 1000;
+}
+
+.rider-upi-modal {
+  background: #ffffff;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 380px;
+  padding: 1.2rem 1.2rem 1.4rem;
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.rider-upi-modal__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.rider-upi-modal__head h2 {
+  margin: 0.15rem 0 0;
+  font-size: 1.05rem;
+}
+
+.rider-upi-modal__close {
+  background: transparent;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: #64748b;
+  padding: 0.2rem 0.4rem;
+}
+
+.rider-upi-modal__amount {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #0f172a;
+  text-align: center;
+}
+
+.rider-upi-modal__qr-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 0.6rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.rider-upi-modal__qr {
+  width: 240px;
+  height: 240px;
+  object-fit: contain;
+}
+
+.rider-upi-modal__hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #475569;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.rider-upi-modal__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.8rem;
+  background: #fff7e6;
+  color: #92570a;
+  border: 1px solid #fbd49b;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.rider-upi-modal__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: rider-upi-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes rider-upi-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+
+.rider-upi-modal__cancel {
+  width: 100%;
+  justify-content: center;
+}
+
 .rider-order-card__items summary {
   cursor: pointer;
   font-size: 0.85rem;

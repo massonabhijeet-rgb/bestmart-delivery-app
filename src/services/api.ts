@@ -1003,6 +1003,13 @@ export async function apiRiderDeliver(publicId: string, otp: string) {
   return data.order;
 }
 
+export async function apiRiderCollectUpi(publicId: string) {
+  return request<{ qrId: string; qrImageUrl: string; amountCents: number }>(
+    `/rider/orders/${publicId}/collect-upi`,
+    { method: 'POST' }
+  );
+}
+
 export async function apiUpdateRiderLocation(latitude: number, longitude: number) {
   await request<{ ok: boolean }>('/rider/location', {
     method: 'PATCH',

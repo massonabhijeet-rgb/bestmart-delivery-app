@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import {
+  attachRazorpayQrToOrder,
   getOrderByPublicId,
   getOrderOwnerUserId,
   listRiderOrders,
   updateOrderStatus,
 } from '../db.js';
 import { notifyOrderStatus } from '../push.js';
+import { createRazorpayQrCode, razorpayConfigured } from '../razorpay.js';
 import { broadcast, updateRiderLocation } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
@@ -89,6 +91,62 @@ router.post(
     } catch (error) {
       console.error('Rider deliver error:', error);
       return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// Rider-initiated UPI collection: mints a Razorpay QR (fixed-amount,
+// single-use) tied to the order. The rider shows the QR on their device
+// to the customer, who scans + pays with any UPI app. On
+// `qr_code.credited` the webhook flips payment_status to paid and (since
+// the rider is already on site) advances the order to delivered.
+router.post(
+  '/orders/:publicId/collect-upi',
+  authenticateToken,
+  requireRole('rider'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      if (!razorpayConfigured()) {
+        return res.status(503).json({ error: 'UPI collection is not available right now.' });
+      }
+      const publicId = getRouteParam(req.params.publicId);
+      if (!publicId) {
+        return res.status(400).json({ error: 'Order ID is required' });
+      }
+      const existing = await getOrderByPublicId(publicId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (existing.assignedRiderUserId !== req.user.id) {
+        return res.status(403).json({ error: 'This order is not assigned to you' });
+      }
+      if (existing.status === 'delivered' || existing.status === 'cancelled') {
+        return res.status(400).json({ error: 'Order is already closed' });
+      }
+      if (existing.paymentStatus === 'paid') {
+        return res.status(400).json({ error: 'This order is already paid' });
+      }
+
+      const qr = await createRazorpayQrCode({
+        amountCents: existing.totalCents,
+        description: `BestMart order ${existing.publicId}`,
+        notes: { orderId: existing.publicId },
+      });
+
+      await attachRazorpayQrToOrder(existing.publicId, existing.companyId, qr.id);
+
+      return res.json({
+        qrId: qr.id,
+        qrImageUrl: qr.imageUrl,
+        amountCents: qr.amountCents,
+      });
+    } catch (error) {
+      console.error('Rider collect-upi error:', error);
+      const message = error instanceof Error ? error.message : 'Unable to generate UPI QR';
+      return res.status(500).json({ error: message });
     }
   }
 );

@@ -96,6 +96,63 @@ interface RazorpayUpiIntentResponse {
   [key: string]: unknown;
 }
 
+// Dynamic UPI QR: rider shows this to the customer in person so they can
+// scan with any UPI app. Fixed amount, single-use — the QR auto-closes
+// once Razorpay captures the payment and fires `qr_code.credited`.
+interface CreateQrCodeArgs {
+  amountCents: number;
+  name?: string;
+  description?: string;
+  notes?: Record<string, string>;
+}
+
+interface RazorpayQrCodeResponse {
+  id: string;
+  entity: 'qr_code';
+  image_url: string;
+  short_url?: string;
+  status: string;
+  payment_amount: number;
+  notes?: Record<string, string>;
+}
+
+export async function createRazorpayQrCode(args: CreateQrCodeArgs): Promise<{
+  id: string;
+  imageUrl: string;
+  amountCents: number;
+}> {
+  if (!razorpayConfigured()) {
+    throw new Error('Razorpay is not configured on the server.');
+  }
+  const auth = Buffer.from(`${KEY_ID}:${KEY_SECRET}`).toString('base64');
+  const res = await fetch('https://api.razorpay.com/v1/payments/qr_codes', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Basic ${auth}`,
+    },
+    body: JSON.stringify({
+      type: 'upi_qr',
+      name: args.name ?? 'BestMart',
+      usage: 'single_use',
+      fixed_amount: true,
+      payment_amount: args.amountCents,
+      description: args.description ?? 'BestMart order',
+      notes: args.notes ?? {},
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Razorpay QR create failed: ${res.status} ${text}`);
+  }
+  const payload = (await res.json()) as RazorpayQrCodeResponse;
+  return {
+    id: payload.id,
+    imageUrl: payload.image_url,
+    amountCents: payload.payment_amount,
+  };
+}
+
 export async function createUpiIntentPayment(args: CreateUpiIntentArgs): Promise<{
   paymentId: string | null;
   intentUrl: string;

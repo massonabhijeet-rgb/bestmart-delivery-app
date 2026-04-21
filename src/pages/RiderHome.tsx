@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiListRiderOrders, apiRiderDeliver, apiUpdateRiderLocation } from '../services/api';
+import {
+  apiListRiderOrders,
+  apiRiderCollectUpi,
+  apiRiderDeliver,
+  apiUpdateRiderLocation,
+} from '../services/api';
 import type { Order, User } from '../services/api';
 import { formatCurrency, formatRelativeTime, labelizeStatus } from '../lib/format';
 import { useOrderSocket } from '../hooks/useOrderSocket';
@@ -36,6 +41,10 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
   const [riderPos, setRiderPos] = useState<{ latitude: number; longitude: number } | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'pending' | 'active' | 'denied' | 'unavailable'>('pending');
   const [deliveringId, setDeliveringId] = useState<string | null>(null);
+  const [collectingId, setCollectingId] = useState<string | null>(null);
+  const [collectState, setCollectState] = useState<
+    { publicId: string; qrImageUrl: string; amountCents: number } | null
+  >(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -100,6 +109,21 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
     onOrderUpdated: (updated) => {
       if (updated.assignedRiderUserId !== user.id) return;
       const existing = orders.find((o) => o.publicId === updated.publicId);
+      if (
+        collectState &&
+        collectState.publicId === updated.publicId &&
+        updated.paymentStatus === 'paid'
+      ) {
+        setCollectState(null);
+        showToast(
+          `✅ UPI payment received for ${updated.publicId}`,
+          'Payment received',
+          `Order ${updated.publicId} marked paid.`,
+        );
+        if (updated.status === 'delivered') {
+          void load();
+        }
+      }
       if (!existing) {
         showToast(
           `🛵 New delivery assigned: ${updated.publicId} · ${updated.customerName}`,
@@ -197,6 +221,24 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
       setError(err instanceof Error ? err.message : 'Unable to mark delivered');
     } finally {
       setDeliveringId(null);
+    }
+  }
+
+  async function handleCollectUpi(order: Order) {
+    setCollectingId(order.publicId);
+    setError('');
+    setNotice('');
+    try {
+      const result = await apiRiderCollectUpi(order.publicId);
+      setCollectState({
+        publicId: order.publicId,
+        qrImageUrl: result.qrImageUrl,
+        amountCents: result.amountCents,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to generate UPI QR');
+    } finally {
+      setCollectingId(null);
     }
   }
 
@@ -372,18 +414,86 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
                   (outside the {DELIVER_RADIUS_METERS} m zone). Confirm again to deliver from here.
                 </div>
               ) : null}
-              <button
-                type="button"
-                className={`primary-button primary-button--wide${hasCoords && !withinRange ? ' primary-button--caution' : ''}`}
-                disabled={deliveringId === order.publicId}
-                onClick={() => handleDeliver(order, distanceMeters)}
-              >
-                {deliveringId === order.publicId ? 'Marking…' : 'Mark Delivered'}
-              </button>
+              <div className="rider-order-card__actions">
+                {order.paymentStatus !== 'paid' ? (
+                  <button
+                    type="button"
+                    className="ghost-button rider-order-card__upi-btn"
+                    disabled={collectingId === order.publicId}
+                    onClick={() => handleCollectUpi(order)}
+                  >
+                    {collectingId === order.publicId ? 'Generating…' : '📱 Collect via UPI'}
+                  </button>
+                ) : (
+                  <span className="rider-order-card__paid-tag">✅ Paid</span>
+                )}
+                <button
+                  type="button"
+                  className={`primary-button primary-button--wide${hasCoords && !withinRange ? ' primary-button--caution' : ''}`}
+                  disabled={deliveringId === order.publicId}
+                  onClick={() => handleDeliver(order, distanceMeters)}
+                >
+                  {deliveringId === order.publicId ? 'Marking…' : 'Mark Delivered'}
+                </button>
+              </div>
             </article>
           );
         })}
       </div>
+
+      {collectState ? (
+        <div
+          className="rider-upi-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setCollectState(null)}
+        >
+          <div
+            className="rider-upi-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="rider-upi-modal__head">
+              <div>
+                <p className="eyebrow">UPI Collection</p>
+                <h2>Order {collectState.publicId}</h2>
+              </div>
+              <button
+                type="button"
+                className="rider-upi-modal__close"
+                onClick={() => setCollectState(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </header>
+            <p className="rider-upi-modal__amount">
+              {formatCurrency(collectState.amountCents)}
+            </p>
+            <div className="rider-upi-modal__qr-wrap">
+              <img
+                src={collectState.qrImageUrl}
+                alt={`UPI QR for order ${collectState.publicId}`}
+                className="rider-upi-modal__qr"
+              />
+            </div>
+            <p className="rider-upi-modal__hint">
+              Ask the customer to scan with any UPI app (PhonePe, GPay, Paytm, BHIM).
+              Amount is locked — they can't change it.
+            </p>
+            <div className="rider-upi-modal__status">
+              <span className="rider-upi-modal__dot" />
+              Waiting for payment…
+            </div>
+            <button
+              type="button"
+              className="ghost-button rider-upi-modal__cancel"
+              onClick={() => setCollectState(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

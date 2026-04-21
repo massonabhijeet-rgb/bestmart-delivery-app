@@ -8,7 +8,12 @@ import {
   verifyRazorpaySignature,
   verifyWebhookSignature,
 } from '../razorpay.js';
-import { markOrderPaidByRazorpayOrderId } from '../db.js';
+import {
+  getOrderOwnerUserId,
+  markOrderPaidByRazorpayOrderId,
+  markOrderPaidByRazorpayQrId,
+} from '../db.js';
+import { notifyOrderStatus } from '../push.js';
 import { broadcast } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
@@ -143,6 +148,11 @@ router.post('/webhook', async (req, res) => {
             order_id?: string;
           };
         };
+        qr_code?: {
+          entity?: {
+            id?: string;
+          };
+        };
       };
     };
     if (payload.event === 'payment.captured') {
@@ -157,6 +167,25 @@ router.post('/webhook', async (req, res) => {
         );
         if (order) {
           broadcast({ type: 'order_updated', payload: order });
+        }
+      }
+    } else if (payload.event === 'qr_code.credited') {
+      const qrEntity = payload.payload?.qr_code?.entity;
+      const paymentEntity = payload.payload?.payment?.entity;
+      const qrId = qrEntity?.id;
+      const razorpayPaymentId = paymentEntity?.id;
+      if (qrId && razorpayPaymentId) {
+        const result = await markOrderPaidByRazorpayQrId(qrId, razorpayPaymentId);
+        if (result) {
+          broadcast({ type: 'order_updated', payload: result.order });
+          if (result.deliveredNow) {
+            const ownerId = await getOrderOwnerUserId(result.order.publicId);
+            void notifyOrderStatus({
+              userId: ownerId,
+              publicId: result.order.publicId,
+              status: 'delivered',
+            });
+          }
         }
       }
     }

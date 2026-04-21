@@ -455,6 +455,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(80);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_payment_id VARCHAR(80);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_signature VARCHAR(255);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_qr_id VARCHAR(80);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(20) NOT NULL DEFAULT 'pending';
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
@@ -4770,6 +4771,55 @@ export async function markOrderPaidByRazorpayOrderId(
   );
   if (!rows.length) return null;
   return getOrderByPublicId(rows[0].publicId);
+}
+
+// Rider-collected UPI QR: on `qr_code.credited` webhook, mark the order
+// paid by its qr_id. Also auto-advance from out_for_delivery -> delivered
+// since the rider is physically with the customer when this fires.
+export async function markOrderPaidByRazorpayQrId(
+  qrId: string,
+  razorpayPaymentId: string
+) {
+  const { rows } = await pool.query<{
+    publicId: string;
+    companyId: number;
+    status: OrderStatus;
+    assignedRiderUserId: number | null;
+  }>(
+    `
+      UPDATE orders
+      SET
+        payment_status = 'paid',
+        razorpay_payment_id = COALESCE(razorpay_payment_id, $2),
+        status = CASE WHEN status = 'out_for_delivery' THEN 'delivered' ELSE status END,
+        updated_date = NOW()
+      WHERE razorpay_qr_id = $1
+        AND payment_status <> 'paid'
+      RETURNING
+        public_id AS "publicId",
+        company_id AS "companyId",
+        status,
+        assigned_rider_user_id AS "assignedRiderUserId";
+    `,
+    [qrId, razorpayPaymentId]
+  );
+  if (!rows.length) return null;
+  const meta = rows[0];
+  const order = await getOrderByPublicId(meta.publicId);
+  return order ? { order, deliveredNow: meta.status === 'delivered' } : null;
+}
+
+export async function attachRazorpayQrToOrder(
+  publicId: string,
+  companyId: number,
+  qrId: string
+) {
+  const { rowCount } = await pool.query(
+    `UPDATE orders SET razorpay_qr_id = $1, updated_date = NOW()
+     WHERE public_id = $2 AND company_id = $3`,
+    [qrId, publicId, companyId]
+  );
+  return Boolean(rowCount);
 }
 
 export async function getDashboardSummary(companyId: number) {
