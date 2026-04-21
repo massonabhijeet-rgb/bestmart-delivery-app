@@ -176,6 +176,7 @@ export interface Rider {
   email: string;
   fullName: string | null;
   phone: string | null;
+  isAvailable: boolean;
 }
 
 function getToken() {
@@ -985,8 +986,11 @@ export async function apiRejectOrderItem(
   return data.order;
 }
 
-export async function apiListRiders() {
-  const data = await request<{ riders: Rider[] }>('/auth/riders');
+export async function apiListRiders(opts: { availableOnly?: boolean } = {}) {
+  const path = opts.availableOnly
+    ? '/auth/riders?available=true'
+    : '/auth/riders';
+  const data = await request<{ riders: Rider[] }>(path);
   return data.riders;
 }
 

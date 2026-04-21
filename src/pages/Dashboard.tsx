@@ -383,7 +383,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
           apiListOrders(),
           canManageTeam ? apiListTeam() : Promise.resolve([]),
           apiListCategories(),
-          canManageCatalog ? apiListRiders() : Promise.resolve([]),
+          canManageCatalog ? apiListRiders({ availableOnly: true }) : Promise.resolve([]),
           apiListBrands(),
         ]);
       setSummary(summaryData);

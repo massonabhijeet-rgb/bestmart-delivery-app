@@ -5,8 +5,10 @@ import {
   getOrderByPublicId,
   getOrderOwnerUserId,
   listRiderOrders,
+  setRiderAvailability,
   updateOrderStatus,
 } from '../db.js';
+import { maybeRefreshRouteForRider } from '../googleMaps.js';
 import { notifyOrderStatus } from '../push.js';
 import { createRazorpayQrCode, razorpayConfigured } from '../razorpay.js';
 import { broadcast, updateRiderLocation } from '../ws.js';
@@ -152,6 +154,21 @@ router.post(
 );
 
 router.patch(
+  '/availability',
+  authenticateToken,
+  requireRole('rider'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    const { available } = req.body as { available?: boolean };
+    if (typeof available !== 'boolean') {
+      return res.status(400).json({ error: 'available (boolean) is required' });
+    }
+    await setRiderAvailability(req.user.id, available);
+    return res.json({ ok: true, available });
+  }
+);
+
+router.patch(
   '/location',
   authenticateToken,
   requireRole('rider'),
@@ -171,6 +188,10 @@ router.patch(
       longitude,
       updatedAt: new Date().toISOString(),
     });
+    // Fire-and-forget: (re)cache driving route for this rider's active
+    // deliveries. Throttled by distance inside the helper so most pings are
+    // no-ops.
+    void maybeRefreshRouteForRider(req.user.id, latitude, longitude);
     return res.json({ ok: true });
   }
 );

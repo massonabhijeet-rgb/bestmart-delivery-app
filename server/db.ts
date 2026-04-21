@@ -95,6 +95,9 @@ export interface OrderRecord {
   razorpayOrderId: string | null;
   razorpayPaymentId: string | null;
   paymentStatus: string;
+  routePolyline: string | null;
+  routeDurationSec: number | null;
+  routeDistanceM: number | null;
   createdDate: string;
   updatedDate: string;
   items: Array<{
@@ -298,6 +301,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(255);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 VARCHAR(16) UNIQUE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin', 'editor', 'viewer', 'rider'));
@@ -457,6 +461,12 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_signature VARCHAR(255);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_qr_id VARCHAR(80);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(20) NOT NULL DEFAULT 'pending';
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_polyline TEXT;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_duration_sec INTEGER;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_distance_m INTEGER;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_origin_lat DOUBLE PRECISION;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_origin_lng DOUBLE PRECISION;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS routed_at TIMESTAMPTZ;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -1737,23 +1747,40 @@ export interface UserAddress {
   lastUsedDate: string;
 }
 
-export async function listRiders(companyId: number) {
+export async function listRiders(
+  companyId: number,
+  opts: { onlyAvailable?: boolean } = {}
+) {
+  const availableFilter = opts.onlyAvailable ? 'AND is_available = TRUE' : '';
   const result = await pool.query<{
     id: number;
     uid: string;
     email: string;
     fullName: string | null;
     phone: string | null;
+    isAvailable: boolean;
   }>(
     `
-      SELECT id, uid, email, full_name AS "fullName", phone
+      SELECT id, uid, email, full_name AS "fullName", phone,
+             is_available AS "isAvailable"
       FROM users
-      WHERE company_id = $1 AND role = 'rider'
+      WHERE company_id = $1 AND role = 'rider' ${availableFilter}
       ORDER BY COALESCE(full_name, email);
     `,
     [companyId]
   );
   return result.rows;
+}
+
+export async function setRiderAvailability(
+  userId: number,
+  available: boolean
+): Promise<void> {
+  await pool.query(
+    `UPDATE users SET is_available = $2
+     WHERE id = $1 AND role = 'rider';`,
+    [userId, available]
+  );
 }
 
 export async function listRiderOrders(riderUserId: number) {
@@ -4143,6 +4170,9 @@ async function mapOrder(orderRow: OrderRow) {
     razorpayOrderId: orderRow.razorpayOrderId ?? null,
     razorpayPaymentId: orderRow.razorpayPaymentId ?? null,
     paymentStatus: orderRow.paymentStatus ?? 'pending',
+    routePolyline: orderRow.routePolyline ?? null,
+    routeDurationSec: orderRow.routeDurationSec ?? null,
+    routeDistanceM: orderRow.routeDistanceM ?? null,
     createdDate: orderRow.createdDate,
     updatedDate: orderRow.updatedDate,
     items: itemsResult.rows,
@@ -4411,6 +4441,9 @@ const ORDER_SELECT_COLUMNS = `
   o.razorpay_order_id AS "razorpayOrderId",
   o.razorpay_payment_id AS "razorpayPaymentId",
   o.payment_status AS "paymentStatus",
+  o.route_polyline AS "routePolyline",
+  o.route_duration_sec AS "routeDurationSec",
+  o.route_distance_m AS "routeDistanceM",
   o.created_date AS "createdDate",
   o.updated_date AS "updatedDate"
 `;
@@ -4923,4 +4956,84 @@ export async function removeUserDeviceTokens(tokens: string[]) {
   await pool.query(`DELETE FROM user_devices WHERE fcm_token = ANY($1::text[])`, [
     tokens,
   ]);
+}
+
+// Active delivery for a rider that still needs a cached route polyline.
+// Only one order per rider at a time is expected in practice, but the
+// return type is a list to keep the caller simple.
+export interface ActiveDeliveryForRoute {
+  publicId: string;
+  deliveryLatitude: number;
+  deliveryLongitude: number;
+  routeOriginLat: number | null;
+  routeOriginLng: number | null;
+}
+
+export async function listActiveDeliveriesForRider(
+  riderId: number
+): Promise<ActiveDeliveryForRoute[]> {
+  const { rows } = await pool.query<{
+    publicId: string;
+    deliveryLatitude: number | null;
+    deliveryLongitude: number | null;
+    routeOriginLat: number | null;
+    routeOriginLng: number | null;
+  }>(
+    `
+      SELECT
+        public_id AS "publicId",
+        delivery_latitude AS "deliveryLatitude",
+        delivery_longitude AS "deliveryLongitude",
+        route_origin_lat AS "routeOriginLat",
+        route_origin_lng AS "routeOriginLng"
+      FROM orders
+      WHERE assigned_rider_user_id = $1
+        AND status = 'out_for_delivery'
+        AND delivery_latitude IS NOT NULL
+        AND delivery_longitude IS NOT NULL
+    `,
+    [riderId]
+  );
+  return rows
+    .filter((r) => r.deliveryLatitude !== null && r.deliveryLongitude !== null)
+    .map((r) => ({
+      publicId: r.publicId,
+      deliveryLatitude: r.deliveryLatitude!,
+      deliveryLongitude: r.deliveryLongitude!,
+      routeOriginLat: r.routeOriginLat,
+      routeOriginLng: r.routeOriginLng,
+    }));
+}
+
+export async function saveOrderRoute(
+  publicId: string,
+  params: {
+    polyline: string;
+    durationSec: number;
+    distanceM: number;
+    originLat: number;
+    originLng: number;
+  }
+) {
+  await pool.query(
+    `
+      UPDATE orders
+      SET
+        route_polyline = $2,
+        route_duration_sec = $3,
+        route_distance_m = $4,
+        route_origin_lat = $5,
+        route_origin_lng = $6,
+        routed_at = NOW()
+      WHERE public_id = $1
+    `,
+    [
+      publicId,
+      params.polyline,
+      params.durationSec,
+      params.distanceM,
+      params.originLat,
+      params.originLng,
+    ]
+  );
 }

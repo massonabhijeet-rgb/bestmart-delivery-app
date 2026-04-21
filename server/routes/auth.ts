@@ -329,7 +329,8 @@ router.get(
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    const riders = await listRiders(req.user.companyId);
+    const onlyAvailable = req.query.available === 'true';
+    const riders = await listRiders(req.user.companyId, { onlyAvailable });
     return res.json({ riders });
   }
 );
