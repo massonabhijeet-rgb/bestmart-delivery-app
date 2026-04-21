@@ -379,10 +379,19 @@ function TrackOrder({ trackingCode, onBackToStore, onTrack }: TrackOrderProps) {
                       <span className={isRejected ? 'items-table__strike' : undefined}>
                         {item.quantity} x {item.productName}
                       </span>
-                      {isRejected && item.rejectionReason ? (
-                        <div className="items-table__reject-reason">
-                          ✕ Removed: {item.rejectionReason}
-                        </div>
+                      {isRejected ? (
+                        <>
+                          <div>
+                            <span className="line-item__removed-chip">
+                              Removed by store
+                            </span>
+                          </div>
+                          {item.rejectionReason ? (
+                            <div className="line-item__removed-reason">
+                              Reason: {item.rejectionReason}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
                     </span>
                     <strong className={isRejected ? 'items-table__strike' : undefined}>

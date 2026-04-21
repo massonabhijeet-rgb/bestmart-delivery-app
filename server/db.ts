@@ -4672,8 +4672,13 @@ export async function rejectOrderItem(
     }
     const orderId = orderRes.rows[0].id;
 
-    const itemRes = await client.query<{ id: number; rejectedAt: string | null }>(
-      `SELECT id, rejected_at AS "rejectedAt" FROM order_items
+    const itemRes = await client.query<{
+      id: number;
+      rejectedAt: string | null;
+      productName: string;
+    }>(
+      `SELECT id, rejected_at AS "rejectedAt", product_name AS "productName"
+       FROM order_items
        WHERE id = $1 AND order_id = $2 FOR UPDATE;`,
       [itemId, orderId]
     );
@@ -4685,6 +4690,7 @@ export async function rejectOrderItem(
       await client.query('ROLLBACK');
       throw new Error('Item is already rejected');
     }
+    const productName = itemRes.rows[0].productName;
 
     const trimmed = reason.trim().slice(0, 500);
     await client.query(
@@ -4730,7 +4736,8 @@ export async function rejectOrderItem(
     );
 
     await client.query('COMMIT');
-    return getOrderByPublicId(publicId);
+    const order = await getOrderByPublicId(publicId);
+    return order ? { order, productName } : null;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

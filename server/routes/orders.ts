@@ -16,7 +16,7 @@ import {
   upsertUserAddress,
   validateCoupon,
 } from '../db.js';
-import { notifyOrderStatus } from '../push.js';
+import { notifyOrderItemRejected, notifyOrderStatus } from '../push.js';
 import { verifyRazorpaySignature } from '../razorpay.js';
 import {
   attachUserIfPresent,
@@ -431,19 +431,29 @@ router.post(
         return res.status(400).json({ error: 'A rejection reason is required' });
       }
 
-      const order = await rejectOrderItem(
+      const result = await rejectOrderItem(
         publicId,
         req.user.companyId,
         itemId,
         reason
       );
 
-      if (!order) {
+      if (!result) {
         return res.status(404).json({ error: 'Order or item not found' });
       }
 
+      const { order, productName } = result;
+
       await invalidateOrdersCache(req.user.companyId);
       broadcast({ type: 'order_updated', payload: order });
+
+      const ownerUserId = await getOrderOwnerUserId(order.publicId);
+      await notifyOrderItemRejected({
+        userId: ownerUserId,
+        publicId: order.publicId,
+        productName,
+        reason: reason.trim(),
+      });
 
       return res.json({ order });
     } catch (error) {

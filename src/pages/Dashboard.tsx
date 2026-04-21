@@ -2480,7 +2480,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               return (
               <article
                 key={order.publicId}
-                className={`order-row${newOrderIds.has(order.publicId) ? ' order-row--new' : ''}`}
+                className={`order-row order-row--status-${order.status}${newOrderIds.has(order.publicId) ? ' order-row--new' : ''}`}
               >
                 {/* ── Summary bar ── */}
                 <div className={`order-row__bar${expandedOrderId === order.publicId ? ' order-row__bar--expanded' : ''}`}>
@@ -2555,50 +2555,79 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                     <div className="order-detail-cols">
                       <div className="order-detail-block">
                         <h4>Customer</h4>
-                        <strong>{order.customerName}</strong>
-                        <p>{order.customerPhone}</p>
-                        {order.customerEmail && <p>{order.customerEmail}</p>}
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Name</span>
+                          <span className="detail-kv__v">
+                            <strong>{order.customerName}</strong>
+                          </span>
+                        </div>
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Phone</span>
+                          <span className="detail-kv__v">
+                            <a href={`tel:${order.customerPhone}`}>{order.customerPhone}</a>
+                          </span>
+                        </div>
+                        {order.customerEmail && (
+                          <div className="detail-kv">
+                            <span className="detail-kv__k">Email</span>
+                            <span className="detail-kv__v">{order.customerEmail}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="order-detail-block">
                         <h4>Delivery</h4>
-                        <p>{order.deliveryAddress}</p>
-                        <p>Slot: {order.deliverySlot ?? 'Express'}</p>
-                        {order.deliveryNotes && <p>Note: {order.deliveryNotes}</p>}
-                        {order.deliveryLatitude != null && order.deliveryLongitude != null ? (
-                          <>
-                            <p>
-                              Live location:{' '}
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Address</span>
+                          <span className="detail-kv__v">{order.deliveryAddress}</span>
+                        </div>
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Slot</span>
+                          <span className="detail-kv__v">{order.deliverySlot ?? 'Express'}</span>
+                        </div>
+                        {order.deliveryNotes && (
+                          <div className="detail-kv">
+                            <span className="detail-kv__k">Note</span>
+                            <span className="detail-kv__v">{order.deliveryNotes}</span>
+                          </div>
+                        )}
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Location</span>
+                          <span className="detail-kv__v">
+                            {order.deliveryLatitude != null && order.deliveryLongitude != null ? (
                               <a
+                                className="detail-link-pill"
                                 href={`https://www.google.com/maps/search/?api=1&query=${order.deliveryLatitude},${order.deliveryLongitude}`}
                                 target="_blank"
                                 rel="noreferrer"
                               >
-                                Open in Google Maps
+                                Open in Google Maps ↗
                               </a>
-                            </p>
-                            <iframe
-                              className="order-map"
-                              title={`Location for order ${order.publicId}`}
-                              loading="lazy"
-                              src={`https://www.openstreetmap.org/export/embed.html?bbox=${order.deliveryLongitude - 0.004},${order.deliveryLatitude - 0.003},${order.deliveryLongitude + 0.004},${order.deliveryLatitude + 0.003}&layer=mapnik&marker=${order.deliveryLatitude},${order.deliveryLongitude}`}
-                            />
-                          </>
-                        ) : (
-                          <p style={{ color: 'var(--c-ink-3)' }}>Live location not shared</p>
-                        )}
+                            ) : (
+                              <span className="detail-muted">Not shared</span>
+                            )}
+                          </span>
+                        </div>
                       </div>
                       <div className="order-detail-block">
                         <h4>Payment &amp; Region</h4>
-                        <p>{labelizeStatus(order.paymentMethod)}</p>
-                        <p>Region: {order.geoLabel ?? '—'}</p>
-                        <p>
-                          Rider:{' '}
-                          {order.assignedRider ? (
-                            <strong>{order.assignedRider}</strong>
-                          ) : (
-                            <span style={{ color: 'var(--c-ink-3)' }}>Unassigned</span>
-                          )}
-                        </p>
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Method</span>
+                          <span className="detail-kv__v">{labelizeStatus(order.paymentMethod)}</span>
+                        </div>
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Region</span>
+                          <span className="detail-kv__v">{order.geoLabel ?? '—'}</span>
+                        </div>
+                        <div className="detail-kv">
+                          <span className="detail-kv__k">Rider</span>
+                          <span className="detail-kv__v">
+                            {order.assignedRider ? (
+                              <strong>{order.assignedRider}</strong>
+                            ) : (
+                              <span className="detail-muted">Unassigned</span>
+                            )}
+                          </span>
+                        </div>
                         {(() => {
                           const loc = order.assignedRiderUserId != null
                             ? riderLocations[order.assignedRiderUserId]

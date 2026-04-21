@@ -486,6 +486,46 @@ textarea {
   border-color: rgba(30, 136, 229, 0.15);
 }
 
+.line-item--rejected {
+  align-items: flex-start;
+  background: linear-gradient(180deg, #fff5f5 0%, #ffecec 100%);
+  border-color: rgba(179, 38, 30, 0.22);
+}
+
+.line-item--rejected .items-table__strike {
+  color: #8a8f99;
+  text-decoration: line-through;
+}
+
+.line-item__removed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: #fff;
+  color: #b3261e;
+  border: 1px solid rgba(179, 38, 30, 0.35);
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.line-item__removed-chip::before {
+  content: '✕';
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.line-item__removed-reason {
+  color: #8a3b36;
+  font-size: 0.78rem;
+  font-weight: 500;
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
 /* ═══════════════════════════════════════════
    DASHBOARD LAYOUT
 ═══════════════════════════════════════════ */
@@ -1322,6 +1362,51 @@ textarea {
   background: rgba(30, 136, 229, 0.06);
 }
 
+/* Status-driven left accent + soft tint so admins can see at a glance
+   which orders are pending, confirmed, packed, delivered, etc. */
+.order-row .order-row__bar {
+  border-left: 4px solid transparent;
+}
+
+.order-row--status-placed .order-row__bar {
+  border-left-color: #f59e0b;
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.09), transparent 45%);
+}
+
+.order-row--status-confirmed .order-row__bar {
+  border-left-color: #3b82f6;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.08), transparent 45%);
+}
+
+.order-row--status-packing .order-row__bar {
+  border-left-color: #8b5cf6;
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.08), transparent 45%);
+}
+
+.order-row--status-out_for_delivery .order-row__bar {
+  border-left-color: #0ea5e9;
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.09), transparent 45%);
+}
+
+.order-row--status-delivered .order-row__bar {
+  border-left-color: #10b981;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.06), transparent 45%);
+}
+
+.order-row--status-cancelled .order-row__bar {
+  border-left-color: #b3261e;
+  background: linear-gradient(90deg, rgba(179, 38, 30, 0.06), transparent 45%);
+}
+
+.order-row--status-placed .order-row__bar:hover,
+.order-row--status-confirmed .order-row__bar:hover,
+.order-row--status-packing .order-row__bar:hover,
+.order-row--status-out_for_delivery .order-row__bar:hover,
+.order-row--status-delivered .order-row__bar:hover,
+.order-row--status-cancelled .order-row__bar:hover {
+  filter: brightness(0.98);
+}
+
 .order-row__id {
   font-size: 0.85rem;
   font-weight: 700;
@@ -1406,6 +1491,58 @@ textarea {
   font-size: 0.85rem;
   color: var(--c-ink-2);
   line-height: 1.5;
+}
+
+.detail-kv {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--c-border);
+}
+
+.detail-kv:last-child {
+  border-bottom: none;
+}
+
+.detail-kv__k {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+
+.detail-kv__v {
+  font-size: 0.88rem;
+  color: var(--c-ink);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.detail-muted {
+  color: var(--c-ink-3);
+  font-style: italic;
+}
+
+.detail-link-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(30, 136, 229, 0.08);
+  color: var(--c-accent, #1e88e5);
+  border: 1px solid rgba(30, 136, 229, 0.25);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.detail-link-pill:hover {
+  background: rgba(30, 136, 229, 0.14);
 }
 
 /* Items table */
@@ -6818,15 +6955,81 @@ textarea {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: 12px;
-  padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  overflow: hidden;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .my-orders__card:hover {
   border-color: var(--c-ink-3);
   box-shadow: 0 4px 14px -6px rgba(15, 23, 42, 0.12);
+}
+.my-orders__card--active {
+  border-color: transparent;
+  box-shadow: 0 4px 20px -6px rgba(37, 99, 235, 0.25);
+}
+.my-orders__card-body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.my-orders__ribbon {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  background: linear-gradient(90deg, #1e88e5, #1565c0);
+}
+.my-orders__ribbon--placed {
+  background: linear-gradient(90deg, #42a5f5, #1e88e5);
+}
+.my-orders__ribbon--confirmed {
+  background: linear-gradient(90deg, #1e88e5, #1565c0);
+}
+.my-orders__ribbon--packing {
+  background: linear-gradient(90deg, #ffb74d, #f57c00);
+}
+.my-orders__ribbon--out_for_delivery {
+  background: linear-gradient(90deg, #f57c00, #ef6c00);
+}
+.my-orders__ribbon-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.my-orders__ribbon-label {
+  flex: 1;
+  font-size: 0.76rem;
+}
+.my-orders__ribbon-tag {
+  font-size: 0.62rem;
+  opacity: 0.85;
+  letter-spacing: 0.1em;
+}
+.my-orders__ribbon-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #fff;
+}
+.my-orders__ribbon-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #fff;
+  animation: myOrdersRibbonPulse 1.2s ease-out infinite;
+}
+@keyframes myOrdersRibbonPulse {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.6); opacity: 0; }
 }
 
 .my-orders__card-row {

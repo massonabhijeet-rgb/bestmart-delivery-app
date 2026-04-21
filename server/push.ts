@@ -103,6 +103,33 @@ const ORDER_STATUS_COPY: Partial<Record<OrderStatus, StatusCopy>> = {
   },
 };
 
+export async function notifyOrderItemRejected(params: {
+  userId: number | null | undefined;
+  publicId: string;
+  productName: string;
+  reason: string;
+}) {
+  if (!params.userId) return;
+  try {
+    const body = params.reason
+      ? `${params.productName} was removed from order #${params.publicId}. Reason: ${params.reason}`
+      : `${params.productName} was removed from order #${params.publicId}.`;
+    await sendToUser(
+      params.userId,
+      'Item removed from your order',
+      body,
+      {
+        type: 'order_item_rejected',
+        orderId: params.publicId,
+        productName: params.productName,
+        reason: params.reason,
+      }
+    );
+  } catch (error) {
+    console.error('[push] notifyOrderItemRejected failed:', error);
+  }
+}
+
 export async function notifyOrderStatus(params: {
   userId: number | null | undefined;
   publicId: string;
