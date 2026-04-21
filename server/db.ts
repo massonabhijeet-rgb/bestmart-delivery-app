@@ -105,6 +105,8 @@ export interface OrderRecord {
     quantity: number;
     unitPriceCents: number;
     lineTotalCents: number;
+    rejectedAt: string | null;
+    rejectionReason: string | null;
   }>;
 }
 
@@ -616,6 +618,8 @@ async function createTables(client: PoolClient) {
   await client.query(`
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS created_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ;
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
   `);
 
   await client.query(`
@@ -4101,7 +4105,9 @@ async function mapOrder(orderRow: OrderRow) {
         unit_label AS "unitLabel",
         quantity,
         unit_price_cents AS "unitPriceCents",
-        line_total_cents AS "lineTotalCents"
+        line_total_cents AS "lineTotalCents",
+        rejected_at AS "rejectedAt",
+        rejection_reason AS "rejectionReason"
       FROM order_items
       WHERE order_id = $1
       ORDER BY id;
@@ -4639,6 +4645,98 @@ export async function updateOrderStatus(
   );
   if (!updated.rowCount) return null;
   return getOrderByPublicId(publicId);
+}
+
+// Soft-rejects a single line inside an order: marks the row as rejected,
+// stores the admin's reason, and recomputes the order's subtotal + total so
+// the live customer view drops the line from the running cost. Delivery fee
+// and any applied coupon discount are intentionally left untouched — we
+// don't re-evaluate coupon min-subtotal eligibility on rejection.
+export async function rejectOrderItem(
+  publicId: string,
+  companyId: number,
+  itemId: number,
+  reason: string
+) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const orderRes = await client.query<{ id: number; status: OrderStatus }>(
+      `SELECT id, status FROM orders WHERE public_id = $1 AND company_id = $2 FOR UPDATE;`,
+      [publicId, companyId]
+    );
+    if (!orderRes.rowCount) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const orderId = orderRes.rows[0].id;
+
+    const itemRes = await client.query<{ id: number; rejectedAt: string | null }>(
+      `SELECT id, rejected_at AS "rejectedAt" FROM order_items
+       WHERE id = $1 AND order_id = $2 FOR UPDATE;`,
+      [itemId, orderId]
+    );
+    if (!itemRes.rowCount) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    if (itemRes.rows[0].rejectedAt) {
+      await client.query('ROLLBACK');
+      throw new Error('Item is already rejected');
+    }
+
+    const trimmed = reason.trim().slice(0, 500);
+    await client.query(
+      `UPDATE order_items
+       SET rejected_at = NOW(),
+           rejection_reason = $1,
+           updated_date = NOW()
+       WHERE id = $2;`,
+      [trimmed || null, itemId]
+    );
+
+    // Recompute subtotal from the non-rejected lines; keep delivery_fee and
+    // discount as-is so the admin can adjust separately if needed.
+    const totals = await client.query<{
+      subtotalCents: string;
+      deliveryFeeCents: number;
+      discountCents: number;
+    }>(
+      `SELECT
+         COALESCE(SUM(oi.line_total_cents), 0)::bigint AS "subtotalCents",
+         o.delivery_fee_cents AS "deliveryFeeCents",
+         o.discount_cents AS "discountCents"
+       FROM orders o
+       LEFT JOIN order_items oi
+         ON oi.order_id = o.id AND oi.rejected_at IS NULL
+       WHERE o.id = $1
+       GROUP BY o.delivery_fee_cents, o.discount_cents;`,
+      [orderId]
+    );
+
+    const newSubtotal = Number(totals.rows[0]?.subtotalCents ?? 0);
+    const deliveryFee = totals.rows[0]?.deliveryFeeCents ?? 0;
+    const discount = totals.rows[0]?.discountCents ?? 0;
+    const newTotal = Math.max(0, newSubtotal + deliveryFee - discount);
+
+    await client.query(
+      `UPDATE orders
+       SET subtotal_cents = $1,
+           total_cents = $2,
+           updated_date = NOW()
+       WHERE id = $3;`,
+      [newSubtotal, newTotal, orderId]
+    );
+
+    await client.query('COMMIT');
+    return getOrderByPublicId(publicId);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // Flip a pending order to paid when Razorpay confirms via webhook. Also

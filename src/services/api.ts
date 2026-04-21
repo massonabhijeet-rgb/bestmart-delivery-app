@@ -117,6 +117,8 @@ export interface OrderItem {
   quantity: number;
   unitPriceCents: number;
   lineTotalCents: number;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
 }
 
 export interface Order {
@@ -965,6 +967,21 @@ export async function apiUpdateOrderStatus(
       cancellationReason: cancellationReason ?? null,
     }),
   });
+  return data.order;
+}
+
+export async function apiRejectOrderItem(
+  publicId: string,
+  itemId: number,
+  reason: string
+) {
+  const data = await request<{ order: Order }>(
+    `/orders/${publicId}/items/${itemId}/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }
+  );
   return data.order;
 }
 

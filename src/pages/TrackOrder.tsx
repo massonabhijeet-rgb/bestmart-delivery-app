@@ -368,14 +368,29 @@ function TrackOrder({ trackingCode, onBackToStore, onTrack }: TrackOrderProps) {
 
             <div className="info-card">
               <p className="eyebrow">Order items</p>
-              {order.items.map((item) => (
-                <div key={item.id} className="line-item">
-                  <span>
-                    {item.quantity} x {item.productName}
-                  </span>
-                  <strong>{formatCurrency(item.lineTotalCents)}</strong>
-                </div>
-              ))}
+              {order.items.map((item) => {
+                const isRejected = !!item.rejectedAt;
+                return (
+                  <div
+                    key={item.id}
+                    className={`line-item${isRejected ? ' line-item--rejected' : ''}`}
+                  >
+                    <span>
+                      <span className={isRejected ? 'items-table__strike' : undefined}>
+                        {item.quantity} x {item.productName}
+                      </span>
+                      {isRejected && item.rejectionReason ? (
+                        <div className="items-table__reject-reason">
+                          ✕ Removed: {item.rejectionReason}
+                        </div>
+                      ) : null}
+                    </span>
+                    <strong className={isRejected ? 'items-table__strike' : undefined}>
+                      {formatCurrency(item.lineTotalCents)}
+                    </strong>
+                  </div>
+                );
+              })}
               <div className="line-item">
                 <span>Delivery</span>
                 <strong>

@@ -10,6 +10,7 @@ import {
   getSalesReport,
   listOrders,
   listOrdersForUser,
+  rejectOrderItem,
   updateOrderStatus,
   updateUserProfileIfEmpty,
   upsertUserAddress,
@@ -404,6 +405,53 @@ router.patch(
       return res.json({ order });
     } catch (error) {
       console.error('Update order status error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+router.post(
+  '/:publicId/items/:itemId/reject',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const publicId = getRouteParam(req.params.publicId);
+      const itemIdRaw = getRouteParam(req.params.itemId);
+      const itemId = itemIdRaw ? Number(itemIdRaw) : NaN;
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      if (!publicId || !Number.isFinite(itemId)) {
+        return res.status(400).json({ error: 'Order and item IDs are required' });
+      }
+
+      const { reason } = req.body as { reason?: string };
+      if (!reason || typeof reason !== 'string' || !reason.trim()) {
+        return res.status(400).json({ error: 'A rejection reason is required' });
+      }
+
+      const order = await rejectOrderItem(
+        publicId,
+        req.user.companyId,
+        itemId,
+        reason
+      );
+
+      if (!order) {
+        return res.status(404).json({ error: 'Order or item not found' });
+      }
+
+      await invalidateOrdersCache(req.user.companyId);
+      broadcast({ type: 'order_updated', payload: order });
+
+      return res.json({ order });
+    } catch (error) {
+      const message = (error as Error)?.message ?? 'Internal server error';
+      if (message === 'Item is already rejected') {
+        return res.status(409).json({ error: message });
+      }
+      console.error('Reject order item error:', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

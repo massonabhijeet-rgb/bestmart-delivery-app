@@ -35,6 +35,7 @@ import {
   apiGetCompanyPublic,
   apiSetStoreLocation,
   apiUpdateCategory,
+  apiRejectOrderItem,
   apiUpdateOrderStatus,
   apiUpdateProduct,
   apiUploadCategoryImage,
@@ -208,6 +209,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [savingFieldId, setSavingFieldId] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [rejectingItemId, setRejectingItemId] = useState<number | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [statusChangingId, setStatusChangingId] = useState<string | null>(null);
   const [creatingCategory, setCreatingCategory] = useState(false);
@@ -998,6 +1000,29 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       setError(err instanceof Error ? err.message : 'Unable to reject order');
     } finally {
       setCancellingOrderId(null);
+    }
+  }
+
+  async function handleRejectItem(publicId: string, itemId: number, itemName: string) {
+    const reason = await rejectOrder({
+      title: `Reject "${itemName}"?`,
+      message:
+        'The item will be removed from the order and the total will drop by its amount. The customer sees this line struck through with your reason.',
+      confirmLabel: 'Reject Item',
+      cancelLabel: 'Keep Item',
+      placeholder: 'e.g. Out of stock, quality issue',
+      required: true,
+    });
+    if (reason == null) return;
+    setRejectingItemId(itemId);
+    try {
+      await apiRejectOrderItem(publicId, itemId, reason);
+      setNotice(`Item removed from order ${publicId}.`);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reject item');
+    } finally {
+      setRejectingItemId(null);
     }
   }
 
@@ -2501,6 +2526,16 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             : `${orderDistanceKm.toFixed(1)} km`}
                         </span>
                       )}
+                      {order.status === 'placed' && (
+                        <button
+                          type="button"
+                          className="order-row__reject"
+                          onClick={() => handleAdminReject(order.publicId)}
+                          disabled={cancellingOrderId === order.publicId}
+                        >
+                          {cancellingOrderId === order.publicId ? 'Rejecting…' : 'Reject'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="order-row__advance"
@@ -2610,26 +2645,81 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           <th className="num">Qty</th>
                           <th className="num">Unit Price</th>
                           <th className="num">Total</th>
+                          {canManageCatalog && <th aria-label="Actions" />}
                         </tr>
                       </thead>
                       <tbody>
-                        {order.items.map((item) => (
-                          <tr key={item.id}>
-                            <td>{item.productName}</td>
-                            <td>{item.unitLabel}</td>
-                            <td className="num">{item.quantity}</td>
-                            <td className="num">{formatCurrency(item.unitPriceCents)}</td>
-                            <td className="num">{formatCurrency(item.lineTotalCents)}</td>
-                          </tr>
-                        ))}
+                        {order.items.map((item) => {
+                          const isRejected = !!item.rejectedAt;
+                          const canReject =
+                            canManageCatalog &&
+                            !isRejected &&
+                            !['delivered', 'cancelled'].includes(order.status);
+                          return (
+                            <tr
+                              key={item.id}
+                              className={isRejected ? 'items-table__row--rejected' : undefined}
+                            >
+                              <td>
+                                <span className={isRejected ? 'items-table__strike' : undefined}>
+                                  {item.productName}
+                                </span>
+                                {isRejected && item.rejectionReason ? (
+                                  <div className="items-table__reject-reason">
+                                    ✕ {item.rejectionReason}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td>
+                                <span className={isRejected ? 'items-table__strike' : undefined}>
+                                  {item.unitLabel}
+                                </span>
+                              </td>
+                              <td className="num">
+                                <span className={isRejected ? 'items-table__strike' : undefined}>
+                                  {item.quantity}
+                                </span>
+                              </td>
+                              <td className="num">
+                                <span className={isRejected ? 'items-table__strike' : undefined}>
+                                  {formatCurrency(item.unitPriceCents)}
+                                </span>
+                              </td>
+                              <td className="num">
+                                <span className={isRejected ? 'items-table__strike' : undefined}>
+                                  {formatCurrency(item.lineTotalCents)}
+                                </span>
+                              </td>
+                              {canManageCatalog && (
+                                <td className="num">
+                                  {canReject ? (
+                                    <button
+                                      type="button"
+                                      className="items-table__reject-btn"
+                                      onClick={() =>
+                                        handleRejectItem(order.publicId, item.id, item.productName)
+                                      }
+                                      disabled={rejectingItemId === item.id}
+                                      title="Remove this item from the order"
+                                    >
+                                      {rejectingItemId === item.id ? '…' : '✕ Reject'}
+                                    </button>
+                                  ) : isRejected ? (
+                                    <span className="items-table__rejected-tag">Removed</span>
+                                  ) : null}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr>
-                          <td colSpan={4}>Subtotal</td>
+                          <td colSpan={canManageCatalog ? 5 : 4}>Subtotal</td>
                           <td className="num">{formatCurrency(order.subtotalCents)}</td>
                         </tr>
                         <tr>
-                          <td colSpan={4}>Delivery fee</td>
+                          <td colSpan={canManageCatalog ? 5 : 4}>Delivery fee</td>
                           <td className="num">
                             {order.deliveryFeeCents
                               ? formatCurrency(order.deliveryFeeCents)
@@ -2637,7 +2727,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           </td>
                         </tr>
                         <tr className="table-grand">
-                          <td colSpan={4}>
+                          <td colSpan={canManageCatalog ? 5 : 4}>
                             <strong>Order Total</strong>
                           </td>
                           <td className="num">
