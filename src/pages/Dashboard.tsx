@@ -2551,8 +2551,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                   <div className="order-row__detail">
                     {/* Info blocks */}
                     <div className="order-detail-cols">
-                      <div className="order-detail-block">
-                        <h4>Customer</h4>
+                      <div className="order-detail-block order-detail-block--customer">
+                        <h4>
+                          <span className="order-detail-block__icon" aria-hidden>👤</span>
+                          Customer
+                        </h4>
                         <div className="detail-kv">
                           <span className="detail-kv__k">Name</span>
                           <span className="detail-kv__v">
@@ -2572,8 +2575,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           </div>
                         )}
                       </div>
-                      <div className="order-detail-block">
-                        <h4>Delivery</h4>
+                      <div className="order-detail-block order-detail-block--delivery">
+                        <h4>
+                          <span className="order-detail-block__icon" aria-hidden>📍</span>
+                          Delivery
+                        </h4>
                         <div className="detail-kv">
                           <span className="detail-kv__k">Address</span>
                           <span className="detail-kv__v">{order.deliveryAddress}</span>
@@ -2606,8 +2612,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           </span>
                         </div>
                       </div>
-                      <div className="order-detail-block">
-                        <h4>Payment &amp; Region</h4>
+                      <div className="order-detail-block order-detail-block--payment">
+                        <h4>
+                          <span className="order-detail-block__icon" aria-hidden>💳</span>
+                          Payment &amp; Region
+                        </h4>
                         <div className="detail-kv">
                           <span className="detail-kv__k">Method</span>
                           <span className="detail-kv__v">{labelizeStatus(order.paymentMethod)}</span>
@@ -2764,52 +2773,6 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       </tfoot>
                     </table>
 
-                    {/* Dispatch controls */}
-                    {canManageCatalog && (
-                      <div className="order-controls">
-                        <label>
-                          <span>Assign rider</span>
-                          <select
-                            value={String(riderDrafts[order.publicId] ?? '')}
-                            onChange={(e) => {
-                              const raw = e.target.value;
-                              const next: number | '' = raw ? Number(raw) : '';
-                              setRiderDrafts((c) => ({ ...c, [order.publicId]: next }));
-                              void handleAssignRider(order.publicId, order.status, next || null);
-                            }}
-                          >
-                            <option value="">Unassigned</option>
-                            {riders.map((rider) => (
-                              <option key={rider.id} value={String(rider.id)}>
-                                {rider.fullName || rider.email}
-                                {rider.phone ? ` · ${rider.phone}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                          {riders.length === 0 ? (
-                            <small style={{ color: 'var(--c-ink-3)', display: 'block', marginTop: '0.25rem' }}>
-                              No riders yet. Add one under Team with role "rider".
-                            </small>
-                          ) : null}
-                        </label>
-                        <label>
-                          <span>Order status</span>
-                          <select
-                            value={order.status}
-                            onChange={(e) =>
-                              handleStatusChange(order.publicId, e.target.value as OrderStatus)
-                            }
-                          >
-                            <option value="placed">Placed</option>
-                            <option value="confirmed">Confirmed</option>
-                            <option value="packing">Packing</option>
-                            <option value="out_for_delivery">Out for Delivery</option>
-                            <option value="delivered">Delivered</option>
-                            <option value="cancelled">Cancelled</option>
-                          </select>
-                        </label>
-                      </div>
-                    )}
                   </div>
                 )}
               </article>
