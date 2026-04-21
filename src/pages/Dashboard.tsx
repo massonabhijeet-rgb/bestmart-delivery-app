@@ -2526,16 +2526,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             : `${orderDistanceKm.toFixed(1)} km`}
                         </span>
                       )}
-                      {order.status === 'placed' && (
-                        <button
-                          type="button"
-                          className="order-row__reject"
-                          onClick={() => handleAdminReject(order.publicId)}
-                          disabled={cancellingOrderId === order.publicId}
-                        >
-                          {cancellingOrderId === order.publicId ? 'Rejecting…' : 'Reject'}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="order-row__reject"
+                        onClick={() => handleAdminReject(order.publicId)}
+                        disabled={cancellingOrderId === order.publicId}
+                      >
+                        {cancellingOrderId === order.publicId ? 'Rejecting…' : 'Reject'}
+                      </button>
                       <button
                         type="button"
                         className="order-row__advance"
@@ -2810,17 +2808,6 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             <option value="cancelled">Cancelled</option>
                           </select>
                         </label>
-                        {order.status !== 'cancelled' &&
-                          order.status !== 'delivered' && (
-                            <button
-                              type="button"
-                              className="danger-button"
-                              onClick={() => handleAdminReject(order.publicId)}
-                              disabled={cancellingOrderId === order.publicId}
-                            >
-                              {cancellingOrderId === order.publicId ? 'Rejecting…' : 'Reject Order'}
-                            </button>
-                          )}
                       </div>
                     )}
                   </div>
