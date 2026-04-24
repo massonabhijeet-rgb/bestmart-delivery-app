@@ -87,6 +87,7 @@ export interface OrderRecord {
   assignedRider: string | null;
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
+  riderAcceptedAt: string | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
@@ -467,6 +468,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_origin_lat DOUBLE PRECISION;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_origin_lng DOUBLE PRECISION;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS routed_at TIMESTAMPTZ;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_accepted_at TIMESTAMPTZ;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -1781,6 +1783,26 @@ export async function setRiderAvailability(
      WHERE id = $1 AND role = 'rider';`,
     [userId, available]
   );
+}
+
+// Marks the order as accepted by the assigned rider. Idempotent for the
+// same rider (re-accepting is a no-op); returns null if the caller isn't
+// the assigned rider or the order is already closed.
+export async function acceptRiderOrder(publicId: string, riderUserId: number) {
+  const updated = await pool.query<{ id: number }>(
+    `
+      UPDATE orders
+      SET rider_accepted_at = COALESCE(rider_accepted_at, NOW()),
+          updated_date = NOW()
+      WHERE public_id = $1
+        AND assigned_rider_user_id = $2
+        AND status NOT IN ('delivered', 'cancelled')
+      RETURNING id;
+    `,
+    [publicId, riderUserId]
+  );
+  if (!updated.rowCount) return null;
+  return getOrderByPublicId(publicId);
 }
 
 export async function listRiderOrders(riderUserId: number) {
@@ -4162,6 +4184,7 @@ async function mapOrder(orderRow: OrderRow) {
     assignedRider: orderRow.assignedRider,
     assignedRiderUserId: orderRow.assignedRiderUserId ?? null,
     assignedRiderPhone: orderRow.assignedRiderPhone ?? null,
+    riderAcceptedAt: orderRow.riderAcceptedAt ?? null,
     geoLabel: orderRow.geoLabel,
     deliveryLatitude: orderRow.deliveryLatitude,
     deliveryLongitude: orderRow.deliveryLongitude,
@@ -4432,6 +4455,7 @@ const ORDER_SELECT_COLUMNS = `
   o.status,
   o.assigned_rider AS "assignedRider",
   o.assigned_rider_user_id AS "assignedRiderUserId",
+  o.rider_accepted_at AS "riderAcceptedAt",
   r.phone AS "assignedRiderPhone",
   o.geo_label AS "geoLabel",
   o.delivery_latitude AS "deliveryLatitude",
@@ -4662,6 +4686,9 @@ export async function updateOrderStatus(
     params.push(generateDeliveryOtp());
   }
 
+  // Reset rider_accepted_at when the assignment changes (or clears). This
+  // is done in SQL so the old value is compared atomically — admin
+  // reassigning to a different rider forces the new rider to accept.
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
@@ -4671,6 +4698,10 @@ export async function updateOrderStatus(
         assigned_rider = $5,
         cancellation_reason = $6,
         delivery_otp = ${otpExpr},
+        rider_accepted_at = CASE
+          WHEN $4::INTEGER IS DISTINCT FROM assigned_rider_user_id THEN NULL
+          ELSE rider_accepted_at
+        END,
         updated_date = NOW()
       WHERE public_id = $1 AND company_id = $2
       RETURNING id;

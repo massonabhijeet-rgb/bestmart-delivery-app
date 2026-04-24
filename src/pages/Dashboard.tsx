@@ -2632,7 +2632,12 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           <span className="detail-kv__k">Rider</span>
                           <span className="detail-kv__v">
                             {order.assignedRider ? (
-                              <strong>{order.assignedRider}</strong>
+                              <>
+                                <strong>{order.assignedRider}</strong>
+                                {order.assignedRiderUserId != null && !order.riderAcceptedAt ? (
+                                  <span className="rider-accept-chip"> ⏳ Awaiting accept</span>
+                                ) : null}
+                              </>
                             ) : (
                               <span className="detail-muted">Unassigned</span>
                             )}

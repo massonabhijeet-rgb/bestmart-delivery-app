@@ -140,6 +140,7 @@ export interface Order {
   assignedRider: string | null;
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
+  riderAcceptedAt: string | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
@@ -997,6 +998,13 @@ export async function apiListRiders(opts: { availableOnly?: boolean } = {}) {
 export async function apiListRiderOrders() {
   const data = await request<{ orders: Order[] }>('/rider/orders');
   return data.orders;
+}
+
+export async function apiRiderAccept(publicId: string) {
+  const data = await request<{ order: Order }>(`/rider/orders/${publicId}/accept`, {
+    method: 'POST',
+  });
+  return data.order;
 }
 
 export async function apiRiderDeliver(publicId: string, otp: string) {

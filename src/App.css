@@ -8341,6 +8341,17 @@ textarea {
   font-size: 0.85rem;
 }
 
+.rider-order-card__await {
+  background: #eef5ff;
+  border: 1px solid #b5cdf5;
+  color: #1d3f77;
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.88rem;
+  margin: 0.4rem 0 0.2rem;
+  font-weight: 500;
+}
+
 .primary-button--caution {
   background: #d97706 !important;
 }
@@ -9898,4 +9909,16 @@ body {
   display: flex;
   justify-content: flex-end;
   padding-top: 4px;
+}
+
+.rider-accept-chip {
+  margin-left: 0.4rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff4e0;
+  color: #8a5a00;
+  border: 1px solid #f5c979;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }

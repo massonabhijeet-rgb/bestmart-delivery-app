@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import {
+  acceptRiderOrder,
   attachRazorpayQrToOrder,
   getOrderByPublicId,
   getOrderOwnerUserId,
@@ -34,6 +35,44 @@ router.get(
 );
 
 router.post(
+  '/orders/:publicId/accept',
+  authenticateToken,
+  requireRole('rider'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const publicId = getRouteParam(req.params.publicId);
+      if (!publicId) {
+        return res.status(400).json({ error: 'Order ID is required' });
+      }
+
+      const existing = await getOrderByPublicId(publicId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (existing.assignedRiderUserId !== req.user.id) {
+        return res.status(403).json({ error: 'This order is not assigned to you' });
+      }
+      if (existing.status === 'delivered' || existing.status === 'cancelled') {
+        return res.status(400).json({ error: 'Order is already closed' });
+      }
+
+      const order = await acceptRiderOrder(publicId, req.user.id);
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      broadcast({ type: 'order_updated', payload: order });
+      return res.json({ order });
+    } catch (error) {
+      console.error('Rider accept error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+router.post(
   '/orders/:publicId/deliver',
   authenticateToken,
   requireRole('rider'),
@@ -56,6 +95,9 @@ router.post(
       }
       if (existing.assignedRiderUserId !== req.user.id) {
         return res.status(403).json({ error: 'This order is not assigned to you' });
+      }
+      if (!existing.riderAcceptedAt) {
+        return res.status(400).json({ error: 'Accept the order before marking it delivered' });
       }
       if (existing.status === 'delivered' || existing.status === 'cancelled') {
         return res.status(400).json({ error: 'Order is already closed' });
@@ -124,6 +166,9 @@ router.post(
       }
       if (existing.assignedRiderUserId !== req.user.id) {
         return res.status(403).json({ error: 'This order is not assigned to you' });
+      }
+      if (!existing.riderAcceptedAt) {
+        return res.status(400).json({ error: 'Accept the order before collecting payment' });
       }
       if (existing.status === 'delivered' || existing.status === 'cancelled') {
         return res.status(400).json({ error: 'Order is already closed' });

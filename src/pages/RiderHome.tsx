@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   apiListRiderOrders,
+  apiRiderAccept,
   apiRiderCollectUpi,
   apiRiderDeliver,
   apiUpdateRiderLocation,
@@ -41,6 +42,7 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
   const [riderPos, setRiderPos] = useState<{ latitude: number; longitude: number } | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'pending' | 'active' | 'denied' | 'unavailable'>('pending');
   const [deliveringId, setDeliveringId] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [collectingId, setCollectingId] = useState<string | null>(null);
   const [collectState, setCollectState] = useState<
     { publicId: string; qrImageUrl: string; amountCents: number } | null
@@ -172,6 +174,22 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
     );
     return () => navigator.geolocation.clearWatch(id);
   }, []);
+
+  async function handleAccept(order: Order) {
+    setAcceptingId(order.publicId);
+    setError('');
+    try {
+      const updated = await apiRiderAccept(order.publicId);
+      setOrders((prev) =>
+        prev.map((o) => (o.publicId === updated.publicId ? updated : o))
+      );
+      showToast(`✅ Accepted ${order.publicId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to accept order');
+    } finally {
+      setAcceptingId(null);
+    }
+  }
 
   async function handleDeliver(order: Order, distanceMeters: number | null) {
     const hasCoords = order.deliveryLatitude != null && order.deliveryLongitude != null;
@@ -342,6 +360,12 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
                 </span>
               </header>
 
+              {!order.riderAcceptedAt ? (
+                <div className="rider-order-card__await">
+                  ⏳ Awaiting your acceptance — accept to start delivery.
+                </div>
+              ) : null}
+
               <div className="rider-order-card__meta">
                 <span>Placed {formatRelativeTime(order.createdDate)}</span>
                 <strong>{formatCurrency(order.totalCents)}</strong>
@@ -415,26 +439,39 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
                 </div>
               ) : null}
               <div className="rider-order-card__actions">
-                {order.paymentStatus !== 'paid' ? (
+                {!order.riderAcceptedAt ? (
                   <button
                     type="button"
-                    className="ghost-button rider-order-card__upi-btn"
-                    disabled={collectingId === order.publicId}
-                    onClick={() => handleCollectUpi(order)}
+                    className="primary-button primary-button--wide"
+                    disabled={acceptingId === order.publicId}
+                    onClick={() => handleAccept(order)}
                   >
-                    {collectingId === order.publicId ? 'Generating…' : '📱 Collect via UPI'}
+                    {acceptingId === order.publicId ? 'Accepting…' : '🤝 Accept delivery'}
                   </button>
                 ) : (
-                  <span className="rider-order-card__paid-tag">✅ Paid</span>
+                  <>
+                    {order.paymentStatus !== 'paid' ? (
+                      <button
+                        type="button"
+                        className="ghost-button rider-order-card__upi-btn"
+                        disabled={collectingId === order.publicId}
+                        onClick={() => handleCollectUpi(order)}
+                      >
+                        {collectingId === order.publicId ? 'Generating…' : '📱 Collect via UPI'}
+                      </button>
+                    ) : (
+                      <span className="rider-order-card__paid-tag">✅ Paid</span>
+                    )}
+                    <button
+                      type="button"
+                      className={`primary-button primary-button--wide${hasCoords && !withinRange ? ' primary-button--caution' : ''}`}
+                      disabled={deliveringId === order.publicId}
+                      onClick={() => handleDeliver(order, distanceMeters)}
+                    >
+                      {deliveringId === order.publicId ? 'Marking…' : 'Mark Delivered'}
+                    </button>
+                  </>
                 )}
-                <button
-                  type="button"
-                  className={`primary-button primary-button--wide${hasCoords && !withinRange ? ' primary-button--caution' : ''}`}
-                  disabled={deliveringId === order.publicId}
-                  onClick={() => handleDeliver(order, distanceMeters)}
-                >
-                  {deliveringId === order.publicId ? 'Marking…' : 'Mark Delivered'}
-                </button>
               </div>
             </article>
           );
