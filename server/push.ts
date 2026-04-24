@@ -124,6 +124,25 @@ export async function notifyCustomerById(
   return sendToTokens(tokens, title, body, data);
 }
 
+export async function notifyRiderAssigned(params: {
+  riderUserId: number;
+  publicId: string;
+  customerName: string;
+  deliveryAddress: string;
+}) {
+  try {
+    const tokens = await listUserDeviceTokens(params.riderUserId);
+    if (tokens.length === 0) return;
+    const body = `${params.customerName} · ${params.deliveryAddress}`;
+    await sendToTokens(tokens, `New delivery: ${params.publicId}`, body, {
+      type: 'rider_order_assigned',
+      orderId: params.publicId,
+    });
+  } catch (error) {
+    console.error('[push] notifyRiderAssigned failed:', error);
+  }
+}
+
 interface StatusCopy {
   title: string;
   body: (id: string, otp?: string | null) => string;

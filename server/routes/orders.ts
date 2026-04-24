@@ -16,7 +16,11 @@ import {
   upsertUserAddress,
   validateCoupon,
 } from '../db.js';
-import { notifyOrderItemRejected, notifyOrderStatus } from '../push.js';
+import {
+  notifyOrderItemRejected,
+  notifyOrderStatus,
+  notifyRiderAssigned,
+} from '../push.js';
 import { verifyRazorpaySignature } from '../razorpay.js';
 import {
   attachUserIfPresent,
@@ -379,6 +383,9 @@ router.patch(
         return res.status(400).json({ error: 'Invalid order status' });
       }
 
+      const existing = await getOrderByPublicId(publicId);
+      const previousRiderId = existing?.assignedRiderUserId ?? null;
+
       const order = await updateOrderStatus(
         publicId,
         req.user.companyId,
@@ -401,6 +408,18 @@ router.patch(
         status,
         deliveryOtp: status === 'out_for_delivery' ? order.deliveryOtp : null,
       });
+
+      // Push to the rider when a new assignment lands on them (null→rider
+      // or swap from a different rider). Skip if the rider hasn't changed.
+      const newRiderId = order.assignedRiderUserId ?? null;
+      if (newRiderId != null && newRiderId !== previousRiderId) {
+        void notifyRiderAssigned({
+          riderUserId: newRiderId,
+          publicId: order.publicId,
+          customerName: order.customerName ?? 'Customer',
+          deliveryAddress: order.deliveryAddress ?? '',
+        });
+      }
 
       return res.json({ order });
     } catch (error) {
