@@ -9,16 +9,23 @@ export interface RiderLocation {
   updatedAt: string;
 }
 
+export interface ShopStatusPayload {
+  shopOpen: boolean;
+  shopClosedMessage: string;
+}
+
 type WsEvent =
   | { type: 'connected' }
   | { type: 'new_order'; payload: Order }
   | { type: 'order_updated'; payload: Order }
-  | { type: 'rider_location'; payload: RiderLocation };
+  | { type: 'rider_location'; payload: RiderLocation }
+  | { type: 'shop_status_changed'; payload: ShopStatusPayload };
 
 interface Handlers {
   onNewOrder: (order: Order) => void;
   onOrderUpdated: (order: Order) => void;
   onRiderLocation?: (loc: RiderLocation) => void;
+  onShopStatusChanged?: (status: ShopStatusPayload) => void;
 }
 
 const WS_BASE = import.meta.env.VITE_API_URL
@@ -53,6 +60,8 @@ export function useOrderSocket(handlers: Handlers): void {
             handlersRef.current.onOrderUpdated(data.payload);
           } else if (data.type === 'rider_location') {
             handlersRef.current.onRiderLocation?.(data.payload);
+          } else if (data.type === 'shop_status_changed') {
+            handlersRef.current.onShopStatusChanged?.(data.payload);
           }
         } catch {
           // ignore malformed frames

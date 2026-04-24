@@ -4559,6 +4559,23 @@ textarea {
   font-size: 0.95rem;
 }
 
+.store-topbar__address--closed {
+  padding: 6px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #991b1b;
+}
+.store-topbar__address--closed strong {
+  color: #7f1d1d;
+  font-weight: 800;
+}
+.store-topbar__address--closed span {
+  color: #991b1b;
+  white-space: normal;
+  font-size: 0.82rem;
+}
+
 .store-topbar__address span {
   font-size: 0.78rem;
   color: #6b6b6b;

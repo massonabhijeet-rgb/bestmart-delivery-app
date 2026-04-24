@@ -479,9 +479,62 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
         setError(err instanceof Error ? err.message : 'Unable to load BestMart');
       })
       .finally(() => setInitialLoading(false));
+
+    // Live shop-open toggle from admin — flip the banner + disable checkout
+    // without requiring the customer to refresh.
+    const WS_BASE = import.meta.env.VITE_API_URL
+      ? (import.meta.env.VITE_API_URL as string).replace(/\/api$/, '').replace(/^http/, 'ws')
+      : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+    let ws: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let destroyed = false;
+    function connectShopWs() {
+      if (destroyed) return;
+      try {
+        ws = new WebSocket(`${WS_BASE}/ws`);
+        ws.onmessage = (e: MessageEvent<string>) => {
+          try {
+            const data = JSON.parse(e.data) as {
+              type: string;
+              payload?: { shopOpen?: boolean; shopClosedMessage?: string };
+            };
+            if (data.type === 'shop_status_changed' && data.payload) {
+              const { shopOpen, shopClosedMessage } = data.payload;
+              setCompany((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  settings: {
+                    ...prev.settings,
+                    shopOpen: shopOpen ?? prev.settings.shopOpen,
+                    shopClosedMessage:
+                      shopClosedMessage ?? prev.settings.shopClosedMessage,
+                  },
+                };
+              });
+            }
+          } catch {
+            /* ignore */
+          }
+        };
+        ws.onclose = () => {
+          if (destroyed) return;
+          retry = setTimeout(connectShopWs, 3000);
+        };
+        ws.onerror = () => ws?.close();
+      } catch {
+        retry = setTimeout(connectShopWs, 3000);
+      }
+    }
+    connectShopWs();
     apiListPublicCoupons().then(setPublicCoupons).catch(() => {});
     apiListBrands().then(setBrandsList).catch(() => {});
     apiGetActiveCampaign().then(setActiveCampaign).catch(() => {});
+    return () => {
+      destroyed = true;
+      if (retry) clearTimeout(retry);
+      ws?.close();
+    };
   }, []);
 
   function dismissCampaign() {
@@ -1311,13 +1364,23 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
           <img src="/bestmart-logo.svg" alt="BestMart" className="store-topbar__logo" loading="eager" />
         </button>
 
-        <div className="store-topbar__address" title={savedAddresses[0]?.deliveryAddress ?? ''}>
-          <strong>Delivery in 15 minutes</strong>
-          <span>
-            {savedAddresses[0]?.deliveryAddress ??
-              (user ? 'Add a delivery address at checkout' : 'Log in to save an address')}
-          </span>
-        </div>
+        {company?.settings.shopOpen === false ? (
+          <div className="store-topbar__address store-topbar__address--closed">
+            <strong>🔴 Shop closed</strong>
+            <span>
+              {company.settings.shopClosedMessage ||
+                "We're closed right now. Come back tomorrow!"}
+            </span>
+          </div>
+        ) : (
+          <div className="store-topbar__address" title={savedAddresses[0]?.deliveryAddress ?? ''}>
+            <strong>Delivery in 15 minutes</strong>
+            <span>
+              {savedAddresses[0]?.deliveryAddress ??
+                (user ? 'Add a delivery address at checkout' : 'Log in to save an address')}
+            </span>
+          </div>
+        )}
 
         <div className="store-topbar__search">
           <span className="store-topbar__search-icon">⌕</span>
@@ -2608,15 +2671,23 @@ function Storefront({ user, onOpenLogin, onOpenDashboard, onOpenMyOrders, onTrac
             </div>
             <button
               className="primary-button primary-button--wide"
-              disabled={placingOrder || cartItems.length === 0 || !user || !liveLocation}
+              disabled={
+                placingOrder ||
+                cartItems.length === 0 ||
+                !user ||
+                !liveLocation ||
+                company?.settings.shopOpen === false
+              }
             >
-              {placingOrder
-                ? 'Placing order...'
-                : !user
-                  ? 'Log in to Place Order'
-                  : !liveLocation
-                    ? 'Share location to continue'
-                    : 'Place Order'}
+              {company?.settings.shopOpen === false
+                ? 'Store closed'
+                : placingOrder
+                  ? 'Placing order...'
+                  : !user
+                    ? 'Log in to Place Order'
+                    : !liveLocation
+                      ? 'Share location to continue'
+                      : 'Place Order'}
             </button>
           </form>
         </aside>
