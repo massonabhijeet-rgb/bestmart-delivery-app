@@ -2,7 +2,11 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import admin from 'firebase-admin';
-import { listUserDeviceTokens, removeUserDeviceTokens } from './db.js';
+import {
+  listCustomerDeviceTokens,
+  listUserDeviceTokens,
+  removeUserDeviceTokens,
+} from './db.js';
 import type { OrderStatus } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,36 +40,88 @@ function init() {
   }
 }
 
-async function sendToUser(userId: number, title: string, body: string, data?: Record<string, string>) {
+// FCM sendEachForMulticast caps at 500 tokens per call.
+const FCM_MULTICAST_BATCH = 500;
+
+export interface BroadcastResult {
+  sentCount: number;
+  failedCount: number;
+  staleRemoved: number;
+}
+
+async function sendToTokens(
+  tokens: string[],
+  title: string,
+  body: string,
+  data?: Record<string, string>
+): Promise<BroadcastResult> {
   init();
-  if (!available) return;
-  const tokens = await listUserDeviceTokens(userId);
-  if (tokens.length === 0) return;
+  if (!available || tokens.length === 0) {
+    return { sentCount: 0, failedCount: 0, staleRemoved: 0 };
+  }
 
-  const response = await admin.messaging().sendEachForMulticast({
-    tokens,
-    notification: { title, body },
-    data: data ?? {},
-    apns: { payload: { aps: { sound: 'default' } } },
-    android: { priority: 'high' },
-  });
-
+  let sent = 0;
+  let failed = 0;
   const stale: string[] = [];
-  response.responses.forEach((r, i) => {
-    if (r.error) {
-      const code = r.error.code;
-      if (
-        code === 'messaging/registration-token-not-registered' ||
-        code === 'messaging/invalid-argument' ||
-        code === 'messaging/invalid-registration-token'
-      ) {
-        stale.push(tokens[i]);
+
+  for (let i = 0; i < tokens.length; i += FCM_MULTICAST_BATCH) {
+    const batch = tokens.slice(i, i + FCM_MULTICAST_BATCH);
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens: batch,
+      notification: { title, body },
+      data: data ?? {},
+      apns: { payload: { aps: { sound: 'default' } } },
+      android: { priority: 'high' },
+    });
+    sent += response.successCount;
+    failed += response.failureCount;
+    response.responses.forEach((r, idx) => {
+      if (r.error) {
+        const code = r.error.code;
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-argument' ||
+          code === 'messaging/invalid-registration-token'
+        ) {
+          stale.push(batch[idx]);
+        }
       }
-    }
-  });
+    });
+  }
+
   if (stale.length > 0) {
     await removeUserDeviceTokens(stale);
   }
+  return { sentCount: sent, failedCount: failed, staleRemoved: stale.length };
+}
+
+async function sendToUser(
+  userId: number,
+  title: string,
+  body: string,
+  data?: Record<string, string>
+) {
+  const tokens = await listUserDeviceTokens(userId);
+  await sendToTokens(tokens, title, body, data);
+}
+
+export async function broadcastToCustomers(
+  title: string,
+  body: string,
+  data?: Record<string, string>
+): Promise<BroadcastResult> {
+  const tokens = await listCustomerDeviceTokens();
+  return sendToTokens(tokens, title, body, data);
+}
+
+export async function notifyCustomerById(
+  userId: number,
+  title: string,
+  body: string,
+  data?: Record<string, string>
+): Promise<BroadcastResult> {
+  const tokens = await listUserDeviceTokens(userId);
+  return sendToTokens(tokens, title, body, data);
 }
 
 interface StatusCopy {

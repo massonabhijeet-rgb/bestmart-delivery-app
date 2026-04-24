@@ -1043,3 +1043,45 @@ export async function apiCreateUser(
   });
   return data;
 }
+
+export interface BroadcastCustomer {
+  id: number;
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+export interface BroadcastResponse {
+  scope: 'all_customers' | 'individual';
+  sentCount: number;
+  failedCount: number;
+  staleRemoved: number;
+  recipient?: BroadcastCustomer;
+}
+
+export async function apiGetBroadcastRecipients() {
+  return request<{ customersWithDevices: number }>('/admin/broadcast/recipients');
+}
+
+export async function apiLookupBroadcastRecipient(identifier: string) {
+  const data = await request<{ customer: BroadcastCustomer }>(
+    '/admin/broadcast/lookup',
+    {
+      method: 'POST',
+      body: JSON.stringify({ identifier }),
+    }
+  );
+  return data.customer;
+}
+
+export async function apiSendBroadcast(payload: {
+  title: string;
+  body: string;
+  url?: string;
+  recipientIdentifier?: string;
+}) {
+  return request<BroadcastResponse>('/admin/broadcast', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}

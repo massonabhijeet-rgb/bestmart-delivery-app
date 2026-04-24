@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
+import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
 import brandRoutes from './routes/brands.js';
 import campaignRoutes from './routes/campaigns.js';
@@ -66,6 +67,7 @@ app.use(
 app.use(express.json({ limit: '20mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
+app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/brands', brandRoutes);
 app.use('/api/campaigns', campaignRoutes);

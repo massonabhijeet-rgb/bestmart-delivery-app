@@ -6,6 +6,7 @@ import { useOrderSocket } from '../hooks/useOrderSocket';
 import type { RiderLocation } from '../hooks/useOrderSocket';
 import { confirm, pickRider, rejectOrder } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
+import BroadcastPanel from '../components/BroadcastPanel';
 import LazyMount from '../components/LazyMount';
 import {
   describeWeatherCode,
@@ -144,7 +145,7 @@ const defaultProductForm: ProductFormState = {
   variantLinkLabel: '',
 };
 
-type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'campaigns' | 'team';
+type DashTab = 'overview' | 'orders' | 'history' | 'sales' | 'inventory' | 'categories' | 'offers' | 'coupons' | 'campaigns' | 'team' | 'broadcast';
 
 function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
@@ -1756,6 +1757,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     ...(canManageCatalog ? [{ key: 'campaigns' as DashTab, label: 'Overlays' }] : []),
     ...(canManageTeam ? [{ key: 'coupons' as DashTab, label: 'Coupons' }] : []),
     ...(canManageTeam ? [{ key: 'team' as DashTab, label: 'Team' }] : []),
+    ...(user.role === 'admin' ? [{ key: 'broadcast' as DashTab, label: 'Notifications' }] : []),
   ];
 
   function handleTabClick(key: DashTab) {
@@ -1825,6 +1827,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         {activeTab === 'campaigns' && renderCampaigns()}
         {activeTab === 'coupons' && renderCoupons()}
         {activeTab === 'team' && renderTeam()}
+        {activeTab === 'broadcast' && user.role === 'admin' && <BroadcastPanel />}
       </main>
 
       {/* ── New Order Toast ── */}

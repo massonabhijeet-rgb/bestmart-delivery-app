@@ -4958,6 +4958,72 @@ export async function removeUserDeviceTokens(tokens: string[]) {
   ]);
 }
 
+// All FCM tokens registered against customer accounts (role='viewer').
+// Returns distinct tokens; a user with two devices contributes two rows.
+export async function listCustomerDeviceTokens(): Promise<string[]> {
+  const { rows } = await pool.query<{ fcm_token: string }>(
+    `SELECT d.fcm_token
+       FROM user_devices d
+       JOIN users u ON u.id = d.user_id
+      WHERE u.role = 'viewer'`
+  );
+  return rows.map((r) => r.fcm_token);
+}
+
+export async function countCustomersWithDevices(): Promise<number> {
+  const { rows } = await pool.query<{ count: string }>(
+    `SELECT COUNT(DISTINCT u.id)::text AS count
+       FROM users u
+       JOIN user_devices d ON d.user_id = u.id
+      WHERE u.role = 'viewer'`
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+export interface CustomerLookup {
+  id: number;
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+// Resolves a customer by email or phone. Phone match is tolerant of
+// formatting: the caller can pass "9876543210", "+919876543210", or
+// "98765 43210" and we normalise both sides to digits before comparing.
+export async function findCustomerByIdentifier(
+  raw: string
+): Promise<CustomerLookup | null> {
+  const value = raw.trim();
+  if (!value) return null;
+
+  if (value.includes('@')) {
+    const { rows } = await pool.query<CustomerLookup>(
+      `SELECT id, full_name AS "fullName", email, phone
+         FROM users
+        WHERE role = 'viewer' AND LOWER(email) = LOWER($1)
+        LIMIT 1`,
+      [value]
+    );
+    return rows[0] ?? null;
+  }
+
+  const digits = value.replace(/\D+/g, '');
+  if (!digits) return null;
+  const { rows } = await pool.query<CustomerLookup>(
+    `SELECT id, full_name AS "fullName", email, phone
+       FROM users
+      WHERE role = 'viewer'
+        AND (
+          REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g') LIKE '%' || $1
+          OR REGEXP_REPLACE(COALESCE(phone_e164, ''), '\\D', '', 'g') LIKE '%' || $1
+        )
+      ORDER BY id DESC
+      LIMIT 1`,
+    [digits]
+  );
+  return rows[0] ?? null;
+}
+
 // Active delivery for a rider that still needs a cached route polyline.
 // Only one order per rider at a time is expected in practice, but the
 // return type is a list to keep the caller simple.
