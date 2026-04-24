@@ -7,6 +7,7 @@ import {
 } from '../db.js';
 import { TTL, cacheDel, cacheGet, cacheSet, key } from '../cache.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { broadcast } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
@@ -71,19 +72,45 @@ router.patch(
   requireRole('admin'),
   async (req: AuthenticatedRequest, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-    const { freeDeliveryThresholdCents, deliveryFeeCents } = req.body as {
+    const {
+      freeDeliveryThresholdCents,
+      deliveryFeeCents,
+      shopOpen,
+      shopClosedMessage,
+    } = req.body as {
       freeDeliveryThresholdCents?: number;
       deliveryFeeCents?: number;
+      shopOpen?: boolean;
+      shopClosedMessage?: string;
     };
-    const patch: { freeDeliveryThresholdCents?: number; deliveryFeeCents?: number } = {};
+    const patch: {
+      freeDeliveryThresholdCents?: number;
+      deliveryFeeCents?: number;
+      shopOpen?: boolean;
+      shopClosedMessage?: string;
+    } = {};
     if (typeof freeDeliveryThresholdCents === 'number') {
       patch.freeDeliveryThresholdCents = freeDeliveryThresholdCents;
     }
     if (typeof deliveryFeeCents === 'number') {
       patch.deliveryFeeCents = deliveryFeeCents;
     }
+    const shopStatusChanged =
+      typeof shopOpen === 'boolean' || typeof shopClosedMessage === 'string';
+    if (typeof shopOpen === 'boolean') patch.shopOpen = shopOpen;
+    if (typeof shopClosedMessage === 'string') patch.shopClosedMessage = shopClosedMessage;
+
     const settings = await updateAppSettings(req.user.companyId, patch);
     await cacheDel(key.companyPublic());
+    if (shopStatusChanged) {
+      broadcast({
+        type: 'shop_status_changed',
+        payload: {
+          shopOpen: settings.shopOpen,
+          shopClosedMessage: settings.shopClosedMessage,
+        },
+      });
+    }
     return res.json({ settings });
   }
 );

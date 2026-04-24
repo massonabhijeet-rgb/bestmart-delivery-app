@@ -240,6 +240,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [freeDeliveryRupees, setFreeDeliveryRupees] = useState('');
   const [deliveryFeeRupees, setDeliveryFeeRupees] = useState('');
   const [savingDeliverySettings, setSavingDeliverySettings] = useState(false);
+  const [shopOpenState, setShopOpenState] = useState(true);
+  const [shopClosedMessageDraft, setShopClosedMessageDraft] = useState('');
+  const [savingShopStatus, setSavingShopStatus] = useState(false);
   const [historyStart, setHistoryStart] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 29);
@@ -589,7 +592,28 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!s) return;
     setFreeDeliveryRupees(String(s.freeDeliveryThresholdCents / 100));
     setDeliveryFeeRupees(String(s.deliveryFeeCents / 100));
+    setShopOpenState(s.shopOpen);
+    setShopClosedMessageDraft(s.shopClosedMessage);
   }, [companyInfo?.settings]);
+
+  async function handleSaveShopStatus(nextOpen: boolean) {
+    setSavingShopStatus(true);
+    try {
+      await apiUpdateAppSettings({
+        shopOpen: nextOpen,
+        shopClosedMessage: shopClosedMessageDraft.trim(),
+      });
+      const updated = await apiGetCompanyPublic();
+      setCompanyInfo(updated);
+      setShopOpenState(nextOpen);
+      setNotice(nextOpen ? 'Shop is now OPEN.' : 'Shop is now CLOSED.');
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update shop status');
+    } finally {
+      setSavingShopStatus(false);
+    }
+  }
 
   async function handleSaveDeliverySettings() {
     const threshold = Number(freeDeliveryRupees);
@@ -2298,6 +2322,67 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               >
                 {savingStoreLocation ? 'Detecting…' : companyInfo?.storeLatitude != null ? '📍 Update location' : '📍 Set current location'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Shop Status */}
+        {user.role === 'admin' && (
+          <div className={`section-box shop-status${shopOpenState ? '' : ' shop-status--closed'}`}>
+            <div className="section-box__head">
+              <div>
+                <h2>Shop Status</h2>
+                <p>
+                  Close the shop to stop taking new orders. Customers see your message
+                  and the Checkout button is disabled.
+                </p>
+              </div>
+              <span className={`shop-status__pill${shopOpenState ? ' shop-status__pill--open' : ' shop-status__pill--closed'}`}>
+                {shopOpenState ? '🟢 Open' : '🔴 Closed'}
+              </span>
+            </div>
+            <div className="shop-status__body">
+              <label className="shop-status__field">
+                <span className="shop-status__label">Closed message (shown to customers)</span>
+                <textarea
+                  rows={2}
+                  maxLength={500}
+                  value={shopClosedMessageDraft}
+                  onChange={(e) => setShopClosedMessageDraft(e.target.value)}
+                  placeholder="We're closed right now. Come back tomorrow!"
+                />
+              </label>
+              <div className="shop-status__actions">
+                {shopOpenState ? (
+                  <button
+                    type="button"
+                    className="ghost-button ghost-button--danger"
+                    onClick={() => void handleSaveShopStatus(false)}
+                    disabled={savingShopStatus}
+                  >
+                    {savingShopStatus ? 'Closing…' : 'Close shop'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void handleSaveShopStatus(true)}
+                    disabled={savingShopStatus}
+                  >
+                    {savingShopStatus ? 'Opening…' : 'Reopen shop'}
+                  </button>
+                )}
+                {!shopOpenState && (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void handleSaveShopStatus(false)}
+                    disabled={savingShopStatus}
+                  >
+                    {savingShopStatus ? 'Saving…' : 'Save message'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}

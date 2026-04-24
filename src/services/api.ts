@@ -54,6 +54,8 @@ export interface SavedAddress {
 export interface AppSettings {
   freeDeliveryThresholdCents: number;
   deliveryFeeCents: number;
+  shopOpen: boolean;
+  shopClosedMessage: string;
 }
 
 export interface CompanyInfo {

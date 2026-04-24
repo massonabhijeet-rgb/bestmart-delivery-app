@@ -9922,3 +9922,56 @@ body {
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* Shop status admin panel */
+.shop-status__pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.shop-status__pill--open {
+  background: #ecfdf5;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+.shop-status__pill--closed {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+.shop-status--closed {
+  box-shadow: 0 0 0 2px #fecaca;
+}
+.shop-status__body {
+  padding: var(--sp-5) var(--sp-6);
+  display: grid;
+  gap: var(--sp-4);
+}
+.shop-status__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shop-status__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--c-ink-3);
+}
+.shop-status__field textarea {
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--c-ink);
+  background: var(--c-surface);
+}
+.shop-status__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}

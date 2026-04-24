@@ -3,6 +3,7 @@ import geoip from 'geoip-lite';
 import { ORDER_STATUS_VALUES, PAYMENT_METHOD_VALUES } from '../constants.js';
 import {
   createOrder,
+  getAppSettings,
   getDefaultCompanyId,
   getDashboardSummary,
   getOrderByPublicId,
@@ -61,6 +62,14 @@ router.post('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => 
     const companyId = await getDefaultCompanyId();
     if (!companyId) {
       return res.status(404).json({ error: 'Company not found' });
+    }
+
+    // Refuse new orders when admin has closed the shop.
+    const storeSettings = await getAppSettings(companyId);
+    if (!storeSettings.shopOpen) {
+      return res.status(503).json({
+        error: storeSettings.shopClosedMessage || 'The shop is closed right now. Please come back later.',
+      });
     }
 
     const {

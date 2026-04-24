@@ -1176,16 +1176,29 @@ export async function updateStoreLocation(companyId: number, latitude: number, l
 export interface AppSettings {
   freeDeliveryThresholdCents: number;
   deliveryFeeCents: number;
+  shopOpen: boolean;
+  shopClosedMessage: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   freeDeliveryThresholdCents: 20000, // ₹200
   deliveryFeeCents: 4900, // ₹49
+  shopOpen: true,
+  shopClosedMessage: "We're closed right now. Come back tomorrow!",
 };
 
-const SETTING_KEYS: Record<keyof AppSettings, string> = {
-  freeDeliveryThresholdCents: 'free_delivery_threshold_cents',
-  deliveryFeeCents: 'delivery_fee_cents',
+type SettingType = 'int' | 'bool' | 'string';
+
+interface SettingSpec {
+  key: string;
+  type: SettingType;
+}
+
+const SETTING_SPEC: Record<keyof AppSettings, SettingSpec> = {
+  freeDeliveryThresholdCents: { key: 'free_delivery_threshold_cents', type: 'int' },
+  deliveryFeeCents: { key: 'delivery_fee_cents', type: 'int' },
+  shopOpen: { key: 'shop_open', type: 'bool' },
+  shopClosedMessage: { key: 'shop_closed_message', type: 'string' },
 };
 
 export async function getAppSettings(companyId: number): Promise<AppSettings> {
@@ -1195,11 +1208,22 @@ export async function getAppSettings(companyId: number): Promise<AppSettings> {
   );
   const map = new Map(result.rows.map((r) => [r.key, r.value]));
   const settings: AppSettings = { ...DEFAULT_SETTINGS };
-  for (const [field, key] of Object.entries(SETTING_KEYS) as Array<[keyof AppSettings, string]>) {
-    const raw = map.get(key);
+  for (const [field, spec] of Object.entries(SETTING_SPEC) as Array<[
+    keyof AppSettings,
+    SettingSpec
+  ]>) {
+    const raw = map.get(spec.key);
     if (raw == null) continue;
-    const num = Number(raw);
-    if (Number.isFinite(num) && num >= 0) settings[field] = Math.round(num);
+    if (spec.type === 'int') {
+      const num = Number(raw);
+      if (Number.isFinite(num) && num >= 0) {
+        (settings as unknown as Record<string, unknown>)[field] = Math.round(num);
+      }
+    } else if (spec.type === 'bool') {
+      (settings as unknown as Record<string, unknown>)[field] = raw === 'true';
+    } else {
+      (settings as unknown as Record<string, unknown>)[field] = raw;
+    }
   }
   return settings;
 }
@@ -1208,10 +1232,28 @@ export async function updateAppSettings(
   companyId: number,
   patch: Partial<AppSettings>
 ): Promise<AppSettings> {
-  for (const [field, value] of Object.entries(patch) as Array<[keyof AppSettings, number | undefined]>) {
-    if (value == null || !Number.isFinite(value) || value < 0) continue;
-    const key = SETTING_KEYS[field];
-    if (!key) continue;
+  for (const [field, value] of Object.entries(patch) as Array<[
+    keyof AppSettings,
+    unknown
+  ]>) {
+    if (value == null) continue;
+    const spec = SETTING_SPEC[field];
+    if (!spec) continue;
+
+    let serialized: string | null = null;
+    if (spec.type === 'int') {
+      const num = Number(value);
+      if (!Number.isFinite(num) || num < 0) continue;
+      serialized = String(Math.round(num));
+    } else if (spec.type === 'bool') {
+      if (typeof value !== 'boolean') continue;
+      serialized = value ? 'true' : 'false';
+    } else if (spec.type === 'string') {
+      if (typeof value !== 'string') continue;
+      serialized = value.trim().slice(0, 500);
+    }
+    if (serialized == null) continue;
+
     await pool.query(
       `
         INSERT INTO app_settings (company_id, key, value)
@@ -1219,7 +1261,7 @@ export async function updateAppSettings(
         ON CONFLICT (company_id, key)
         DO UPDATE SET value = EXCLUDED.value, updated_date = NOW();
       `,
-      [companyId, key, String(Math.round(value))]
+      [companyId, spec.key, serialized]
     );
   }
   return getAppSettings(companyId);

@@ -14,11 +14,17 @@ export type RiderLocation = {
   updatedAt: string;
 };
 
+export type ShopStatusPayload = {
+  shopOpen: boolean;
+  shopClosedMessage: string;
+};
+
 export type WsEvent =
   | { type: 'connected' }
   | { type: 'new_order'; payload: OrderRecord }
   | { type: 'order_updated'; payload: OrderRecord }
-  | { type: 'rider_location'; payload: RiderLocation };
+  | { type: 'rider_location'; payload: RiderLocation }
+  | { type: 'shop_status_changed'; payload: ShopStatusPayload };
 
 // In-memory cache so newly connected admins can get last-known positions
 const riderLocations = new Map<number, RiderLocation>();
