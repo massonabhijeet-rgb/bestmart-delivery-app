@@ -2225,10 +2225,9 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     const raw = opts.search.trim().toLowerCase();
     // Search synonyms — short-form/abbrev/regional names that don't share
     // enough trigrams with the canonical product name to match by
-    // similarity. Each entry maps the raw query to extra substrings that
-    // get OR'd into the LIKE-on-primary-field gate. e.g. "coke" finds
-    // "Coca Cola"; "thumsup" finds "Thums Up". Add new keys here as the
-    // catalog grows.
+    // similarity. Keyed on a single token (no multi-word keys); applied
+    // per-token after tokenization. e.g. "coke" → "coca cola"; "kitkat"
+    // → "kit kat". Add new keys here as the catalog grows.
     const SEARCH_SYNONYMS: Record<string, string[]> = {
       coke: ['coca cola', 'coca-cola', 'coca'],
       pepsi: ['pepsi', 'pepsico'],
@@ -2261,84 +2260,116 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
       potato: ['potato', 'aloo'],
       tomato: ['tomato'],
     };
-    const aliases = SEARCH_SYNONYMS[raw] ?? [];
-    // Build LIKE patterns: the raw query plus every alias. We push them
-    // as individual params (rather than a single text[] for ANY) because
-    // pg-node's text[] coercion has quirks in production. The first
-    // pattern ($pLikeStart) is always the raw query — used both as the
-    // primary substring gate and as the rank booster's "%query%" hit.
-    params.push(raw);                const pRaw = params.length;
-    const patterns = [raw, ...aliases].map((s) => `%${s}%`);
-    const pLikeStart = params.length + 1;
-    for (const p of patterns) params.push(p);
-    const pLikeEnd = params.length;
-    // Alias for clarity: the raw "%query%" pattern is the FIRST pattern
-    // we pushed, used by the rank SQL where it scores name / category /
-    // brand / description substring hits. Avoids re-pushing the same
-    // value as a separate parameter (which would leave it unused in the
-    // count query and trip "could not determine data type" in pg).
-    const pContains = pLikeStart;
-    function nameOrCatOrBrandLike(): string {
-      const ors: string[] = [];
-      for (let i = pLikeStart; i <= pLikeEnd; i++) {
-        ors.push(`lower(p.name) LIKE $${i}`);
-        ors.push(`lower(c.name) LIKE $${i}`);
-        ors.push(`lower(b.name) LIKE $${i}`);
+
+    // Tokenize: split on whitespace, drop short/stop-word tokens, dedupe.
+    // AND-ing real tokens means "milk dairy" finds "Mother Dairy Toned
+    // Milk", "cola fanta" finds soft drinks containing both, "kit kat"
+    // finds "KitKat" via per-token substring (the OLD `%kit kat%` substring
+    // would silently miss "KitKat"). Stop-word filter avoids a stray
+    // connective like "of" excluding rows that don't repeat the connective.
+    const STOP_WORDS = new Set([
+      'a', 'an', 'and', 'or', 'the', 'of', 'for', 'in', 'on', 'at',
+      'to', 'is', 'be', 'by', 'with',
+    ]);
+    let tokens = raw
+      .split(/\s+/)
+      .filter((t) => t.length >= 2 && !STOP_WORDS.has(t));
+    if (tokens.length === 0) tokens = [raw];
+    tokens = Array.from(new Set(tokens));
+
+    // Per-token: push patterns (token + alias expansion) and a similarity
+    // threshold; build the per-token WHERE fragment. The first pushed
+    // pattern of each token is `%token%` — its index goes into
+    // perTokenContainsIdx so the rank SQL can score "all tokens hit
+    // name" later. Per-token params stay in `params` because they're
+    // referenced in the WHERE (and so are valid for both count + list
+    // queries).
+    const perTokenContainsIdx: number[] = [];
+    const tokenWheres: string[] = [];
+
+    for (const token of tokens) {
+      const aliases = SEARCH_SYNONYMS[token] ?? [];
+      const patterns = [token, ...aliases].map((s) => `%${s}%`);
+      const startIdx = params.length + 1;
+      for (const p of patterns) params.push(p);
+      const endIdx = params.length;
+      perTokenContainsIdx.push(startIdx);
+
+      const likeOrs: string[] = [];
+      for (let i = startIdx; i <= endIdx; i++) {
+        likeOrs.push(`lower(p.name) LIKE $${i}`);
+        likeOrs.push(`lower(c.name) LIKE $${i}`);
+        likeOrs.push(`lower(b.name) LIKE $${i}`);
       }
-      return ors.join(' OR ');
+
+      if (pgTrgmAvailable) {
+        // Tightened thresholds: short tokens need more trigram overlap to
+        // qualify so "egg" doesn't fuzzy-match unrelated 3-letter words and
+        // "spirit" doesn't drag in "spiral".
+        const tlen = token.length;
+        const simThreshold = tlen <= 3 ? 0.6 : tlen <= 6 ? 0.5 : 0.4;
+        params.push(token);          const pToken = params.length;
+        params.push(simThreshold);   const pSim = params.length;
+        tokenWheres.push(`(
+          ${likeOrs.join(' OR ')}
+          OR similarity(lower(p.name), $${pToken}) > $${pSim}
+          OR similarity(lower(c.name), $${pToken}) > $${pSim}
+          OR similarity(lower(b.name), $${pToken}) > $${pSim}
+        )`);
+      } else {
+        tokenWheres.push(`(${likeOrs.join(' OR ')})`);
+      }
     }
 
+    // AND across tokens: every token must hit a primary field somewhere.
+    // Description still contributes to ranking but isn't a gate — a stray
+    // word in a marketing blurb shouldn't pull unrelated products in.
+    where.push(`(${tokenWheres.join(' AND ')})`);
+
+    // Whole-query params for the rank SQL ("did the exact phrase
+    // appear?"). These are deferred into rankExtraParams because the
+    // count query never references the rank SQL — Postgres errors out
+    // ("could not determine data type of parameter") if it sees a
+    // pushed param that no clause uses.
+    const rankBase = params.length;
+    const pRaw          = rankBase + 1; rankExtraParams.push(raw);
+    const pContainsRank = rankBase + 2; rankExtraParams.push(`%${raw}%`);
+    const pPrefix       = rankBase + 3; rankExtraParams.push(`${raw}%`);
+
+    // "All tokens hit the name" bonus — only meaningful for multi-token
+    // queries (single-token already covered by the +200 substring score).
+    const allTokensInName =
+      tokens.length > 1
+        ? perTokenContainsIdx
+            .map((i) => `lower(p.name) LIKE $${i}`)
+            .join(' AND ')
+        : null;
+    const allTokensBonus = allTokensInName
+      ? `+ (CASE WHEN ${allTokensInName} THEN 80 ELSE 0 END)`
+      : '';
+
     if (pgTrgmAvailable) {
-      // Tightened thresholds. Old values (0.4 / 0.3 / 0.22) let coincidental
-      // trigram overlaps slip through — e.g. "spirit" vs "spiral" sits at ~0.33,
-      // which used to qualify and surfaced pasta when the user searched a
-      // beverage. Bumped so only legitimate typos (shampu/shampoo ~0.7,
-      // tomatoe/tomato ~0.7) pass.
-      const simThreshold = raw.length <= 3 ? 0.6 : raw.length <= 6 ? 0.5 : 0.4;
-      params.push(simThreshold);     const pThreshold = params.length;
-
-      // Description is a *tiebreaker*, not a gate. The query has to appear in
-      // a primary field (name / category / brand) — substring (raw OR any
-      // alias) or close-typo — for the row to match. Otherwise a stray word
-      // in a marketing blurb could pull unrelated products into the results.
-      where.push(`(
-        ${nameOrCatOrBrandLike()}
-        OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
-        OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
-        OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
-      )`);
-
-      // pPrefix position is only known once we append rankExtraParams before
-      // the list query, so rankSql references it via ${pPrefix} at build time.
-      const pPrefix = params.length + 1;
-      rankExtraParams.push(`${raw}%`);
-
       rankSql = `(
         (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
         + (CASE WHEN lower(p.name) LIKE $${pPrefix} THEN 400 ELSE 0 END)
-        + (CASE WHEN lower(p.name) LIKE $${pContains} THEN 200 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pContainsRank} THEN 200 ELSE 0 END)
+        ${allTokensBonus}
         + (similarity(lower(p.name), $${pRaw}) * 120)
-        + (CASE WHEN lower(c.name) LIKE $${pContains} THEN 60 ELSE 0 END)
-        + (CASE WHEN lower(b.name) LIKE $${pContains} THEN 50 ELSE 0 END)
-        + (CASE WHEN lower(p.description) LIKE $${pContains} THEN 20 ELSE 0 END)
+        + (CASE WHEN lower(c.name) LIKE $${pContainsRank} THEN 60 ELSE 0 END)
+        + (CASE WHEN lower(b.name) LIKE $${pContainsRank} THEN 50 ELSE 0 END)
+        + (CASE WHEN lower(p.description) LIKE $${pContainsRank} THEN 20 ELSE 0 END)
         + (similarity(lower(c.name), $${pRaw}) * 30)
         + (similarity(lower(b.name), $${pRaw}) * 25)
       )`;
     } else {
-      // Same gate as the pg_trgm path: query (or any alias) must hit a
-      // primary field. Description still contributes to ranking.
-      where.push(`(${nameOrCatOrBrandLike()})`);
-
-      const pPrefix = params.length + 1;
-      rankExtraParams.push(`${raw}%`);
-
       rankSql = `(
         (CASE WHEN lower(p.name) = $${pRaw} THEN 1000 ELSE 0 END)
         + (CASE WHEN lower(p.name) LIKE $${pPrefix} THEN 400 ELSE 0 END)
-        + (CASE WHEN lower(p.name) LIKE $${pContains} THEN 200 ELSE 0 END)
-        + (CASE WHEN lower(c.name) LIKE $${pContains} THEN 60 ELSE 0 END)
-        + (CASE WHEN lower(b.name) LIKE $${pContains} THEN 50 ELSE 0 END)
-        + (CASE WHEN lower(p.description) LIKE $${pContains} THEN 20 ELSE 0 END)
+        + (CASE WHEN lower(p.name) LIKE $${pContainsRank} THEN 200 ELSE 0 END)
+        ${allTokensBonus}
+        + (CASE WHEN lower(c.name) LIKE $${pContainsRank} THEN 60 ELSE 0 END)
+        + (CASE WHEN lower(b.name) LIKE $${pContainsRank} THEN 50 ELSE 0 END)
+        + (CASE WHEN lower(p.description) LIKE $${pContainsRank} THEN 20 ELSE 0 END)
       )`;
     }
   }
