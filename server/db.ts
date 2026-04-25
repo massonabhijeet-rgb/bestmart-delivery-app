@@ -2188,6 +2188,10 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     where.push('p.is_active = TRUE');
     where.push('p.stock_quantity >= 0');
     where.push('c.is_hidden IS NOT TRUE');
+    // Storefront only shows products with artwork. Image-less rows are
+    // visible to admins (who can fix them) but never go to shoppers.
+    where.push("p.image_url IS NOT NULL AND p.image_url <> ''");
+    where.push("c.image_url IS NOT NULL AND c.image_url <> ''");
   }
 
   if (opts.category && opts.category !== 'All') {
@@ -2596,6 +2600,8 @@ export async function getStorefrontSpotlight(
     AND p.is_active = TRUE
     AND p.stock_quantity > 0
     AND c.is_hidden IS NOT TRUE
+    AND p.image_url IS NOT NULL AND p.image_url <> ''
+    AND c.image_url IS NOT NULL AND c.image_url <> ''
   `;
   // Over-fetch so dedup-by-variant-group can still hit the requested
   // limit even when many siblings show up in the raw rows.
@@ -2900,6 +2906,8 @@ export async function getHomeRails(
       AND p.is_active = TRUE
       AND p.stock_quantity > 0
       AND c.is_hidden IS NOT TRUE
+      AND p.image_url IS NOT NULL AND p.image_url <> ''
+      AND c.image_url IS NOT NULL AND c.image_url <> ''
   `;
 
   // Storefront should show ONE tile per variant group — the QuickViewSheet

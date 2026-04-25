@@ -428,7 +428,19 @@ router.get('/:uniqueId/variants', attachUserIfPresent, async (req: Authenticated
   if (cached) return res.json(cached);
 
   const variants = await listProductVariants(uniqueId, companyId);
-  const visible = req.user ? variants : variants.filter((p) => p.isActive);
+  // Admins/editors see every sibling so they can manage them.
+  // Storefront shoppers only see active siblings that have artwork —
+  // image-less variants would render a blank tile in the QuickView.
+  const isManagement =
+    req.user?.role === 'admin' || req.user?.role === 'editor';
+  const visible = isManagement
+    ? variants
+    : variants.filter(
+        (p) =>
+          p.isActive &&
+          p.imageUrl != null &&
+          p.imageUrl.trim().length > 0,
+      );
   const result = { variants: visible };
   await cacheSet(cacheKey, result, TTL.PRODUCTS);
   return res.json(result);

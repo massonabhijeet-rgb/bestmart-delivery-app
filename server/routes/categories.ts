@@ -60,17 +60,26 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
     return res.status(404).json({ error: 'Company not found' });
   }
 
-  // Admins/editors see hidden categories so they can manage them; everyone
-  // else (storefront shoppers) gets only the visible set.
-  const includeHidden =
+  // Admins/editors see hidden + image-less categories so they can
+  // manage them; everyone else (storefront shoppers) gets only the
+  // visible categories that actually have an image to render. A
+  // category without artwork would draw a blank tile on mobile.
+  const isManagement =
     req.user?.role === 'admin' || req.user?.role === 'editor';
 
-  const cacheKey = `${key.categoriesList(companyId)}:${includeHidden ? 'all' : 'visible'}`;
+  const cacheKey = `${key.categoriesList(companyId)}:${isManagement ? 'all' : 'visible'}`;
   const cached = await cacheGet<{ categories: unknown[] }>(cacheKey);
   if (cached) return res.json(cached);
 
   const categories = await listCategories(companyId);
-  const filtered = includeHidden ? categories : categories.filter((c) => !c.isHidden);
+  const filtered = isManagement
+    ? categories
+    : categories.filter(
+        (c) =>
+          !c.isHidden &&
+          c.imageUrl != null &&
+          c.imageUrl.trim().length > 0,
+      );
   const result = { categories: filtered };
   await cacheSet(cacheKey, result, TTL.CATEGORIES);
   return res.json(result);
