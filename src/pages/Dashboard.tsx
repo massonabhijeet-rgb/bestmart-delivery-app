@@ -298,6 +298,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [inlineBrandName, setInlineBrandName] = useState('');
   const [creatingInlineBrand, setCreatingInlineBrand] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryParentId, setNewCategoryParentId] = useState<number | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
   const [editingCategoryHidden, setEditingCategoryHidden] = useState(false);
@@ -1156,9 +1157,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!name) return;
     setCreatingCategory(true);
     try {
-      await apiCreateCategory(name);
-      setNotice(`Category "${name}" created.`);
+      await apiCreateCategory(name, newCategoryParentId);
+      setNotice(
+        newCategoryParentId == null
+          ? `Parent category "${name}" created.`
+          : `Sub-category "${name}" created.`,
+      );
       setNewCategoryName('');
+      setNewCategoryParentId(null);
       const cats = await apiListCategories();
       setCategories(cats);
     } catch (err) {
@@ -4156,15 +4162,41 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 className="cat-create-bar__input"
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
-                placeholder="New category name…"
+                placeholder={
+                  newCategoryParentId == null
+                    ? 'New parent category name… (e.g. Beauty & Personal Care)'
+                    : 'New sub-category name…'
+                }
               />
+              <select
+                className="cat-create-bar__parent"
+                value={newCategoryParentId == null ? '' : String(newCategoryParentId)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setNewCategoryParentId(v === '' ? null : Number(v));
+                }}
+                title="Parent — leave as 'No parent' to create a top-level section"
+              >
+                <option value="">No parent (creates a section header)</option>
+                {categories
+                  .filter((c) => c.parentId == null)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Under: {c.name}
+                    </option>
+                  ))}
+              </select>
             </div>
             <button
               type="submit"
               className="primary-button"
               disabled={!newCategoryName.trim() || creatingCategory}
             >
-              {creatingCategory ? 'Adding…' : 'Add Category'}
+              {creatingCategory
+                ? 'Adding…'
+                : newCategoryParentId == null
+                  ? 'Add Parent Category'
+                  : 'Add Sub-category'}
             </button>
           </form>
         )}

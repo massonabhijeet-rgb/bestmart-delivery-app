@@ -4953,6 +4953,17 @@ textarea {
   box-shadow: 0 0 0 3px rgba(30,136,229,0.12);
 }
 
+.cat-create-bar__parent {
+  margin-left: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-border, #d0d4dc);
+  border-radius: 8px;
+  background: var(--c-surface, #fff);
+  font-size: 0.85rem;
+  color: var(--c-ink, #111827);
+  min-width: 180px;
+}
+
 /* Category grid */
 .cat-grid {
   display: grid;
