@@ -2223,12 +2223,20 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     params.push(`%${raw}%`);         const pContains = params.length;
 
     if (pgTrgmAvailable) {
-      const simThreshold = raw.length <= 3 ? 0.4 : raw.length <= 6 ? 0.3 : 0.22;
+      // Tightened thresholds. Old values (0.4 / 0.3 / 0.22) let coincidental
+      // trigram overlaps slip through — e.g. "spirit" vs "spiral" sits at ~0.33,
+      // which used to qualify and surfaced pasta when the user searched a
+      // beverage. Bumped so only legitimate typos (shampu/shampoo ~0.7,
+      // tomatoe/tomato ~0.7) pass.
+      const simThreshold = raw.length <= 3 ? 0.6 : raw.length <= 6 ? 0.5 : 0.4;
       params.push(simThreshold);     const pThreshold = params.length;
 
+      // Description is a *tiebreaker*, not a gate. The query has to appear in
+      // a primary field (name / category / brand) — substring or close-typo
+      // — for the row to match. Otherwise a stray word in a marketing blurb
+      // could pull unrelated products into the results.
       where.push(`(
         lower(p.name) LIKE $${pContains}
-        OR lower(p.description) LIKE $${pContains}
         OR lower(c.name) LIKE $${pContains}
         OR lower(b.name) LIKE $${pContains}
         OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
@@ -2253,9 +2261,10 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
         + (similarity(lower(b.name), $${pRaw}) * 25)
       )`;
     } else {
+      // Same gate as the pg_trgm path: query must hit a primary field
+      // (name / category / brand). Description still contributes to ranking.
       where.push(`(
         lower(p.name) LIKE $${pContains}
-        OR lower(p.description) LIKE $${pContains}
         OR lower(c.name) LIKE $${pContains}
         OR lower(b.name) LIKE $${pContains}
       )`);
