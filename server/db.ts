@@ -2262,12 +2262,26 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
       tomato: ['tomato'],
     };
     const aliases = SEARCH_SYNONYMS[raw] ?? [];
-    // Build LIKE patterns: the raw query plus every alias. ANY($::text[])
-    // lets us OR the whole list in one shot per field.
+    // Build LIKE patterns: the raw query plus every alias. We push them
+    // as individual params (rather than a single text[] for ANY) because
+    // pg-node's text[] coercion has quirks in production that surface as
+    // 500s; explicit OR'd LIKEs against multiple params are universally
+    // portable.
     params.push(raw);                const pRaw = params.length;
     params.push(`%${raw}%`);         const pContains = params.length;
-    params.push([raw, ...aliases].map((s) => `%${s}%`));
-    const pLikeAny = params.length;
+    const patterns = [raw, ...aliases].map((s) => `%${s}%`);
+    const pLikeStart = params.length + 1;
+    for (const p of patterns) params.push(p);
+    const pLikeEnd = params.length;
+    function nameOrCatOrBrandLike(): string {
+      const ors: string[] = [];
+      for (let i = pLikeStart; i <= pLikeEnd; i++) {
+        ors.push(`lower(p.name) LIKE $${i}`);
+        ors.push(`lower(c.name) LIKE $${i}`);
+        ors.push(`lower(b.name) LIKE $${i}`);
+      }
+      return ors.join(' OR ');
+    }
 
     if (pgTrgmAvailable) {
       // Tightened thresholds. Old values (0.4 / 0.3 / 0.22) let coincidental
@@ -2283,9 +2297,7 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
       // alias) or close-typo — for the row to match. Otherwise a stray word
       // in a marketing blurb could pull unrelated products into the results.
       where.push(`(
-        lower(p.name) LIKE ANY($${pLikeAny}::text[])
-        OR lower(c.name) LIKE ANY($${pLikeAny}::text[])
-        OR lower(b.name) LIKE ANY($${pLikeAny}::text[])
+        ${nameOrCatOrBrandLike()}
         OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
         OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
         OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
@@ -2310,11 +2322,7 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     } else {
       // Same gate as the pg_trgm path: query (or any alias) must hit a
       // primary field. Description still contributes to ranking.
-      where.push(`(
-        lower(p.name) LIKE ANY($${pLikeAny}::text[])
-        OR lower(c.name) LIKE ANY($${pLikeAny}::text[])
-        OR lower(b.name) LIKE ANY($${pLikeAny}::text[])
-      )`);
+      where.push(`(${nameOrCatOrBrandLike()})`);
 
       const pPrefix = params.length + 1;
       rankExtraParams.push(`${raw}%`);
