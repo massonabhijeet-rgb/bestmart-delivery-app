@@ -2264,15 +2264,20 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     const aliases = SEARCH_SYNONYMS[raw] ?? [];
     // Build LIKE patterns: the raw query plus every alias. We push them
     // as individual params (rather than a single text[] for ANY) because
-    // pg-node's text[] coercion has quirks in production that surface as
-    // 500s; explicit OR'd LIKEs against multiple params are universally
-    // portable.
+    // pg-node's text[] coercion has quirks in production. The first
+    // pattern ($pLikeStart) is always the raw query — used both as the
+    // primary substring gate and as the rank booster's "%query%" hit.
     params.push(raw);                const pRaw = params.length;
-    params.push(`%${raw}%`);         const pContains = params.length;
     const patterns = [raw, ...aliases].map((s) => `%${s}%`);
     const pLikeStart = params.length + 1;
     for (const p of patterns) params.push(p);
     const pLikeEnd = params.length;
+    // Alias for clarity: the raw "%query%" pattern is the FIRST pattern
+    // we pushed, used by the rank SQL where it scores name / category /
+    // brand / description substring hits. Avoids re-pushing the same
+    // value as a separate parameter (which would leave it unused in the
+    // count query and trip "could not determine data type" in pg).
+    const pContains = pLikeStart;
     function nameOrCatOrBrandLike(): string {
       const ors: string[] = [];
       for (let i = pLikeStart; i <= pLikeEnd; i++) {
