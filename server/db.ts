@@ -2513,6 +2513,27 @@ const MOOD_KEYWORDS: Record<string, string[]> = {
   rainy: ['tea', 'coffee', 'soup', 'pakora', 'biscuit', 'masala', 'noodle', 'instant'],
 };
 
+// Drops sibling variants from a list — keeps the first occurrence per
+// variant_group_id and lets ungrouped products through unchanged. The
+// upstream queries are already ORDER BY'd by relevance/sales, so "first
+// wins" naturally lands the most prominent variant as the anchor.
+function dedupVariants<T extends { id: number; variantGroupId: number | null }>(
+  rows: T[],
+): T[] {
+  const seen = new Set<number>();
+  const out: T[] = [];
+  for (const r of rows) {
+    if (r.variantGroupId == null) {
+      out.push(r);
+      continue;
+    }
+    if (seen.has(r.variantGroupId)) continue;
+    seen.add(r.variantGroupId);
+    out.push(r);
+  }
+  return out;
+}
+
 export async function getStorefrontSpotlight(
   companyId: number,
   mood: string | null,
@@ -2524,6 +2545,9 @@ export async function getStorefrontSpotlight(
     AND p.stock_quantity > 0
     AND c.is_hidden IS NOT TRUE
   `;
+  // Over-fetch so dedup-by-variant-group can still hit the requested
+  // limit even when many siblings show up in the raw rows.
+  const overFetch = limit * 4;
 
   const offerRes = await pool.query(
     `SELECT ${PRODUCT_SELECT_COLUMNS}
@@ -2533,13 +2557,13 @@ export async function getStorefrontSpotlight(
      WHERE ${baseWhere} AND p.is_on_offer = TRUE
      ORDER BY p.updated_date DESC
      LIMIT $2;`,
-    [companyId, limit],
+    [companyId, overFetch],
   );
 
   const dailyClauses = DAILY_ESSENTIAL_KEYWORDS.map((_, i) =>
     `(c.name ILIKE $${i + 2} OR p.name ILIKE $${i + 2})`,
   ).join(' OR ');
-  const dailyParams = [companyId, ...DAILY_ESSENTIAL_KEYWORDS.map((k) => `%${k}%`), limit];
+  const dailyParams = [companyId, ...DAILY_ESSENTIAL_KEYWORDS.map((k) => `%${k}%`), overFetch];
   const dailyRes = await pool.query(
     `SELECT ${PRODUCT_SELECT_COLUMNS}
      FROM products p
@@ -2557,7 +2581,7 @@ export async function getStorefrontSpotlight(
     const moodClauses = moodWords.map((_, i) =>
       `(p.name ILIKE $${i + 2} OR p.description ILIKE $${i + 2} OR c.name ILIKE $${i + 2})`,
     ).join(' OR ');
-    const moodParams = [companyId, ...moodWords.map((w) => `%${w}%`), limit];
+    const moodParams = [companyId, ...moodWords.map((w) => `%${w}%`), overFetch];
     const moodRes = await pool.query(
       `SELECT ${PRODUCT_SELECT_COLUMNS}
        FROM products p
@@ -2568,12 +2592,12 @@ export async function getStorefrontSpotlight(
        LIMIT $${moodParams.length};`,
       moodParams,
     );
-    moodPicks = moodRes.rows.map(mapProduct);
+    moodPicks = dedupVariants(moodRes.rows.map(mapProduct)).slice(0, limit);
   }
 
   return {
-    offerProducts: offerRes.rows.map(mapProduct),
-    dailyEssentials: dailyRes.rows.map(mapProduct),
+    offerProducts: dedupVariants(offerRes.rows.map(mapProduct)).slice(0, limit),
+    dailyEssentials: dedupVariants(dailyRes.rows.map(mapProduct)).slice(0, limit),
     moodPicks,
   };
 }
@@ -2787,29 +2811,49 @@ export async function getHomeRails(
       AND c.is_hidden IS NOT TRUE
   `;
 
+  // Storefront should show ONE tile per variant group — the QuickViewSheet
+  // surfaces the rest. Partition by COALESCE(variant_group_id, -p.id) so
+  // ungrouped products still get unique partitions of size 1.
   const [globalRes, perCatRes, searchScoreMap, clickScoreMap, userAffinityMap] =
     await Promise.all([
-      pool.query(
-        `WITH ${soldCte}
-         SELECT ${PRODUCT_SELECT_COLUMNS}, COALESCE(s.units_sold, 0)::int AS "unitsSold"
-         ${baseJoinWhere}
-         ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
-         LIMIT $2;`,
-        [companyId, limit, days],
-      ),
       pool.query(
         `WITH ${soldCte},
          ranked AS (
            SELECT ${PRODUCT_SELECT_COLUMNS},
                   COALESCE(s.units_sold, 0)::int AS "unitsSold",
                   ROW_NUMBER() OVER (
-                    PARTITION BY p.category_id
-                    ORDER BY
-                      (CASE WHEN p.is_on_offer OR (p.original_price_cents IS NOT NULL AND p.original_price_cents > p.price_cents) THEN 0 ELSE 1 END),
-                      COALESCE(s.units_sold, 0) DESC,
-                      p.updated_date DESC
-                  ) AS rn
+                    PARTITION BY COALESCE(p.variant_group_id, -p.id)
+                    ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+                  ) AS variant_rn
            ${baseJoinWhere}
+         )
+         SELECT * FROM ranked WHERE variant_rn = 1
+         ORDER BY "unitsSold" DESC, "updatedDate" DESC
+         LIMIT $2;`,
+        [companyId, limit, days],
+      ),
+      pool.query(
+        `WITH ${soldCte},
+         deduped AS (
+           SELECT ${PRODUCT_SELECT_COLUMNS},
+                  COALESCE(s.units_sold, 0)::int AS "unitsSold",
+                  ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(p.variant_group_id, -p.id)
+                    ORDER BY COALESCE(s.units_sold, 0) DESC, p.updated_date DESC
+                  ) AS variant_rn
+           ${baseJoinWhere}
+         ),
+         ranked AS (
+           SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY "categoryId"
+                    ORDER BY
+                      (CASE WHEN "isOnOffer" OR ("originalPriceCents" IS NOT NULL AND "originalPriceCents" > "priceCents") THEN 0 ELSE 1 END),
+                      "unitsSold" DESC,
+                      "updatedDate" DESC
+                  ) AS rn
+             FROM deduped
+            WHERE variant_rn = 1
          )
          SELECT * FROM ranked WHERE rn <= $2;`,
         [companyId, limit, days],
