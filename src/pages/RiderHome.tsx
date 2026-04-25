@@ -49,6 +49,7 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
   >(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
 
   // Request browser notification permission once on mount
   useEffect(() => {
@@ -56,6 +57,24 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
       void Notification.requestPermission();
     }
   }, []);
+
+  // Tick every second only while we have a pending-accept order, so the
+  // countdown badge stays live. No work happens once everything is
+  // accepted (or there are no orders).
+  const hasPending = orders.some(
+    (o) => !o.riderAcceptedAt && o.riderAssignmentDeadline,
+  );
+  useEffect(() => {
+    if (!hasPending) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasPending]);
+
+  function secondsLeft(order: Order): number | null {
+    if (order.riderAcceptedAt || !order.riderAssignmentDeadline) return null;
+    const diff = new Date(order.riderAssignmentDeadline).getTime() - now;
+    return Math.max(0, Math.ceil(diff / 1000));
+  }
 
   function pushNotification(title: string, body: string) {
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -362,7 +381,16 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
 
               {!order.riderAcceptedAt ? (
                 <div className="rider-order-card__await">
-                  ⏳ Awaiting your acceptance — accept to start delivery.
+                  {(() => {
+                    const left = secondsLeft(order);
+                    if (left == null) {
+                      return '⏳ Awaiting your acceptance — accept to start delivery.';
+                    }
+                    if (left <= 0) {
+                      return '⏳ Reassigning to another rider…';
+                    }
+                    return `⏳ Accept in ${left}s — otherwise this moves to another rider.`;
+                  })()}
                 </div>
               ) : null}
 
@@ -440,14 +468,23 @@ function RiderHome({ user, onLogout }: RiderHomeProps) {
               ) : null}
               <div className="rider-order-card__actions">
                 {!order.riderAcceptedAt ? (
-                  <button
-                    type="button"
-                    className="primary-button primary-button--wide"
-                    disabled={acceptingId === order.publicId}
-                    onClick={() => handleAccept(order)}
-                  >
-                    {acceptingId === order.publicId ? 'Accepting…' : '🤝 Accept delivery'}
-                  </button>
+                  (() => {
+                    const left = secondsLeft(order);
+                    return (
+                      <button
+                        type="button"
+                        className="primary-button primary-button--wide"
+                        disabled={acceptingId === order.publicId || left === 0}
+                        onClick={() => handleAccept(order)}
+                      >
+                        {acceptingId === order.publicId
+                          ? 'Accepting…'
+                          : left != null && left > 0
+                            ? `🤝 Accept delivery (${left}s)`
+                            : '🤝 Accept delivery'}
+                      </button>
+                    );
+                  })()
                 ) : (
                   <>
                     {order.paymentStatus !== 'paid' ? (

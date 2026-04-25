@@ -63,6 +63,11 @@ export interface CategoryRecord {
   updatedDate: string;
 }
 
+// How long a rider has to tap "Accept" before the order auto-reassigns
+// to the next available rider. Single source of truth — used by the SQL
+// that sets rider_assignment_deadline and the sweep that fires on expiry.
+export const RIDER_ACCEPT_TIMEOUT_SECONDS = 45;
+
 export interface OrderItemInput {
   productId: string;
   quantity: number;
@@ -88,6 +93,7 @@ export interface OrderRecord {
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
   riderAcceptedAt: string | null;
+  riderAssignmentDeadline: string | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
@@ -469,6 +475,8 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS route_origin_lng DOUBLE PRECISION;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS routed_at TIMESTAMPTZ;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_accepted_at TIMESTAMPTZ;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_assignment_deadline TIMESTAMPTZ;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_skips INTEGER[] NOT NULL DEFAULT '{}';
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -1829,22 +1837,163 @@ export async function setRiderAvailability(
 
 // Marks the order as accepted by the assigned rider. Idempotent for the
 // same rider (re-accepting is a no-op); returns null if the caller isn't
-// the assigned rider or the order is already closed.
+// the assigned rider, the deadline has already passed, or the order is
+// already closed. The deadline guard makes accept race-safe against the
+// auto-reassign sweep that fires when 45s elapse.
 export async function acceptRiderOrder(publicId: string, riderUserId: number) {
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
       SET rider_accepted_at = COALESCE(rider_accepted_at, NOW()),
+          rider_assignment_deadline = NULL,
           updated_date = NOW()
       WHERE public_id = $1
         AND assigned_rider_user_id = $2
         AND status NOT IN ('delivered', 'cancelled')
+        AND (rider_accepted_at IS NOT NULL
+             OR rider_assignment_deadline IS NULL
+             OR rider_assignment_deadline > NOW())
       RETURNING id;
     `,
     [publicId, riderUserId]
   );
   if (!updated.rowCount) return null;
   return getOrderByPublicId(publicId);
+}
+
+// Pick the next available rider for a given order, excluding any user
+// IDs already in the skip list. Returns null when no candidate is left.
+export async function findNextAvailableRiderForOrder(
+  companyId: number,
+  excludeIds: number[]
+): Promise<{ id: number; fullName: string | null; email: string } | null> {
+  const result = await pool.query<{ id: number; fullName: string | null; email: string }>(
+    `
+      SELECT id, full_name AS "fullName", email
+      FROM users
+      WHERE company_id = $1
+        AND role = 'rider'
+        AND COALESCE(is_available, FALSE) = TRUE
+        AND NOT (id = ANY($2::INTEGER[]))
+      ORDER BY id ASC
+      LIMIT 1;
+    `,
+    [companyId, excludeIds]
+  );
+  return result.rows[0] ?? null;
+}
+
+// Snapshot of an order whose rider didn't accept in time. The sweep
+// returns these so callers can broadcast / push-notify the next rider.
+export interface ExpiredAssignment {
+  publicId: string;
+  companyId: number;
+  previousRiderUserId: number;
+  newRiderUserId: number | null;
+  newRiderName: string | null;
+}
+
+// Finds orders where the rider hasn't accepted before the deadline,
+// appends that rider to the skip list, then either reassigns to the
+// next available rider (resetting the deadline) or clears the
+// assignment so admin can step in. Designed to be safe to call on a
+// fast interval — the WHERE clause caps the work to past-deadline rows
+// and a row-level UPDATE keeps things atomic per-order.
+export async function expireAndReassignStaleAssignments(): Promise<
+  ExpiredAssignment[]
+> {
+  const stale = await pool.query<{
+    publicId: string;
+    companyId: number;
+    riderUserId: number;
+    riderSkips: number[];
+  }>(
+    `
+      SELECT public_id AS "publicId",
+             company_id AS "companyId",
+             assigned_rider_user_id AS "riderUserId",
+             rider_skips AS "riderSkips"
+        FROM orders
+       WHERE rider_assignment_deadline IS NOT NULL
+         AND rider_assignment_deadline < NOW()
+         AND rider_accepted_at IS NULL
+         AND assigned_rider_user_id IS NOT NULL
+         AND status NOT IN ('delivered', 'cancelled')
+       LIMIT 100;
+    `
+  );
+
+  const handled: ExpiredAssignment[] = [];
+  for (const row of stale.rows) {
+    const skips = Array.from(new Set([...(row.riderSkips ?? []), row.riderUserId]));
+    const next = await findNextAvailableRiderForOrder(row.companyId, skips);
+
+    if (next) {
+      const result = await pool.query(
+        `
+          UPDATE orders
+          SET assigned_rider_user_id = $3,
+              assigned_rider = $4,
+              rider_skips = $5,
+              rider_accepted_at = NULL,
+              rider_assignment_deadline = NOW() + INTERVAL '${RIDER_ACCEPT_TIMEOUT_SECONDS} seconds',
+              updated_date = NOW()
+          WHERE public_id = $1
+            AND company_id = $2
+            AND assigned_rider_user_id = $6
+            AND rider_accepted_at IS NULL
+          RETURNING id;
+        `,
+        [
+          row.publicId,
+          row.companyId,
+          next.id,
+          next.fullName ?? next.email,
+          skips,
+          row.riderUserId,
+        ]
+      );
+      if (result.rowCount) {
+        handled.push({
+          publicId: row.publicId,
+          companyId: row.companyId,
+          previousRiderUserId: row.riderUserId,
+          newRiderUserId: next.id,
+          newRiderName: next.fullName,
+        });
+      }
+    } else {
+      // No more riders left to try — leave as Unassigned for admin.
+      const result = await pool.query(
+        `
+          UPDATE orders
+          SET assigned_rider_user_id = NULL,
+              assigned_rider = NULL,
+              rider_skips = $3,
+              rider_accepted_at = NULL,
+              rider_assignment_deadline = NULL,
+              updated_date = NOW()
+          WHERE public_id = $1
+            AND company_id = $2
+            AND assigned_rider_user_id = $4
+            AND rider_accepted_at IS NULL
+          RETURNING id;
+        `,
+        [row.publicId, row.companyId, skips, row.riderUserId]
+      );
+      if (result.rowCount) {
+        handled.push({
+          publicId: row.publicId,
+          companyId: row.companyId,
+          previousRiderUserId: row.riderUserId,
+          newRiderUserId: null,
+          newRiderName: null,
+        });
+      }
+    }
+  }
+
+  return handled;
 }
 
 export async function listRiderOrders(riderUserId: number) {
@@ -4227,6 +4376,7 @@ async function mapOrder(orderRow: OrderRow) {
     assignedRiderUserId: orderRow.assignedRiderUserId ?? null,
     assignedRiderPhone: orderRow.assignedRiderPhone ?? null,
     riderAcceptedAt: orderRow.riderAcceptedAt ?? null,
+    riderAssignmentDeadline: orderRow.riderAssignmentDeadline ?? null,
     geoLabel: orderRow.geoLabel,
     deliveryLatitude: orderRow.deliveryLatitude,
     deliveryLongitude: orderRow.deliveryLongitude,
@@ -4498,6 +4648,7 @@ const ORDER_SELECT_COLUMNS = `
   o.assigned_rider AS "assignedRider",
   o.assigned_rider_user_id AS "assignedRiderUserId",
   o.rider_accepted_at AS "riderAcceptedAt",
+  o.rider_assignment_deadline AS "riderAssignmentDeadline",
   r.phone AS "assignedRiderPhone",
   o.geo_label AS "geoLabel",
   o.delivery_latitude AS "deliveryLatitude",
@@ -4728,9 +4879,11 @@ export async function updateOrderStatus(
     params.push(generateDeliveryOtp());
   }
 
-  // Reset rider_accepted_at when the assignment changes (or clears). This
-  // is done in SQL so the old value is compared atomically — admin
-  // reassigning to a different rider forces the new rider to accept.
+  // Reset rider_accepted_at + start a new accept-deadline + clear the
+  // skip list whenever the assignment changes. Admin manually choosing a
+  // (different) rider counts as a fresh start, so any prior skip list is
+  // cleared. The CASE … IS DISTINCT FROM … guard keeps these untouched
+  // when the same rider is re-stamped (e.g. by the deliver path).
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
@@ -4743,6 +4896,17 @@ export async function updateOrderStatus(
         rider_accepted_at = CASE
           WHEN $4::INTEGER IS DISTINCT FROM assigned_rider_user_id THEN NULL
           ELSE rider_accepted_at
+        END,
+        rider_assignment_deadline = CASE
+          WHEN $4::INTEGER IS DISTINCT FROM assigned_rider_user_id THEN
+            CASE WHEN $4::INTEGER IS NULL THEN NULL
+                 ELSE NOW() + INTERVAL '${RIDER_ACCEPT_TIMEOUT_SECONDS} seconds'
+            END
+          ELSE rider_assignment_deadline
+        END,
+        rider_skips = CASE
+          WHEN $4::INTEGER IS DISTINCT FROM assigned_rider_user_id THEN '{}'::INTEGER[]
+          ELSE rider_skips
         END,
         updated_date = NOW()
       WHERE public_id = $1 AND company_id = $2

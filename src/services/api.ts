@@ -143,6 +143,7 @@ export interface Order {
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
   riderAcceptedAt: string | null;
+  riderAssignmentDeadline: string | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;

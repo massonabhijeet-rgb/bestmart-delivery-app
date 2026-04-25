@@ -19,8 +19,13 @@ import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
 import paymentRoutes from './routes/payments.js';
 import riderRoutes from './routes/rider.js';
-import { initDatabase } from './db.js';
-import { attachWebSocket } from './ws.js';
+import {
+  expireAndReassignStaleAssignments,
+  getOrderByPublicId,
+  initDatabase,
+} from './db.js';
+import { notifyRiderAssigned } from './push.js';
+import { attachWebSocket, broadcast } from './ws.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,6 +90,38 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Polls every second for rider assignments where the rider didn't accept
+// in time. The DB-side helper handles the actual reassignment + skip-list
+// bookkeeping atomically; this loop just hydrates the resulting order
+// snapshots, broadcasts them, and pushes to the new rider.
+function startRiderAssignmentSweep() {
+  let inFlight = false;
+  setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const handled = await expireAndReassignStaleAssignments();
+      for (const ev of handled) {
+        const order = await getOrderByPublicId(ev.publicId);
+        if (!order) continue;
+        broadcast({ type: 'order_updated', payload: order });
+        if (ev.newRiderUserId) {
+          void notifyRiderAssigned({
+            riderUserId: ev.newRiderUserId,
+            publicId: order.publicId,
+            customerName: order.customerName ?? 'Customer',
+            deliveryAddress: order.deliveryAddress ?? '',
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[rider-sweep] failed:', error);
+    } finally {
+      inFlight = false;
+    }
+  }, 1000);
+}
+
 async function start() {
   try {
     await initDatabase();
@@ -95,6 +132,8 @@ async function start() {
     server.listen(PORT, () => {
       console.log(`BestMart API running on http://localhost:${PORT}`);
     });
+
+    startRiderAssignmentSweep();
   } catch (error) {
     console.error('Failed to start BestMart API:', error);
     process.exit(1);
