@@ -510,6 +510,23 @@ export async function apiGetProductVariants(uniqueId: string) {
   return data.variants;
 }
 
+export async function apiGroupVariants(productIds: number[]) {
+  return request<{ groupId: number; productIds: number[] }>(
+    '/products/group-variants',
+    {
+      method: 'POST',
+      body: JSON.stringify({ productIds }),
+    },
+  );
+}
+
+export async function apiUnlinkVariant(productId: number) {
+  return request<{ productId: number; formerGroupId: number | null }>(
+    `/products/${productId}/unlink-variant`,
+    { method: 'POST' },
+  );
+}
+
 export async function apiListCategories() {
   const data = await request<{ categories: Category[] }>('/categories');
   return data.categories;

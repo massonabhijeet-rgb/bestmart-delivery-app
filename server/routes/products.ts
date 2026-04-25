@@ -16,6 +16,7 @@ import {
   getInventorySummary,
   getProductByUniqueId,
   getStorefrontSpotlight,
+  groupProductsAsVariants,
   logClickEvent,
   logSearchEvent,
   hardDeleteProduct,
@@ -26,6 +27,7 @@ import {
   listSlowMovers,
   restoreProduct,
   setProductOffer,
+  unlinkProductFromVariantGroup,
   updateProduct,
   updateProductImage,
   type BulkImportProductRow,
@@ -310,6 +312,66 @@ router.get(
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+);
+
+// Bulk-link products as variants of each other. Used by the admin's
+// in-product chip editor to add a sibling in one shot.
+router.post(
+  '/group-variants',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const { productIds } = (req.body ?? {}) as { productIds?: unknown[] };
+      if (!Array.isArray(productIds) || productIds.length < 2) {
+        return res
+          .status(400)
+          .json({ error: 'productIds (array of at least 2) is required' });
+      }
+      const ids = productIds
+        .map((n) => Number(n))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      const result = await groupProductsAsVariants(ids, req.user.companyId);
+      // Variant snapshots are cached per anchor uniqueId; clear them
+      // wholesale so the storefront sees the new sibling on next fetch.
+      await cacheDelPattern(`product:${req.user.companyId}:*:variants`);
+      return res.json(result);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to group variants';
+      return res.status(400).json({ error: message });
+    }
+  },
+);
+
+router.post(
+  '/:id/unlink-variant',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const id = Number(getRouteParam(req.params.id));
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ error: 'Valid product ID required' });
+      }
+      const result = await unlinkProductFromVariantGroup(id, req.user.companyId);
+      if (!result) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      await cacheDelPattern(`product:${req.user.companyId}:*:variants`);
+      return res.json(result);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to unlink variant';
+      return res.status(400).json({ error: message });
+    }
+  },
 );
 
 // Sibling variants (same variant_group_id). Storefront uses this to render the

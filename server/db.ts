@@ -3094,6 +3094,90 @@ export async function getProductByUniqueId(uniqueId: string, companyId: number) 
   return result.rowCount ? mapProduct(result.rows[0]) : null;
 }
 
+// Joins multiple products under a single variant_group_id so they show
+// as siblings on the storefront. If any of the targeted products
+// already had a group, that group's id is preserved (so existing
+// siblings stay in the same group); otherwise the smallest selected
+// product id is used as a stable anchor. Any prior memberships on the
+// listed products are overwritten — this is the explicit user choice.
+export async function groupProductsAsVariants(
+  productIds: number[],
+  companyId: number,
+) {
+  const ids = Array.from(
+    new Set(productIds.filter((n) => Number.isFinite(n) && n > 0).map(Number)),
+  );
+  if (ids.length < 2) {
+    throw new Error('At least two products are required to form a variant group');
+  }
+
+  const existing = await pool.query<{ id: number; variantGroupId: number | null }>(
+    `SELECT id, variant_group_id AS "variantGroupId"
+       FROM products
+      WHERE id = ANY($1::INTEGER[]) AND company_id = $2`,
+    [ids, companyId],
+  );
+  if (existing.rowCount !== ids.length) {
+    throw new Error('One or more products were not found in this company');
+  }
+  const priorGroups = existing.rows
+    .map((r) => r.variantGroupId)
+    .filter((g): g is number => g != null);
+  const groupId = priorGroups.length > 0 ? priorGroups[0] : Math.min(...ids);
+
+  await pool.query(
+    `UPDATE products
+        SET variant_group_id = $1, updated_date = NOW()
+      WHERE id = ANY($2::INTEGER[]) AND company_id = $3`,
+    [groupId, ids, companyId],
+  );
+  return { groupId, productIds: ids };
+}
+
+// Removes a single product from its variant group. If only one
+// product was left in the old group, that orphan also gets cleared
+// so we never leave a "group of one" behind in the table.
+export async function unlinkProductFromVariantGroup(
+  productId: number,
+  companyId: number,
+) {
+  const before = await pool.query<{ variantGroupId: number | null }>(
+    `SELECT variant_group_id AS "variantGroupId"
+       FROM products
+      WHERE id = $1 AND company_id = $2
+      LIMIT 1`,
+    [productId, companyId],
+  );
+  if (!before.rowCount) return null;
+  const groupId = before.rows[0].variantGroupId;
+
+  await pool.query(
+    `UPDATE products
+        SET variant_group_id = NULL, updated_date = NOW()
+      WHERE id = $1 AND company_id = $2`,
+    [productId, companyId],
+  );
+
+  if (groupId != null) {
+    // If the leaving member was the second-to-last, the lone survivor
+    // shouldn't keep a "group" tag with no peers.
+    const remaining = await pool.query<{ id: number }>(
+      `SELECT id FROM products
+        WHERE variant_group_id = $1 AND company_id = $2`,
+      [groupId, companyId],
+    );
+    if (remaining.rowCount === 1) {
+      await pool.query(
+        `UPDATE products
+            SET variant_group_id = NULL, updated_date = NOW()
+          WHERE id = $1 AND company_id = $2`,
+        [remaining.rows[0].id, companyId],
+      );
+    }
+  }
+  return { productId, formerGroupId: groupId };
+}
+
 // Siblings in the same variant_group_id (excludes the anchor itself).
 export async function listProductVariants(uniqueId: string, companyId: number) {
   const result = await pool.query(

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { formatCurrency, formatDateTime, formatRelativeTime, labelizeStatus } from '../lib/format';
 import { fuzzyRank } from '../lib/fuzzySearch';
 import { playOrderAlert, unlockAudio } from '../lib/sound';
@@ -58,6 +58,9 @@ import {
   apiCreateBrand,
   apiUpdateBrand,
   apiDeleteBrand,
+  apiGetProductVariants,
+  apiGroupVariants,
+  apiUnlinkVariant,
 } from '../services/api';
 import type { Brand, BulkImageUploadResult, Campaign, Coupon, InventorySummary, ProductNameIndexEntry, SalesReport, SlowMoverSuggestion } from '../services/api';
 import type {
@@ -6148,10 +6151,47 @@ type VariantLinkFieldProps = {
 function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: VariantLinkFieldProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  // Edit-mode chip state. Each chip is one sibling already linked to the
+  // anchor; tapping ✕ on a chip immediately unlinks server-side, and
+  // tapping a search result immediately groups it server-side.
+  const [siblings, setSiblings] = useState<ProductNameIndexEntry[]>([]);
+  const [siblingsLoaded, setSiblingsLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && nameIndex === null) void loadIndex();
   }, [open, nameIndex, loadIndex]);
+
+  const editingProduct = useMemo(() => {
+    if (!editingId || !nameIndex) return null;
+    return nameIndex.find((p) => p.uniqueId === editingId) ?? null;
+  }, [editingId, nameIndex]);
+
+  // Load current siblings whenever we open the edit form for a product
+  // that's already in a group.
+  useEffect(() => {
+    if (!editingId) {
+      setSiblings([]);
+      setSiblingsLoaded(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const variants = await apiGetProductVariants(editingId);
+        if (cancelled || !nameIndex) return;
+        const ids = new Set(variants.map((v) => v.id));
+        setSiblings(nameIndex.filter((p) => ids.has(p.id)));
+        setSiblingsLoaded(true);
+      } catch {
+        if (!cancelled) setSiblingsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editingId, nameIndex]);
 
   const brandFilterId = form.brandId ? Number(form.brandId) : null;
 
@@ -6159,17 +6199,20 @@ function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: Va
     if (!open || !nameIndex) return [];
     const q = query.trim().toLowerCase();
     if (q.length < 1) return [];
+    const exclude = new Set<string>();
+    if (editingId) exclude.add(editingId);
+    for (const s of siblings) exclude.add(s.uniqueId);
     return nameIndex
       .filter((p) => {
-        if (editingId && p.uniqueId === editingId) return false;
+        if (exclude.has(p.uniqueId)) return false;
         if (brandFilterId != null && p.brandId !== brandFilterId) return false;
         return p.name.toLowerCase().includes(q) || p.unitLabel.toLowerCase().includes(q);
       })
       .slice(0, 8);
-  }, [open, nameIndex, query, brandFilterId, editingId]);
+  }, [open, nameIndex, query, brandFilterId, editingId, siblings]);
 
-  function pick(entry: ProductNameIndexEntry) {
-    // Chain into the existing group when present so all siblings share one anchor id.
+  // ── Create flow (no editingId yet) ────────────────────────────────
+  function pickForCreate(entry: ProductNameIndexEntry) {
     const groupId = entry.variantGroupId ?? entry.id;
     setForm((c) => ({
       ...c,
@@ -6180,25 +6223,209 @@ function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: Va
     setQuery('');
   }
 
-  function clear() {
+  function clearCreate() {
     setForm((c) => ({ ...c, variantGroupId: '', variantLinkLabel: '' }));
     setQuery('');
   }
 
+  // ── Edit flow (editing existing product, immediate save) ──────────
+  async function addSibling(entry: ProductNameIndexEntry) {
+    if (!editingProduct) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const ids = [editingProduct.id, entry.id, ...siblings.map((s) => s.id)];
+      await apiGroupVariants(Array.from(new Set(ids)));
+      setSiblings((prev) =>
+        prev.some((s) => s.id === entry.id) ? prev : [...prev, entry],
+      );
+      setOpen(false);
+      setQuery('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to link variant');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSibling(entry: ProductNameIndexEntry) {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiUnlinkVariant(entry.id);
+      setSiblings((prev) => prev.filter((s) => s.id !== entry.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to unlink variant');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isEditMode = editingId != null;
+
   return (
     <label className="pe-field" style={{ position: 'relative' }}>
       <span className="pe-field__label">
-        Variant of
-        <span className="pe-field__hint">link sizes/packs of the same product</span>
+        {isEditMode ? 'Variants of this product' : 'Variant of'}
+        <span className="pe-field__hint">
+          {isEditMode
+            ? 'add or remove siblings — saves immediately'
+            : 'link sizes/packs of the same product'}
+        </span>
       </span>
-      {form.variantGroupId ? (
+
+      {isEditMode ? (
+        <>
+          {siblings.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                marginBottom: 8,
+              }}
+            >
+              {siblings.map((s) => (
+                <span
+                  key={s.uniqueId}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '4px 6px 4px 10px',
+                    background: 'rgba(99, 102, 241, 0.08)',
+                    border: '1px solid rgba(99, 102, 241, 0.25)',
+                    borderRadius: 999,
+                    fontSize: 12,
+                    color: 'var(--c-ink, #111827)',
+                  }}
+                  title={`${s.name} · ${s.unitLabel}`}
+                >
+                  <span
+                    style={{
+                      maxWidth: 180,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {s.name} · {s.unitLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void removeSibling(s)}
+                    disabled={busy}
+                    title="Unlink"
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 999,
+                      border: 'none',
+                      background: 'rgba(0,0,0,0.08)',
+                      color: '#444',
+                      fontSize: 12,
+                      lineHeight: '18px',
+                      cursor: busy ? 'wait' : 'pointer',
+                      padding: 0,
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {siblingsLoaded && siblings.length === 0 && (
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>
+              No siblings yet — search below to add another size or pack.
+            </div>
+          )}
+          <input
+            className="pe-field__input"
+            placeholder={
+              brandFilterId != null
+                ? 'Search this brand for a sibling product…'
+                : 'Pick a brand first for better matches, or search all…'
+            }
+            value={query}
+            disabled={busy}
+            onFocus={() => setOpen(true)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setOpen(true);
+            }}
+          />
+          {error && (
+            <div
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                fontSize: 12,
+                color: '#b91c1c',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+              }}
+            >
+              {error}
+            </div>
+          )}
+          {open && query.trim().length > 0 && (
+            <div style={dropdownStyle}>
+              {matches.length === 0 ? (
+                <div style={{ padding: '10px 12px', color: '#888', fontSize: 13 }}>
+                  No matches{brandFilterId != null ? ' for this brand' : ''}.
+                </div>
+              ) : (
+                matches.map((m) => (
+                  <button
+                    key={m.uniqueId}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void addSibling(m)}
+                    style={dropdownItemStyle}
+                  >
+                    {m.imageUrl && (
+                      <img
+                        src={m.imageUrl}
+                        alt=""
+                        width={28}
+                        height={28}
+                        style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                      />
+                    )}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 500,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {m.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#777' }}>{m.unitLabel}</div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </>
+      ) : form.variantGroupId ? (
         <div className="pe-inline-create">
           <input
             className="pe-field__input"
             value={form.variantLinkLabel || `Linked (#${form.variantGroupId})`}
             readOnly
           />
-          <button type="button" className="ghost-button pe-inline-create__btn" onClick={clear}>
+          <button
+            type="button"
+            className="ghost-button pe-inline-create__btn"
+            onClick={clearCreate}
+          >
             Unlink
           </button>
         </div>
@@ -6213,25 +6440,13 @@ function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: Va
             }
             value={query}
             onFocus={() => setOpen(true)}
-            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setOpen(true);
+            }}
           />
           {open && query.trim().length > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                zIndex: 20,
-                background: 'var(--pe-input-bg, #fff)',
-                border: '1px solid var(--pe-input-border, #d0d4dc)',
-                borderRadius: 8,
-                marginTop: 4,
-                maxHeight: 240,
-                overflowY: 'auto',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
-              }}
-            >
+            <div style={dropdownStyle}>
               {matches.length === 0 ? (
                 <div style={{ padding: '10px 12px', color: '#888', fontSize: 13 }}>
                   No matches{brandFilterId != null ? ' for this brand' : ''}.
@@ -6241,26 +6456,28 @@ function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: Va
                   <button
                     key={m.uniqueId}
                     type="button"
-                    onClick={() => pick(m)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      width: '100%',
-                      padding: '8px 12px',
-                      background: 'transparent',
-                      border: 'none',
-                      borderBottom: '1px solid #f0f0f0',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                    }}
+                    onClick={() => pickForCreate(m)}
+                    style={dropdownItemStyle}
                   >
                     {m.imageUrl && (
-                      <img src={m.imageUrl} alt="" width={28} height={28}
-                           style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                      <img
+                        src={m.imageUrl}
+                        alt=""
+                        width={28}
+                        height={28}
+                        style={{ objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                      />
                     )}
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 500,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
                         {m.name}
                       </div>
                       <div style={{ fontSize: 11, color: '#777' }}>{m.unitLabel}</div>
@@ -6275,5 +6492,33 @@ function VariantLinkField({ form, setForm, nameIndex, loadIndex, editingId }: Va
     </label>
   );
 }
+
+const dropdownStyle: CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  right: 0,
+  zIndex: 20,
+  background: 'var(--pe-input-bg, #fff)',
+  border: '1px solid var(--pe-input-border, #d0d4dc)',
+  borderRadius: 8,
+  marginTop: 4,
+  maxHeight: 240,
+  overflowY: 'auto',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+};
+
+const dropdownItemStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  padding: '8px 12px',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px solid #f0f0f0',
+  textAlign: 'left',
+  cursor: 'pointer',
+};
 
 export default Dashboard;
