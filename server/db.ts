@@ -2686,6 +2686,45 @@ export async function logSearchEvent(
   );
 }
 
+/// Most-recent N distinct queries for a user, newest first. Walks the
+/// last ~200 events so we can dedupe by lowercase text while preserving
+/// the original casing the user typed.
+export async function listUserSearchHistory(
+  companyId: number,
+  userId: number,
+  limit = 10,
+): Promise<string[]> {
+  const result = await pool.query<{ query: string }>(
+    `SELECT query
+       FROM search_events
+      WHERE company_id = $1 AND user_id = $2
+        AND length(btrim(query)) >= 2
+      ORDER BY created_date DESC
+      LIMIT 200`,
+    [companyId, userId],
+  );
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of result.rows) {
+    const key = row.query.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row.query.trim());
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export async function clearUserSearchHistory(
+  companyId: number,
+  userId: number,
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM search_events WHERE company_id = $1 AND user_id = $2`,
+    [companyId, userId],
+  );
+}
+
 // Map of categoryId → sum of popular-query frequencies that match the
 // category name. Used as a ranking signal in getHomeRails. Only considers
 // the top 50 queries in the last N days to keep the join bounded.

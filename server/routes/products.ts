@@ -9,6 +9,7 @@ import {
 } from '../middleware/auth.js';
 import {
   bulkImportProducts,
+  clearUserSearchHistory,
   createProduct,
   deactivateProduct,
   getDefaultCompanyId,
@@ -17,6 +18,7 @@ import {
   getProductByUniqueId,
   getStorefrontSpotlight,
   groupProductsAsVariants,
+  listUserSearchHistory,
   logClickEvent,
   logSearchEvent,
   hardDeleteProduct,
@@ -254,6 +256,45 @@ router.get('/home-rails', attachUserIfPresent, async (req: AuthenticatedRequest,
 // Fire-and-forget search logging from the storefront. Anonymous users are
 // tracked with user_id=null. Popular queries feed category-level ranking in
 // getHomeRails via getCategorySearchScores.
+// Recent searches for the signed-in user (newest-first, deduped).
+// Powers the chip list shown when the search field is focused + empty.
+router.get(
+  '/search/history',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+      const queries = await listUserSearchHistory(
+        req.user.companyId,
+        req.user.id,
+      );
+      return res.json({ queries });
+    } catch (err) {
+      console.error('search history fetch failed:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.delete(
+  '/search/history',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+      await clearUserSearchHistory(req.user.companyId, req.user.id);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('search history clear failed:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
 router.post('/search/log', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   const companyId = req.user?.companyId ?? (await getDefaultCompanyId());
   if (!companyId) return res.status(204).end();
