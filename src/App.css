@@ -5132,6 +5132,36 @@ textarea {
   gap: var(--sp-2);
 }
 
+.cat-card__parent-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--c-ink-2, #4b5563);
+  margin-top: 6px;
+}
+.cat-card__parent-select span {
+  font-weight: 600;
+}
+.cat-card__parent-select select {
+  padding: 6px 8px;
+  border: 1px solid var(--c-border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--c-surface, #fff);
+  font-size: 0.85rem;
+  color: var(--c-ink, #111827);
+}
+.cat-card__parent-tag {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: var(--c-ink-3, #6b7280);
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
 .cat-card__hide-toggle {
   display: flex;
   align-items: center;

@@ -86,11 +86,18 @@ router.post(
       if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
-      const name = String((req.body as { name?: string }).name ?? '').trim();
+      const body = req.body as { name?: string; parentId?: number | null };
+      const name = String(body.name ?? '').trim();
       if (!name) {
         return res.status(400).json({ error: 'Category name is required' });
       }
-      const category = await createCategory(req.user.companyId, name);
+      const parentId =
+        body.parentId == null
+          ? null
+          : Number.isFinite(Number(body.parentId))
+            ? Number(body.parentId)
+            : null;
+      const category = await createCategory(req.user.companyId, name, parentId);
       await cacheDel(
         `${key.categoriesList(req.user.companyId)}:all`,
         `${key.categoriesList(req.user.companyId)}:visible`,
@@ -117,13 +124,34 @@ router.put(
         return res.status(401).json({ error: 'Authentication required' });
       }
       const id = Number(getRouteParam(req.params.id));
-      const body = req.body as { name?: string; isHidden?: boolean };
+      const body = req.body as {
+        name?: string;
+        isHidden?: boolean;
+        parentId?: number | null;
+      };
       const name = String(body.name ?? '').trim();
       const isHidden = typeof body.isHidden === 'boolean' ? body.isHidden : undefined;
+      // `parentId` left out of the body = leave the existing parent alone.
+      // `parentId: null` = clear (make root). A number = set this parent.
+      let parentId: number | null | undefined;
+      if ('parentId' in body) {
+        parentId =
+          body.parentId == null
+            ? null
+            : Number.isFinite(Number(body.parentId))
+              ? Number(body.parentId)
+              : null;
+      }
       if (!Number.isFinite(id) || !name) {
         return res.status(400).json({ error: 'Category ID and name are required' });
       }
-      const category = await updateCategory(id, req.user.companyId, name, isHidden);
+      const category = await updateCategory(
+        id,
+        req.user.companyId,
+        name,
+        isHidden,
+        parentId,
+      );
       if (!category) {
         return res.status(404).json({ error: 'Category not found' });
       }

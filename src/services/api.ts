@@ -107,6 +107,7 @@ export interface Category {
   slug: string;
   imageUrl: string | null;
   isHidden: boolean;
+  parentId: number | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -514,17 +515,27 @@ export async function apiListCategories() {
   return data.categories;
 }
 
-export async function apiCreateCategory(name: string) {
+export async function apiCreateCategory(
+  name: string,
+  parentId: number | null = null,
+) {
   const data = await request<{ category: Category }>('/categories', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, parentId }),
   });
   return data.category;
 }
 
-export async function apiUpdateCategory(id: number, name: string, isHidden?: boolean) {
-  const payload: { name: string; isHidden?: boolean } = { name };
-  if (typeof isHidden === 'boolean') payload.isHidden = isHidden;
+export async function apiUpdateCategory(
+  id: number,
+  name: string,
+  opts: { isHidden?: boolean; parentId?: number | null } = {},
+) {
+  const payload: { name: string; isHidden?: boolean; parentId?: number | null } = {
+    name,
+  };
+  if (typeof opts.isHidden === 'boolean') payload.isHidden = opts.isHidden;
+  if ('parentId' in opts) payload.parentId = opts.parentId ?? null;
   const data = await request<{ category: Category }>(`/categories/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),

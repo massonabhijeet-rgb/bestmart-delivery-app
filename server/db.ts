@@ -59,6 +59,7 @@ export interface CategoryRecord {
   slug: string;
   imageUrl: string | null;
   isHidden: boolean;
+  parentId: number | null;
   createdDate: string;
   updatedDate: string;
 }
@@ -260,6 +261,7 @@ function mapCategory(row: {
   slug: string;
   imageUrl: string | null;
   isHidden?: boolean | null;
+  parentId?: number | null;
   createdDate: string;
   updatedDate: string;
 }): CategoryRecord {
@@ -270,6 +272,7 @@ function mapCategory(row: {
     slug: row.slug,
     imageUrl: row.imageUrl ?? null,
     isHidden: Boolean(row.isHidden),
+    parentId: row.parentId ?? null,
     createdDate: row.createdDate,
     updatedDate: row.updatedDate,
   };
@@ -396,6 +399,8 @@ async function createTables(client: PoolClient) {
   await client.query(`
     ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_url TEXT;
     ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories (parent_id) WHERE parent_id IS NOT NULL;
   `);
 
   // One-time migration: copy distinct values from legacy products.category into categories rows,
@@ -3518,6 +3523,7 @@ const CATEGORY_SELECT_COLUMNS = `
   slug,
   image_url AS "imageUrl",
   is_hidden AS "isHidden",
+  parent_id AS "parentId",
   created_date AS "createdDate",
   updated_date AS "updatedDate"
 `;
@@ -4013,16 +4019,20 @@ export async function getCategoryById(id: number, companyId: number) {
   return result.rowCount ? mapCategory(result.rows[0]) : null;
 }
 
-export async function createCategory(companyId: number, name: string) {
+export async function createCategory(
+  companyId: number,
+  name: string,
+  parentId?: number | null,
+) {
   const slug = toSlug(name);
   if (!slug) throw new Error('Category name is invalid');
   const result = await pool.query(
     `
-      INSERT INTO categories (company_id, name, slug)
-      VALUES ($1, $2, $3)
+      INSERT INTO categories (company_id, name, slug, parent_id)
+      VALUES ($1, $2, $3, $4)
       RETURNING ${CATEGORY_SELECT_COLUMNS};
     `,
-    [companyId, name.trim(), slug]
+    [companyId, name.trim(), slug, parentId ?? null]
   );
   return mapCategory(result.rows[0]);
 }
@@ -4032,20 +4042,48 @@ export async function updateCategory(
   companyId: number,
   name: string,
   isHidden?: boolean,
+  // `undefined` = leave parent untouched. `null` = clear (make it a root).
+  // A number = set this category as a child of the given parent.
+  parentId?: number | null,
 ) {
   const slug = toSlug(name);
   if (!slug) throw new Error('Category name is invalid');
+  // Self-parent and direct child-cycles are obvious foot-guns; reject early.
+  if (parentId === id) {
+    throw new Error('A category cannot be its own parent');
+  }
+  if (typeof parentId === 'number') {
+    const candidate = await pool.query<{ parentId: number | null }>(
+      `SELECT parent_id AS "parentId" FROM categories WHERE id = $1 AND company_id = $2;`,
+      [parentId, companyId]
+    );
+    if (!candidate.rowCount) {
+      throw new Error('Selected parent category does not exist');
+    }
+    if (candidate.rows[0].parentId === id) {
+      throw new Error('Cannot create a circular parent/child loop');
+    }
+  }
   const result = await pool.query(
     `
       UPDATE categories
       SET name = $3,
           slug = $4,
           is_hidden = COALESCE($5::boolean, is_hidden),
+          parent_id = CASE WHEN $7::boolean THEN $6::int ELSE parent_id END,
           updated_date = NOW()
       WHERE id = $1 AND company_id = $2
       RETURNING ${CATEGORY_SELECT_COLUMNS};
     `,
-    [id, companyId, name.trim(), slug, isHidden ?? null]
+    [
+      id,
+      companyId,
+      name.trim(),
+      slug,
+      isHidden ?? null,
+      parentId ?? null,
+      parentId !== undefined,
+    ]
   );
   return result.rowCount ? mapCategory(result.rows[0]) : null;
 }

@@ -298,6 +298,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
   const [editingCategoryHidden, setEditingCategoryHidden] = useState(false);
+  const [editingCategoryParentId, setEditingCategoryParentId] = useState<number | null>(null);
   const [categoryImages, setCategoryImages] = useState<Record<number, File | null>>({});
 
   // ── Campaign overlay admin state ──
@@ -1169,11 +1170,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     if (!name) return;
     setSavingCategoryId(id);
     try {
-      await apiUpdateCategory(id, name, editingCategoryHidden);
+      await apiUpdateCategory(id, name, {
+        isHidden: editingCategoryHidden,
+        parentId: editingCategoryParentId,
+      });
       setNotice('Category updated.');
       setEditingCategoryId(null);
       setEditingCategoryName('');
       setEditingCategoryHidden(false);
+      setEditingCategoryParentId(null);
       const [cats] = await Promise.all([apiListCategories(), refreshInventory()]);
       setCategories(cats);
     } catch (err) {
@@ -4227,9 +4232,28 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') { e.preventDefault(); handleSaveCategoryName(cat.id); }
-                          if (e.key === 'Escape') { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); }
+                          if (e.key === 'Escape') { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); setEditingCategoryParentId(null); }
                         }}
                       />
+                      <label className="cat-card__parent-select">
+                        <span>Parent category</span>
+                        <select
+                          value={editingCategoryParentId == null ? '' : String(editingCategoryParentId)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setEditingCategoryParentId(v === '' ? null : Number(v));
+                          }}
+                        >
+                          <option value="">— None (top-level) —</option>
+                          {categories
+                            .filter((c) => c.id !== cat.id)
+                            .map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
                       <label className="cat-card__hide-toggle">
                         <input
                           type="checkbox"
@@ -4250,7 +4274,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         <button
                           type="button"
                           className="cat-card__btn"
-                          onClick={() => { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); }}
+                          onClick={() => { setEditingCategoryId(null); setEditingCategoryName(''); setEditingCategoryHidden(false); setEditingCategoryParentId(null); }}
                         >
                           Cancel
                         </button>
@@ -4262,6 +4286,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         {cat.name}
                         {cat.isHidden && <span className="cat-card__hidden-badge">Hidden</span>}
                       </span>
+                      {cat.parentId != null && (
+                        <span className="cat-card__parent-tag">
+                          Sub-category of {categories.find((c) => c.id === cat.parentId)?.name ?? '—'}
+                        </span>
+                      )}
                       <span className="cat-card__count">
                         {productCount} product{productCount !== 1 ? 's' : ''}
                       </span>
@@ -4277,6 +4306,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           setEditingCategoryId(cat.id);
                           setEditingCategoryName(cat.name);
                           setEditingCategoryHidden(cat.isHidden);
+                          setEditingCategoryParentId(cat.parentId ?? null);
                         }}
                       >
                         Edit
