@@ -160,25 +160,12 @@ router.get('/page', attachUserIfPresent, async (req: AuthenticatedRequest, res) 
   const cached = await cacheGet<unknown>(cacheKey);
   if (cached) return res.json(cached);
 
-  try {
-    const result = await listProductsPage({
-      companyId, page, pageSize, category, categoryId, brand, search, ids,
-      admin: isAdmin, status, onOffer, sort,
-    });
-    await cacheSet(cacheKey, result, 60); // 1 min — short to keep stock fresh
-    return res.json(result);
-  } catch (err) {
-    // Surface the actual SQL/protocol failure so we can debug instead of
-    // squinting at Express' generic 500. Includes message + code + the
-    // first bit of detail/where if present.
-    const e = err as { message?: string; code?: string; detail?: string; where?: string };
-    console.error('products/page failed:', e.message, e.code, e.detail);
-    return res.status(500).json({
-      error: e.message ?? 'Internal server error',
-      code: e.code,
-      detail: e.detail,
-    });
-  }
+  const result = await listProductsPage({
+    companyId, page, pageSize, category, categoryId, brand, search, ids,
+    admin: isAdmin, status, onOffer, sort,
+  });
+  await cacheSet(cacheKey, result, 60); // 1 min — short to keep stock fresh
+  return res.json(result);
 });
 
 // Admin overview: aggregates + low-stock + recents in one round-trip.
