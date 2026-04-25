@@ -2219,8 +2219,51 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
   const rankExtraParams: unknown[] = [];
   if (opts.search && opts.search.trim()) {
     const raw = opts.search.trim().toLowerCase();
+    // Search synonyms — short-form/abbrev/regional names that don't share
+    // enough trigrams with the canonical product name to match by
+    // similarity. Each entry maps the raw query to extra substrings that
+    // get OR'd into the LIKE-on-primary-field gate. e.g. "coke" finds
+    // "Coca Cola"; "thumsup" finds "Thums Up". Add new keys here as the
+    // catalog grows.
+    const SEARCH_SYNONYMS: Record<string, string[]> = {
+      coke: ['coca cola', 'coca-cola', 'coca'],
+      pepsi: ['pepsi', 'pepsico'],
+      thumsup: ['thums up', 'thumsup'],
+      thums: ['thums up'],
+      fanta: ['fanta'],
+      sprite: ['sprite', '7up', '7 up'],
+      maggi: ['maggi'],
+      lays: ['lay\'s', 'lays', 'potato chips'],
+      kurkure: ['kurkure'],
+      dairymilk: ['dairy milk', 'cadbury dairy milk', 'dairymilk'],
+      kitkat: ['kit kat', 'kitkat', 'nestle kitkat'],
+      monster: ['monster energy'],
+      redbull: ['red bull', 'redbull'],
+      milk: ['milk', 'dairy'],
+      bread: ['bread', 'bun'],
+      eggs: ['egg', 'eggs'],
+      atta: ['atta', 'wheat flour', 'flour'],
+      dal: ['dal', 'lentil', 'lentils'],
+      rice: ['rice', 'basmati'],
+      tea: ['tea', 'chai'],
+      coffee: ['coffee'],
+      sugar: ['sugar'],
+      salt: ['salt'],
+      oil: ['oil', 'cooking oil', 'sunflower oil', 'mustard oil'],
+      ghee: ['ghee'],
+      curd: ['curd', 'dahi', 'yogurt', 'yoghurt'],
+      paneer: ['paneer', 'cottage cheese'],
+      onion: ['onion'],
+      potato: ['potato', 'aloo'],
+      tomato: ['tomato'],
+    };
+    const aliases = SEARCH_SYNONYMS[raw] ?? [];
+    // Build LIKE patterns: the raw query plus every alias. ANY($::text[])
+    // lets us OR the whole list in one shot per field.
     params.push(raw);                const pRaw = params.length;
     params.push(`%${raw}%`);         const pContains = params.length;
+    params.push([raw, ...aliases].map((s) => `%${s}%`));
+    const pLikeAny = params.length;
 
     if (pgTrgmAvailable) {
       // Tightened thresholds. Old values (0.4 / 0.3 / 0.22) let coincidental
@@ -2232,13 +2275,13 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
       params.push(simThreshold);     const pThreshold = params.length;
 
       // Description is a *tiebreaker*, not a gate. The query has to appear in
-      // a primary field (name / category / brand) — substring or close-typo
-      // — for the row to match. Otherwise a stray word in a marketing blurb
-      // could pull unrelated products into the results.
+      // a primary field (name / category / brand) — substring (raw OR any
+      // alias) or close-typo — for the row to match. Otherwise a stray word
+      // in a marketing blurb could pull unrelated products into the results.
       where.push(`(
-        lower(p.name) LIKE $${pContains}
-        OR lower(c.name) LIKE $${pContains}
-        OR lower(b.name) LIKE $${pContains}
+        lower(p.name) LIKE ANY($${pLikeAny}::text[])
+        OR lower(c.name) LIKE ANY($${pLikeAny}::text[])
+        OR lower(b.name) LIKE ANY($${pLikeAny}::text[])
         OR similarity(lower(p.name), $${pRaw}) > $${pThreshold}
         OR similarity(lower(c.name), $${pRaw}) > $${pThreshold}
         OR similarity(lower(b.name), $${pRaw}) > $${pThreshold}
@@ -2261,12 +2304,12 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
         + (similarity(lower(b.name), $${pRaw}) * 25)
       )`;
     } else {
-      // Same gate as the pg_trgm path: query must hit a primary field
-      // (name / category / brand). Description still contributes to ranking.
+      // Same gate as the pg_trgm path: query (or any alias) must hit a
+      // primary field. Description still contributes to ranking.
       where.push(`(
-        lower(p.name) LIKE $${pContains}
-        OR lower(c.name) LIKE $${pContains}
-        OR lower(b.name) LIKE $${pContains}
+        lower(p.name) LIKE ANY($${pLikeAny}::text[])
+        OR lower(c.name) LIKE ANY($${pLikeAny}::text[])
+        OR lower(b.name) LIKE ANY($${pLikeAny}::text[])
       )`);
 
       const pPrefix = params.length + 1;
