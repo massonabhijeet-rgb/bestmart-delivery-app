@@ -28,7 +28,7 @@ import {
   authenticateToken,
   requireRole,
 } from '../middleware/auth.js';
-import { broadcast } from '../ws.js';
+import { broadcast, getRiderLocation } from '../ws.js';
 import { TTL, cacheDel, cacheGet, cacheSet, key } from '../cache.js';
 import type { AuthenticatedRequest, OrderStatus } from '../types.js';
 
@@ -253,7 +253,15 @@ router.get('/track/:publicId', async (req, res) => {
   if (!order) {
     return res.status(404).json({ error: 'Order not found' });
   }
-  return res.json({ order });
+  // Inline the rider's last-known location so the customer's track
+  // screen can paint the map immediately. Without this, the customer's
+  // WS misses the snapshot if it was already connected before the
+  // rider's first ping (and a stationary rider sends no further
+  // pings — distance filter — leaving the map blank forever).
+  const riderLocation = order.assignedRiderUserId != null
+    ? getRiderLocation(order.assignedRiderUserId)
+    : null;
+  return res.json({ order, riderLocation });
 });
 
 router.get('/summary', authenticateToken, async (req: AuthenticatedRequest, res) => {

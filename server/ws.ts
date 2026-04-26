@@ -38,6 +38,14 @@ export function getRiderLocations(): RiderLocation[] {
   return [...riderLocations.values()];
 }
 
+/// Last-known location for a single rider, or null if we've never
+/// received a ping from them this server uptime. Used by the track
+/// endpoint so customers see the rider on the map the instant the
+/// page opens, instead of waiting up to 10s for the next WS ping.
+export function getRiderLocation(riderUserId: number): RiderLocation | null {
+  return riderLocations.get(riderUserId) ?? null;
+}
+
 // Tagged socket: we stash the authenticated rider's userId so we can flip
 // is_available=false when the socket closes (app killed, network lost, etc.)
 // without waiting for a mobile-lifecycle beacon that may never arrive.
