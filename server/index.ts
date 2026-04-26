@@ -19,6 +19,7 @@ import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
 import paymentRoutes from './routes/payments.js';
 import riderRoutes from './routes/rider.js';
+import themedPageRoutes from './routes/themedPages.js';
 import {
   expireAndReassignStaleAssignments,
   getOrderByPublicId,
@@ -85,6 +86,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/rider', riderRoutes);
+app.use('/api/themed-pages', themedPageRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

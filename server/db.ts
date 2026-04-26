@@ -627,6 +627,63 @@ async function createTables(client: PoolClient) {
       ON temp_categories(company_id, expires_at);
   `);
 
+  // Editorial themed-pages — "Beat the heat this Summer", "Diwali Specials",
+  // etc. Each page gets a top-nav tab (rendered via nav_icon_url) and a
+  // landing screen with hero artwork + a grid of tappable tiles. Unlike
+  // temp_categories (auto-curated), themed pages are fully admin-authored:
+  // marketing picks the artwork, the copy, and the destination per tile.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS themed_pages (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      slug VARCHAR(80) NOT NULL,
+      title VARCHAR(120) NOT NULL,
+      subtitle TEXT,
+      nav_icon_url TEXT,
+      hero_image_url TEXT,
+      theme_color VARCHAR(20),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      valid_from TIMESTAMPTZ,
+      valid_to TIMESTAMPTZ,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (company_id, slug)
+    );
+    CREATE INDEX IF NOT EXISTS idx_themed_pages_company_active
+      ON themed_pages (company_id, is_active, sort_order);
+  `);
+
+  // Tiles inside a themed page. Each tile points at a category, a search
+  // query, or a hand-curated set of product ids — the storefront resolves
+  // that link target into a filtered product list when the tile is tapped.
+  // Tile artwork is uploaded separately (image_url is set after a successful
+  // /upload-image request).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS themed_page_tiles (
+      id SERIAL PRIMARY KEY,
+      themed_page_id INTEGER NOT NULL REFERENCES themed_pages(id) ON DELETE CASCADE,
+      label VARCHAR(120) NOT NULL,
+      sublabel VARCHAR(120),
+      image_url TEXT,
+      bg_color VARCHAR(20),
+      link_type VARCHAR(20) NOT NULL,
+      link_category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      link_search_query TEXT,
+      link_product_ids INTEGER[],
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (
+        (link_type = 'category' AND link_category_id IS NOT NULL) OR
+        (link_type = 'search'   AND link_search_query IS NOT NULL) OR
+        (link_type = 'product_ids' AND array_length(link_product_ids, 1) IS NOT NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_themed_page_tiles_page
+      ON themed_page_tiles (themed_page_id, sort_order);
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS order_items (
       id SERIAL PRIMARY KEY,
@@ -4723,6 +4780,444 @@ export async function deleteCampaign(
   return {
     deleted: (result.rowCount ?? 0) > 0,
     imageUrl: result.rows[0]?.imageUrl ?? null,
+  };
+}
+
+
+// ─── Themed pages ────────────────────────────────────────────────────────
+//
+// Editorial seasonal landing pages ("Beat the heat this Summer", "Diwali
+// Specials"). Each page exposes a top-nav tab on the storefront and a
+// landing screen with hero artwork + a tile grid. Tiles deep-link into a
+// category, a search query, or a hand-curated set of product ids.
+
+export type ThemedPageTileLinkType = 'category' | 'search' | 'product_ids';
+
+export interface ThemedPageTileRecord {
+  id: number;
+  themedPageId: number;
+  label: string;
+  sublabel: string | null;
+  imageUrl: string | null;
+  bgColor: string | null;
+  linkType: ThemedPageTileLinkType;
+  linkCategoryId: number | null;
+  linkSearchQuery: string | null;
+  linkProductIds: number[] | null;
+  sortOrder: number;
+}
+
+export interface ThemedPageRecord {
+  id: number;
+  companyId: number;
+  slug: string;
+  title: string;
+  subtitle: string | null;
+  navIconUrl: string | null;
+  heroImageUrl: string | null;
+  themeColor: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  validFrom: string | null;
+  validTo: string | null;
+  createdDate: string;
+  updatedDate: string;
+  tiles: ThemedPageTileRecord[];
+}
+
+interface ThemedPageRow {
+  id: number;
+  companyId: number;
+  slug: string;
+  title: string;
+  subtitle: string | null;
+  navIconUrl: string | null;
+  heroImageUrl: string | null;
+  themeColor: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  validFrom: Date | null;
+  validTo: Date | null;
+  createdDate: Date;
+  updatedDate: Date;
+}
+
+interface ThemedPageTileRow {
+  id: number;
+  themedPageId: number;
+  label: string;
+  sublabel: string | null;
+  imageUrl: string | null;
+  bgColor: string | null;
+  linkType: ThemedPageTileLinkType;
+  linkCategoryId: number | null;
+  linkSearchQuery: string | null;
+  linkProductIds: number[] | null;
+  sortOrder: number;
+}
+
+const THEMED_PAGE_COLUMNS = `
+  tp.id,
+  tp.company_id   AS "companyId",
+  tp.slug,
+  tp.title,
+  tp.subtitle,
+  tp.nav_icon_url AS "navIconUrl",
+  tp.hero_image_url AS "heroImageUrl",
+  tp.theme_color  AS "themeColor",
+  tp.is_active    AS "isActive",
+  tp.sort_order   AS "sortOrder",
+  tp.valid_from   AS "validFrom",
+  tp.valid_to     AS "validTo",
+  tp.created_date AS "createdDate",
+  tp.updated_date AS "updatedDate"
+`;
+
+const THEMED_PAGE_TILE_COLUMNS = `
+  id,
+  themed_page_id   AS "themedPageId",
+  label,
+  sublabel,
+  image_url        AS "imageUrl",
+  bg_color         AS "bgColor",
+  link_type        AS "linkType",
+  link_category_id AS "linkCategoryId",
+  link_search_query AS "linkSearchQuery",
+  link_product_ids AS "linkProductIds",
+  sort_order       AS "sortOrder"
+`;
+
+function mapTile(row: ThemedPageTileRow): ThemedPageTileRecord {
+  return {
+    id: row.id,
+    themedPageId: row.themedPageId,
+    label: row.label,
+    sublabel: row.sublabel,
+    imageUrl: row.imageUrl,
+    bgColor: row.bgColor,
+    linkType: row.linkType,
+    linkCategoryId: row.linkCategoryId,
+    linkSearchQuery: row.linkSearchQuery,
+    linkProductIds: row.linkProductIds,
+    sortOrder: row.sortOrder,
+  };
+}
+
+async function attachTiles(
+  pages: ThemedPageRow[],
+): Promise<ThemedPageRecord[]> {
+  if (pages.length === 0) return [];
+  const ids = pages.map((p) => p.id);
+  const tilesRes = await pool.query<ThemedPageTileRow>(
+    `SELECT ${THEMED_PAGE_TILE_COLUMNS}
+       FROM themed_page_tiles
+      WHERE themed_page_id = ANY($1::int[])
+      ORDER BY themed_page_id, sort_order, id;`,
+    [ids],
+  );
+  const byPage = new Map<number, ThemedPageTileRecord[]>();
+  for (const row of tilesRes.rows) {
+    const list = byPage.get(row.themedPageId) ?? [];
+    list.push(mapTile(row));
+    byPage.set(row.themedPageId, list);
+  }
+  return pages.map((p) => ({
+    ...p,
+    validFrom: p.validFrom ? p.validFrom.toISOString() : null,
+    validTo: p.validTo ? p.validTo.toISOString() : null,
+    createdDate: p.createdDate.toISOString(),
+    updatedDate: p.updatedDate.toISOString(),
+    tiles: byPage.get(p.id) ?? [],
+  }));
+}
+
+/// Storefront-facing list. Filters out disabled pages and pages outside
+/// their valid_from/to window. Tiles are inlined so the storefront fetches
+/// the whole top-nav strip + hero data in one round-trip.
+export async function listActiveThemedPages(
+  companyId: number,
+): Promise<ThemedPageRecord[]> {
+  const result = await pool.query<ThemedPageRow>(
+    `SELECT ${THEMED_PAGE_COLUMNS}
+       FROM themed_pages tp
+      WHERE tp.company_id = $1
+        AND tp.is_active = TRUE
+        AND (tp.valid_from IS NULL OR tp.valid_from <= NOW())
+        AND (tp.valid_to   IS NULL OR tp.valid_to   >  NOW())
+      ORDER BY tp.sort_order, tp.id;`,
+    [companyId],
+  );
+  return attachTiles(result.rows);
+}
+
+/// Admin-facing list. Includes inactive / scheduled pages so they can
+/// be edited before they go live.
+export async function listAllThemedPages(
+  companyId: number,
+): Promise<ThemedPageRecord[]> {
+  const result = await pool.query<ThemedPageRow>(
+    `SELECT ${THEMED_PAGE_COLUMNS}
+       FROM themed_pages tp
+      WHERE tp.company_id = $1
+      ORDER BY tp.sort_order, tp.id;`,
+    [companyId],
+  );
+  return attachTiles(result.rows);
+}
+
+export async function getThemedPageBySlug(
+  companyId: number,
+  slug: string,
+  { activeOnly = true }: { activeOnly?: boolean } = {},
+): Promise<ThemedPageRecord | null> {
+  const where = activeOnly
+    ? `AND tp.is_active = TRUE
+       AND (tp.valid_from IS NULL OR tp.valid_from <= NOW())
+       AND (tp.valid_to   IS NULL OR tp.valid_to   >  NOW())`
+    : '';
+  const result = await pool.query<ThemedPageRow>(
+    `SELECT ${THEMED_PAGE_COLUMNS}
+       FROM themed_pages tp
+      WHERE tp.company_id = $1 AND tp.slug = $2 ${where}
+      LIMIT 1;`,
+    [companyId, slug],
+  );
+  if (!result.rows[0]) return null;
+  const [page] = await attachTiles(result.rows);
+  return page;
+}
+
+export async function getThemedPageById(
+  id: number,
+  companyId: number,
+): Promise<ThemedPageRecord | null> {
+  const result = await pool.query<ThemedPageRow>(
+    `SELECT ${THEMED_PAGE_COLUMNS}
+       FROM themed_pages tp
+      WHERE tp.id = $1 AND tp.company_id = $2
+      LIMIT 1;`,
+    [id, companyId],
+  );
+  if (!result.rows[0]) return null;
+  const [page] = await attachTiles(result.rows);
+  return page;
+}
+
+export interface UpsertThemedPageInput {
+  slug: string;
+  title: string;
+  subtitle?: string | null;
+  themeColor?: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
+  validFrom?: string | null;
+  validTo?: string | null;
+}
+
+export async function createThemedPage(
+  companyId: number,
+  input: UpsertThemedPageInput,
+): Promise<ThemedPageRecord> {
+  const result = await pool.query<{ id: number }>(
+    `INSERT INTO themed_pages (
+       company_id, slug, title, subtitle, theme_color,
+       is_active, sort_order, valid_from, valid_to
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id;`,
+    [
+      companyId,
+      input.slug,
+      input.title,
+      input.subtitle ?? null,
+      input.themeColor ?? null,
+      input.isActive ?? true,
+      input.sortOrder ?? 0,
+      input.validFrom ?? null,
+      input.validTo ?? null,
+    ],
+  );
+  const id = result.rows[0].id;
+  const page = await getThemedPageById(id, companyId);
+  if (!page) throw new Error('Failed to load created themed page');
+  return page;
+}
+
+export async function updateThemedPage(
+  id: number,
+  companyId: number,
+  input: UpsertThemedPageInput,
+): Promise<ThemedPageRecord | null> {
+  const result = await pool.query<{ id: number }>(
+    `UPDATE themed_pages SET
+       slug         = $3,
+       title        = $4,
+       subtitle     = $5,
+       theme_color  = $6,
+       is_active    = $7,
+       sort_order   = $8,
+       valid_from   = $9,
+       valid_to     = $10,
+       updated_date = NOW()
+     WHERE id = $1 AND company_id = $2
+     RETURNING id;`,
+    [
+      id,
+      companyId,
+      input.slug,
+      input.title,
+      input.subtitle ?? null,
+      input.themeColor ?? null,
+      input.isActive ?? true,
+      input.sortOrder ?? 0,
+      input.validFrom ?? null,
+      input.validTo ?? null,
+    ],
+  );
+  if (!result.rowCount) return null;
+  return getThemedPageById(id, companyId);
+}
+
+export async function updateThemedPageImage(
+  id: number,
+  companyId: number,
+  kind: 'nav' | 'hero',
+  imageUrl: string,
+): Promise<ThemedPageRecord | null> {
+  const column = kind === 'nav' ? 'nav_icon_url' : 'hero_image_url';
+  const result = await pool.query<{ id: number }>(
+    `UPDATE themed_pages
+        SET ${column} = $3, updated_date = NOW()
+      WHERE id = $1 AND company_id = $2
+      RETURNING id;`,
+    [id, companyId, imageUrl],
+  );
+  if (!result.rowCount) return null;
+  return getThemedPageById(id, companyId);
+}
+
+/// Atomic tile replace: deletes existing tiles for the page and inserts
+/// the new set in one transaction. Simpler than diffing inserts/updates/
+/// deletes when the admin form just edits the whole list at once.
+export interface UpsertThemedPageTileInput {
+  /** Echoed from the existing row when present so the admin form can
+   *  preserve uploaded images across edits without re-uploading. */
+  id?: number | null;
+  label: string;
+  sublabel?: string | null;
+  imageUrl?: string | null;
+  bgColor?: string | null;
+  linkType: ThemedPageTileLinkType;
+  linkCategoryId?: number | null;
+  linkSearchQuery?: string | null;
+  linkProductIds?: number[] | null;
+  sortOrder?: number;
+}
+
+export async function replaceThemedPageTiles(
+  themedPageId: number,
+  companyId: number,
+  tiles: UpsertThemedPageTileInput[],
+): Promise<ThemedPageRecord | null> {
+  // Verify ownership before mutating.
+  const owner = await pool.query<{ id: number }>(
+    `SELECT id FROM themed_pages WHERE id = $1 AND company_id = $2 LIMIT 1;`,
+    [themedPageId, companyId],
+  );
+  if (!owner.rowCount) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `DELETE FROM themed_page_tiles WHERE themed_page_id = $1;`,
+      [themedPageId],
+    );
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
+      await client.query(
+        `INSERT INTO themed_page_tiles (
+           themed_page_id, label, sublabel, image_url, bg_color,
+           link_type, link_category_id, link_search_query, link_product_ids,
+           sort_order
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);`,
+        [
+          themedPageId,
+          t.label,
+          t.sublabel ?? null,
+          t.imageUrl ?? null,
+          t.bgColor ?? null,
+          t.linkType,
+          t.linkCategoryId ?? null,
+          t.linkSearchQuery ?? null,
+          t.linkProductIds && t.linkProductIds.length > 0
+            ? t.linkProductIds
+            : null,
+          t.sortOrder ?? i,
+        ],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+  return getThemedPageById(themedPageId, companyId);
+}
+
+export async function updateThemedPageTileImage(
+  tileId: number,
+  themedPageId: number,
+  companyId: number,
+  imageUrl: string,
+): Promise<ThemedPageTileRecord | null> {
+  const result = await pool.query<ThemedPageTileRow>(
+    `UPDATE themed_page_tiles
+        SET image_url = $4, updated_date = NOW()
+      WHERE id = $1
+        AND themed_page_id = $2
+        AND themed_page_id IN (
+          SELECT id FROM themed_pages WHERE id = $2 AND company_id = $3
+        )
+      RETURNING ${THEMED_PAGE_TILE_COLUMNS};`,
+    [tileId, themedPageId, companyId, imageUrl],
+  );
+  if (!result.rows[0]) return null;
+  return mapTile(result.rows[0]);
+}
+
+export async function deleteThemedPage(
+  id: number,
+  companyId: number,
+): Promise<{
+  deleted: boolean;
+  navIconUrl: string | null;
+  heroImageUrl: string | null;
+  tileImageUrls: string[];
+}> {
+  const tileRes = await pool.query<{ imageUrl: string | null }>(
+    `SELECT image_url AS "imageUrl"
+       FROM themed_page_tiles
+      WHERE themed_page_id = $1;`,
+    [id],
+  );
+  const result = await pool.query<{
+    navIconUrl: string | null;
+    heroImageUrl: string | null;
+  }>(
+    `DELETE FROM themed_pages
+      WHERE id = $1 AND company_id = $2
+      RETURNING nav_icon_url AS "navIconUrl", hero_image_url AS "heroImageUrl";`,
+    [id, companyId],
+  );
+  return {
+    deleted: (result.rowCount ?? 0) > 0,
+    navIconUrl: result.rows[0]?.navIconUrl ?? null,
+    heroImageUrl: result.rows[0]?.heroImageUrl ?? null,
+    tileImageUrls: tileRes.rows
+      .map((r) => r.imageUrl)
+      .filter((u): u is string => !!u),
   };
 }
 
