@@ -338,10 +338,10 @@ export default function ThemedPagesPanel() {
   const inEditor = editorMode !== null;
   const editingExisting = typeof editorMode === 'number';
 
-  // Tile validation summary so we can disable the save button when any
-  // tile's link target is missing or invalid.
+  // Tile validation summary. Allows saving with zero tiles (admin can
+  // remove all tiles via Save tiles); when tiles exist, each must have
+  // a label and a valid link target.
   const tilesValid = useMemo(() => {
-    if (editorTiles.length === 0) return false;
     return editorTiles.every((t) => {
       if (!t.label.trim()) return false;
       if (t.linkType === 'category' && t.linkCategoryId == null) return false;
@@ -408,7 +408,7 @@ export default function ThemedPagesPanel() {
                   <li key={p.id} className="themed-page-row">
                     <div className="themed-page-row__icon">
                       {p.navIconUrl ? (
-                        <img src={p.navIconUrl} alt="" loading="lazy" />
+                        <img key={p.navIconUrl} src={p.navIconUrl} alt="" loading="lazy" />
                       ) : (
                         <div className="themed-page-row__icon-ph" />
                       )}
@@ -595,7 +595,11 @@ export default function ThemedPagesPanel() {
                   </span>
                   <div className="themed-pages__art-preview">
                     {editorCurrent.navIconUrl ? (
-                      <img src={editorCurrent.navIconUrl} alt="Nav icon" />
+                      <img
+                        key={editorCurrent.navIconUrl}
+                        src={editorCurrent.navIconUrl}
+                        alt="Nav icon"
+                      />
                     ) : (
                       <span className="themed-pages__art-empty">No image</span>
                     )}
@@ -625,7 +629,11 @@ export default function ThemedPagesPanel() {
                   </span>
                   <div className="themed-pages__art-preview themed-pages__art-preview--wide">
                     {editorCurrent.heroImageUrl ? (
-                      <img src={editorCurrent.heroImageUrl} alt="Hero" />
+                      <img
+                        key={editorCurrent.heroImageUrl}
+                        src={editorCurrent.heroImageUrl}
+                        alt="Hero"
+                      />
                     ) : (
                       <span className="themed-pages__art-empty">No image</span>
                     )}
@@ -765,7 +773,7 @@ function ThemedPageTileEditor({
             style={{ background: tile.bgColor ?? DEFAULT_TILE_BG }}
           >
             {tile.imageUrl ? (
-              <img src={tile.imageUrl} alt={tile.label} />
+              <img key={tile.imageUrl} src={tile.imageUrl} alt={tile.label} />
             ) : (
               <span className="themed-pages__art-empty">No image</span>
             )}
