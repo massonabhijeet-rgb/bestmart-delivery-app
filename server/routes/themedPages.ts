@@ -37,6 +37,11 @@ function getRouteParam(value: string | string[] | undefined): string | undefined
 }
 
 function asInt(value: unknown): number | null {
+  // Treat null / undefined / '' as "absent" — without this, Number(null)
+  // becomes 0 and slips into FK columns as a non-existent row id (the
+  // themed_page_tiles_link_category_id_fkey violation we hit when a
+  // search-type tile carried a null linkCategoryId).
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
@@ -107,6 +112,9 @@ function parseTileInputs(
     ) {
       return `tiles[${i}].linkProductIds is required when linkType=product_ids`;
     }
+    // Belt-and-suspenders: only carry the link target column that
+    // matches the link type. Prevents a stale linkCategoryId from a
+    // since-changed link type leaking through to the FK column.
     out.push({
       id: asInt(t.id),
       label,
@@ -116,9 +124,9 @@ function parseTileInputs(
       bgColor:
         typeof t.bgColor === 'string' ? t.bgColor.trim() || null : null,
       linkType,
-      linkCategoryId,
-      linkSearchQuery,
-      linkProductIds,
+      linkCategoryId: linkType === 'category' ? linkCategoryId : null,
+      linkSearchQuery: linkType === 'search' ? linkSearchQuery : null,
+      linkProductIds: linkType === 'product_ids' ? linkProductIds : null,
       sortOrder: asInt(t.sortOrder) ?? i,
     });
   }
