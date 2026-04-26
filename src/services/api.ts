@@ -680,6 +680,134 @@ export async function apiUploadCampaignImage(id: number, file: File) {
   return data.campaign;
 }
 
+// ─── Themed pages ─────────────────────────────────────────────────────────
+
+export type ThemedPageTileLinkType = 'category' | 'search' | 'product_ids';
+
+export interface ThemedPageTile {
+  id: number;
+  themedPageId: number;
+  label: string;
+  sublabel: string | null;
+  imageUrl: string | null;
+  bgColor: string | null;
+  linkType: ThemedPageTileLinkType;
+  linkCategoryId: number | null;
+  linkSearchQuery: string | null;
+  linkProductIds: number[] | null;
+  sortOrder: number;
+}
+
+export interface ThemedPage {
+  id: number;
+  companyId: number;
+  slug: string;
+  title: string;
+  subtitle: string | null;
+  navIconUrl: string | null;
+  heroImageUrl: string | null;
+  themeColor: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  validFrom: string | null;
+  validTo: string | null;
+  createdDate: string;
+  updatedDate: string;
+  tiles: ThemedPageTile[];
+}
+
+export interface ThemedPageInput {
+  slug: string;
+  title: string;
+  subtitle?: string | null;
+  themeColor?: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
+  validFrom?: string | null;
+  validTo?: string | null;
+}
+
+export interface ThemedPageTileInput {
+  id?: number | null;
+  label: string;
+  sublabel?: string | null;
+  imageUrl?: string | null;
+  bgColor?: string | null;
+  linkType: ThemedPageTileLinkType;
+  linkCategoryId?: number | null;
+  linkSearchQuery?: string | null;
+  linkProductIds?: number[] | null;
+  sortOrder?: number;
+}
+
+export async function apiListThemedPagesAdmin() {
+  const data = await request<{ themedPages: ThemedPage[] }>(
+    '/themed-pages/admin/all',
+  );
+  return data.themedPages;
+}
+
+export async function apiCreateThemedPage(input: ThemedPageInput) {
+  const data = await request<{ themedPage: ThemedPage }>('/themed-pages', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  return data.themedPage;
+}
+
+export async function apiUpdateThemedPage(id: number, input: ThemedPageInput) {
+  const data = await request<{ themedPage: ThemedPage }>(
+    `/themed-pages/${id}`,
+    { method: 'PUT', body: JSON.stringify(input) },
+  );
+  return data.themedPage;
+}
+
+export async function apiDeleteThemedPage(id: number) {
+  return request<{ deleted: boolean }>(`/themed-pages/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function apiReplaceThemedPageTiles(
+  id: number,
+  tiles: ThemedPageTileInput[],
+) {
+  const data = await request<{ themedPage: ThemedPage }>(
+    `/themed-pages/${id}/tiles`,
+    { method: 'PUT', body: JSON.stringify({ tiles }) },
+  );
+  return data.themedPage;
+}
+
+export async function apiUploadThemedPageImage(
+  id: number,
+  kind: 'nav' | 'hero',
+  file: File,
+) {
+  const formData = new FormData();
+  formData.append('image', file);
+  const data = await request<{ themedPage: ThemedPage }>(
+    `/themed-pages/${id}/upload-image?kind=${kind}`,
+    { method: 'POST', body: formData },
+  );
+  return data.themedPage;
+}
+
+export async function apiUploadThemedPageTileImage(
+  pageId: number,
+  tileId: number,
+  file: File,
+) {
+  const formData = new FormData();
+  formData.append('image', file);
+  const data = await request<{ tile: ThemedPageTile }>(
+    `/themed-pages/${pageId}/tiles/${tileId}/upload-image`,
+    { method: 'POST', body: formData },
+  );
+  return data.tile;
+}
+
 export interface SlowMoverSuggestion {
   uniqueId: string;
   name: string;
