@@ -382,11 +382,12 @@ router.patch(
         return res.status(400).json({ error: 'Order ID is required' });
       }
 
-      const { status, assignedRiderUserId, cancellationReason } = req.body as {
+      const body = (req.body ?? {}) as {
         status?: OrderStatus;
         assignedRiderUserId?: number | null;
         cancellationReason?: string | null;
       };
+      const { status, cancellationReason } = body;
 
       if (!status || !ORDER_STATUS_VALUES.includes(status)) {
         return res.status(400).json({ error: 'Invalid order status' });
@@ -395,11 +396,21 @@ router.patch(
       const existing = await getOrderByPublicId(publicId);
       const previousRiderId = existing?.assignedRiderUserId ?? null;
 
+      // Preserve the existing rider assignment when the client doesn't
+      // include `assignedRiderUserId` in the body at all. Without this
+      // guard, a status-only PATCH gets `assignedRiderUserId === undefined`
+      // → coerced to null → silently unassigns the rider (and a later
+      // status flip could re-assign a *different* rider).
+      const riderForUpdate =
+        'assignedRiderUserId' in body
+          ? (body.assignedRiderUserId ?? null)
+          : (existing?.assignedRiderUserId ?? null);
+
       const order = await updateOrderStatus(
         publicId,
         req.user.companyId,
         status,
-        assignedRiderUserId ?? null,
+        riderForUpdate,
         cancellationReason ?? null
       );
 
