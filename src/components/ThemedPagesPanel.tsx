@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   apiCreateThemedPage,
   apiDeleteThemedPage,
@@ -83,9 +83,6 @@ export default function ThemedPagesPanel() {
   const [saving, setSaving] = useState(false);
   const [tilesSaving, setTilesSaving] = useState(false);
   const [editorNotice, setEditorNotice] = useState('');
-
-  const heroFileRef = useRef<HTMLInputElement>(null);
-  const navFileRef = useRef<HTMLInputElement>(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -578,24 +575,23 @@ export default function ThemedPagesPanel() {
                       <span className="themed-pages__art-empty">No image</span>
                     )}
                   </div>
-                  <input
-                    ref={navFileRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleNavUpload(f);
-                      e.target.value = '';
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => navFileRef.current?.click()}
-                  >
+                  {/* Native <label> wrapping the input is more reliable
+                      than calling .click() on a ref — some browsers /
+                      webviews silently block programmatic clicks on
+                      display:none file inputs. */}
+                  <label className="ghost-button themed-pages__upload-label">
                     Upload nav icon
-                  </button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="themed-pages__upload-hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleNavUpload(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                 </div>
 
                 <div className="themed-pages__art-slot themed-pages__art-slot--wide">
@@ -609,24 +605,19 @@ export default function ThemedPagesPanel() {
                       <span className="themed-pages__art-empty">No image</span>
                     )}
                   </div>
-                  <input
-                    ref={heroFileRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleHeroUpload(f);
-                      e.target.value = '';
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => heroFileRef.current?.click()}
-                  >
+                  <label className="ghost-button themed-pages__upload-label">
                     Upload hero image
-                  </button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="themed-pages__upload-hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleHeroUpload(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -709,7 +700,6 @@ function ThemedPageTileEditor({
   onRemove,
   onUploadImage,
 }: TileEditorProps) {
-  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div className="themed-page-tile">
       <div className="themed-page-tile__head">
@@ -755,22 +745,13 @@ function ThemedPageTileEditor({
               <span className="themed-pages__art-empty">No image</span>
             )}
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onUploadImage(f);
-              e.target.value = '';
-            }}
-          />
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={!canUpload}
-            onClick={() => fileRef.current?.click()}
+          {/* Native <label> + nested <input disabled> handles the gate
+              cleanly: a disabled file input ignores its label's click,
+              so the picker never opens until canUpload flips to true. */}
+          <label
+            className={`ghost-button themed-pages__upload-label${
+              canUpload ? '' : ' themed-pages__upload-label--disabled'
+            }`}
             title={
               !canUpload
                 ? 'Save tiles first — image uploads need a tile id.'
@@ -778,7 +759,18 @@ function ThemedPageTileEditor({
             }
           >
             Upload image
-          </button>
+            <input
+              type="file"
+              accept="image/*"
+              className="themed-pages__upload-hidden"
+              disabled={!canUpload}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onUploadImage(f);
+                e.target.value = '';
+              }}
+            />
+          </label>
         </div>
 
         <div className="themed-page-tile__fields">

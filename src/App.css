@@ -10376,3 +10376,34 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Themed-pages file upload labels ── */
+/* The label gets ghost-button styling so it looks like the surrounding
+   buttons; the nested <input type="file"> is hidden but still receives
+   the click forwarded by the <label>, which is more reliable than
+   programmatically clicking a display:none input via a ref. */
+.themed-pages__upload-label {
+  display: inline-block;
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+}
+.themed-pages__upload-label--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.themed-pages__upload-hidden {
+  /* Visually hidden but still focusable / clickable via its <label>.
+     Using "display:none" on the file input is widely supported but
+     was failing in some webviews; this style keeps the input in the
+     accessibility tree without taking layout space. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
