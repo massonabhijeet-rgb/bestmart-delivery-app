@@ -7437,6 +7437,66 @@ textarea {
   font-weight: 700;
 }
 
+/* Editable discount % input — looks like the old discount badge but
+   accepts admin overrides. Hides the native number-input spinners
+   since we have explicit reset / apply controls. */
+.slow-mover-card__percent {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--c-teal);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: text;
+}
+.slow-mover-card__percent input {
+  width: 2.4em;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.slow-mover-card__percent input::-webkit-outer-spin-button,
+.slow-mover-card__percent input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.slow-mover-card__percent input:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  border-radius: 2px;
+}
+.slow-mover-card__percent-minus,
+.slow-mover-card__percent-suffix {
+  pointer-events: none;
+}
+.slow-mover-card__reset {
+  margin-left: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 0;
+  color: #fff;
+  font-size: 0.7rem;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.slow-mover-card__reset:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
 .slow-mover-card__actions {
   display: flex;
   gap: 6px;

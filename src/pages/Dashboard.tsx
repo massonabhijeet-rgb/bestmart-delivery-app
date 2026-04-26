@@ -237,6 +237,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [slowMoversLoading, setSlowMoversLoading] = useState(false);
   const [dismissedSlowMovers, setDismissedSlowMovers] = useState<Set<string>>(new Set());
   const [slowMoversCollapsed, setSlowMoversCollapsed] = useState(false);
+  // Admin-entered discount % per slow-mover card. Overrides the
+  // server's suggestedDiscountPercent only for the card it's keyed
+  // against; missing entry → fall back to the suggestion.
+  const [slowMoverPercentDrafts, setSlowMoverPercentDrafts] =
+    useState<Record<string, number>>({});
   const [salesReport, setSalesReport] = useState<SalesReport | null>(null);
   const [salesLoading, setSalesLoading] = useState(false);
   const [salesRange, setSalesRange] = useState<7 | 30 | 90>(30);
@@ -4492,7 +4497,18 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       name: s.name,
       priceCents: s.priceCents,
     } as Product);
-    await handleToggleOffer(product, true, s.suggestedOfferPriceCents, 'price');
+    // Honor admin override if they typed a custom %, otherwise use the
+    // server's suggestion. Override is clamped to 1..90 to avoid
+    // accidental free / negative-price products.
+    const draft = slowMoverPercentDrafts[s.uniqueId];
+    const percent = draft != null
+      ? Math.max(1, Math.min(90, Math.round(draft)))
+      : s.suggestedDiscountPercent;
+    const offerPriceCents = Math.max(
+      1,
+      Math.round(s.priceCents * (100 - percent) / 100),
+    );
+    await handleToggleOffer(product, true, offerPriceCents, 'price');
     setDismissedSlowMovers((prev) => new Set(prev).add(s.uniqueId));
   }
 
@@ -4558,6 +4574,19 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
               <div className="slow-movers__grid">
                 {visibleSuggestions.map((s) => {
                   const applying = togglingOfferId === s.uniqueId;
+                  // Effective discount = admin's typed value (if any),
+                  // else the server suggestion. Clamped 1..90 so the
+                  // preview / apply never produce a free product.
+                  const draft = slowMoverPercentDrafts[s.uniqueId];
+                  const rawPercent =
+                    draft != null ? draft : s.suggestedDiscountPercent;
+                  const percent = Math.max(1, Math.min(90, Math.round(rawPercent)));
+                  const previewOfferPriceCents = Math.max(
+                    1,
+                    Math.round(s.priceCents * (100 - percent) / 100),
+                  );
+                  const isEdited =
+                    draft != null && draft !== s.suggestedDiscountPercent;
                   return (
                     <article key={s.uniqueId} className="slow-mover-card">
                       <div className="slow-mover-card__thumb">
@@ -4592,11 +4621,53 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             </span>
                             <span className="slow-mover-card__arrow">→</span>
                             <span className="slow-mover-card__price-new">
-                              {formatCurrency(s.suggestedOfferPriceCents)}
+                              {formatCurrency(previewOfferPriceCents)}
                             </span>
-                            <span className="slow-mover-card__discount">
-                              −{s.suggestedDiscountPercent}%
-                            </span>
+                            <label className="slow-mover-card__percent">
+                              <span className="slow-mover-card__percent-minus">−</span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={90}
+                                step={1}
+                                value={percent}
+                                disabled={applying}
+                                onChange={(e) => {
+                                  const v = e.target.value.trim();
+                                  if (v === '') {
+                                    // Empty input → fall back to suggestion.
+                                    setSlowMoverPercentDrafts((prev) => {
+                                      const { [s.uniqueId]: _drop, ...rest } = prev;
+                                      return rest;
+                                    });
+                                    return;
+                                  }
+                                  const n = Number(v);
+                                  if (!Number.isFinite(n)) return;
+                                  setSlowMoverPercentDrafts((prev) => ({
+                                    ...prev,
+                                    [s.uniqueId]: n,
+                                  }));
+                                }}
+                                aria-label={`Discount % for ${s.name}`}
+                              />
+                              <span className="slow-mover-card__percent-suffix">%</span>
+                              {isEdited && (
+                                <button
+                                  type="button"
+                                  className="slow-mover-card__reset"
+                                  onClick={() =>
+                                    setSlowMoverPercentDrafts((prev) => {
+                                      const { [s.uniqueId]: _drop, ...rest } = prev;
+                                      return rest;
+                                    })
+                                  }
+                                  title={`Reset to suggested ${s.suggestedDiscountPercent}%`}
+                                >
+                                  ↺
+                                </button>
+                              )}
+                            </label>
                           </div>
                           <div className="slow-mover-card__actions">
                             <button
@@ -4613,7 +4684,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                               onClick={() => void applySlowMoverSuggestion(s)}
                               disabled={applying}
                             >
-                              {applying ? 'Applying…' : `Apply ${s.suggestedDiscountPercent}% off`}
+                              {applying ? 'Applying…' : `Apply ${percent}% off`}
                             </button>
                           </div>
                         </div>
