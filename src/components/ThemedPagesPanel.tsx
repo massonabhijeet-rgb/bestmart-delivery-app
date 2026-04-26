@@ -35,6 +35,31 @@ type EditableTile = ThemedPageTileInput & {
   imageUrl?: string | null;
 };
 
+// `<input type="datetime-local">` reads/writes in *local* time without
+// any timezone marker. The server stores TIMESTAMPTZ (UTC), so we have
+// to translate in both directions or "26 Apr 02:16 PM" gets interpreted
+// as UTC 14:16 (IST 7:46 PM) and the page sits as "scheduled" instead of
+// live.
+function toLocalDateTimeInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+function fromLocalDateTimeInput(local: string | null): string | null {
+  if (!local) return null;
+  // new Date('2026-04-26T14:16') is parsed as the browser's local time;
+  // toISOString() then emits the equivalent UTC instant the server
+  // can compare against NOW().
+  const d = new Date(local);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
 function newLocalKey() {
   return `local-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -512,30 +537,30 @@ export default function ThemedPagesPanel() {
               <span>Valid from</span>
               <input
                 type="datetime-local"
-                value={editorPage.validFrom ?? ''}
+                value={toLocalDateTimeInput(editorPage.validFrom)}
                 onChange={(e) =>
                   setEditorPage({
                     ...editorPage,
-                    validFrom: e.target.value || null,
+                    validFrom: fromLocalDateTimeInput(e.target.value),
                   })
                 }
               />
-              <small>Leave blank to start immediately.</small>
+              <small>Leave blank to start immediately. Times are local.</small>
             </label>
 
             <label>
               <span>Valid to</span>
               <input
                 type="datetime-local"
-                value={editorPage.validTo ?? ''}
+                value={toLocalDateTimeInput(editorPage.validTo)}
                 onChange={(e) =>
                   setEditorPage({
                     ...editorPage,
-                    validTo: e.target.value || null,
+                    validTo: fromLocalDateTimeInput(e.target.value),
                   })
                 }
               />
-              <small>Leave blank for no end date.</small>
+              <small>Leave blank for no end date. Times are local.</small>
             </label>
           </div>
 
