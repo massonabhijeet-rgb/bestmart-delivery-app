@@ -1080,7 +1080,17 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   }
 
   async function handleStatusChange(publicId: string, status: OrderStatus) {
-    let riderIdForUpdate: number | null = riderDrafts[publicId] || null;
+    // Preserve the order's *actual* current rider assignment for any
+    // status change that isn't explicitly a dispatch. Reading from the
+    // draft map (riderDrafts) was silently re-assigning whatever rider
+    // happened to be selected in the dropdown UI on every status flip,
+    // which fired a fresh notification to a rider the admin never
+    // intended to assign. The 'out_for_delivery' branch below opens
+    // the picker and overwrites this when the admin really is
+    // dispatching.
+    const orderForStatus = orders.find((o) => o.publicId === publicId);
+    let riderIdForUpdate: number | null =
+      orderForStatus?.assignedRiderUserId ?? null;
 
     if (status === 'cancelled') {
       await handleAdminReject(publicId);
