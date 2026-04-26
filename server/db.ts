@@ -2718,6 +2718,77 @@ export interface HomeRailsCategory {
 export interface HomeRails {
   bestsellers: ReturnType<typeof mapProduct>[];
   categoryRails: HomeRailsCategory[];
+  /** Personalised rail derived from this user's recent search history.
+   * Empty for anonymous users or users with no signal in the lookback
+   * window — clients should hide the rail when empty rather than render
+   * a "no results" placeholder. */
+  pickedForYou: ReturnType<typeof mapProduct>[];
+}
+
+/// Products the signed-in user is likely interested in, derived from
+/// their recent search queries. Pure category-affinity model: tokenize
+/// each recent search, find products whose names contain those tokens,
+/// group by category, and surface fresh in-stock products from the
+/// highest-weighted categories. Variant-group deduped so we don't show
+/// five sizes of the same Coca-Cola in a 12-tile rail.
+///
+/// Keep this dead simple — no time decay, no brand weighting, no
+/// click-event integration. Earn complexity only after we measure
+/// engagement on this v1.
+export async function getPickedForYouProducts(
+  companyId: number,
+  userId: number,
+  {
+    limit = 12,
+    lookbackHours = 24,
+  }: { limit?: number; lookbackHours?: number } = {},
+): Promise<ReturnType<typeof mapProduct>[]> {
+  const result = await pool.query(
+    `WITH user_tokens AS (
+       -- Split each recent search into tokens; drop short ones as a
+       -- rough stop-word filter ('a', 'of', 'to', 'is', 'be'…).
+       SELECT DISTINCT lower(token) AS t
+       FROM search_events s,
+            LATERAL unnest(string_to_array(lower(btrim(s.query)), ' ')) AS token
+       WHERE s.company_id = $1 AND s.user_id = $2
+         AND s.created_date > NOW() - ($3 || ' hours')::INTERVAL
+         AND length(token) >= 3
+     ),
+     user_categories AS (
+       -- A category's weight = number of (token, product) pairs that
+       -- pointed at it. Substring on lower(name) hits the existing
+       -- pg_trgm GIN index.
+       SELECT p.category_id, count(*)::float AS weight
+       FROM user_tokens ut
+       JOIN products p ON p.company_id = $1
+                       AND p.is_active = TRUE
+                       AND lower(p.name) LIKE '%' || ut.t || '%'
+       GROUP BY p.category_id
+     ),
+     candidates AS (
+       SELECT ${PRODUCT_SELECT_COLUMNS},
+              uc.weight,
+              ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(p.variant_group_id, -p.id)
+                ORDER BY p.updated_date DESC
+              ) AS variant_rn
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN brands b ON b.id = p.brand_id
+       JOIN user_categories uc ON uc.category_id = p.category_id
+       WHERE p.company_id = $1
+         AND p.is_active = TRUE
+         AND p.stock_quantity > 0
+         AND c.is_hidden IS NOT TRUE
+         AND p.image_url IS NOT NULL AND p.image_url <> ''
+     )
+     SELECT * FROM candidates
+     WHERE variant_rn = 1
+     ORDER BY weight DESC, "updatedDate" DESC
+     LIMIT $4;`,
+    [companyId, userId, lookbackHours, limit],
+  );
+  return result.rows.map((r) => mapProduct(r as ProductRow));
 }
 
 // Record a user search for ranking / popular-searches telemetry. Stored with
@@ -3116,9 +3187,20 @@ export async function getHomeRails(
     return a.name.localeCompare(b.name);
   });
 
+  // Personalised "Picked for you" rail — only populated for signed-in
+  // users with at least one matching search-derived category. Empty
+  // array on guests; clients hide the rail when empty.
+  const pickedForYou = userId
+    ? await getPickedForYouProducts(companyId, userId).catch((err) => {
+        console.error('getPickedForYouProducts failed:', err);
+        return [] as ReturnType<typeof mapProduct>[];
+      })
+    : [];
+
   return {
     bestsellers: globalRes.rows.map(mapProduct),
     categoryRails,
+    pickedForYou,
   };
 }
 
