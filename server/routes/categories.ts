@@ -61,9 +61,12 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   }
 
   // Admins/editors see hidden + image-less categories so they can
-  // manage them; everyone else (storefront shoppers) gets only the
-  // visible categories that actually have an image to render. A
-  // category without artwork would draw a blank tile on mobile.
+  // manage them; everyone else (storefront shoppers) gets visible
+  // categories. Leaf categories (no children) require an image — a
+  // blank product-rail tile is jarring. PARENT categories are exempt:
+  // even without artwork they need to flow through so the customer app
+  // can render them as a tappable tile that opens the sub-category
+  // browser. The fallback icon on the tile handles missing imagery.
   const isManagement =
     req.user?.role === 'admin' || req.user?.role === 'editor';
 
@@ -72,14 +75,20 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   if (cached) return res.json(cached);
 
   const categories = await listCategories(companyId);
+  const childCount = new Map<number, number>();
+  for (const c of categories) {
+    if (c.parentId != null) {
+      childCount.set(c.parentId, (childCount.get(c.parentId) ?? 0) + 1);
+    }
+  }
   const filtered = isManagement
     ? categories
-    : categories.filter(
-        (c) =>
-          !c.isHidden &&
-          c.imageUrl != null &&
-          c.imageUrl.trim().length > 0,
-      );
+    : categories.filter((c) => {
+        if (c.isHidden) return false;
+        const isParent = (childCount.get(c.id) ?? 0) > 0;
+        if (isParent) return true;
+        return c.imageUrl != null && c.imageUrl.trim().length > 0;
+      });
   const result = { categories: filtered };
   await cacheSet(cacheKey, result, TTL.CATEGORIES);
   return res.json(result);
