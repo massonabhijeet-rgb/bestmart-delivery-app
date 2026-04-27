@@ -118,7 +118,12 @@ interface BulkProductRow {
 
 interface ProductFormState {
   name: string;
+  // The parent (top-level) category. UI-only; not what gets saved if a
+  // subcategory is also picked.
   categoryId: string;
+  // Optional sub-category. If non-empty, the product is mapped to this
+  // subcategory; otherwise it falls back to the parent categoryId.
+  subCategoryId: string;
   brandId: string;
   unitLabel: string;
   description: string;
@@ -137,6 +142,7 @@ interface ProductFormState {
 const defaultProductForm: ProductFormState = {
   name: '',
   categoryId: '',
+  subCategoryId: '',
   brandId: '',
   unitLabel: '',
   description: '',
@@ -882,9 +888,16 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         setError('Please select a category.');
         return;
       }
+      // The product is mapped to the subcategory if the admin picked
+      // one; otherwise it falls back to the parent. This handles both
+      // (a) parents with no subs (sub picker hidden, fallback works),
+      // and (b) parents with subs where the admin can pick the leaf.
+      const finalCategoryId = productForm.subCategoryId
+        ? Number(productForm.subCategoryId)
+        : Number(productForm.categoryId);
       const payload = {
         name: productForm.name,
-        categoryId: Number(productForm.categoryId),
+        categoryId: finalCategoryId,
         brandId: productForm.brandId ? Number(productForm.brandId) : null,
         unitLabel: productForm.unitLabel,
         description: productForm.description,
@@ -3450,16 +3463,64 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         <select
                           className="pe-field__input"
                           value={productForm.categoryId}
-                          onChange={(e) => setProductForm((c) => ({ ...c, categoryId: e.target.value }))}
+                          onChange={(e) =>
+                            setProductForm((c) => ({
+                              ...c,
+                              categoryId: e.target.value,
+                              // Reset sub when parent changes — old sub
+                              // belonged to a different parent's tree.
+                              subCategoryId: '',
+                            }))
+                          }
                           required
                         >
                           <option value="">Select category</option>
-                          {categories.map((cat) => (
-                            <option key={cat.id} value={String(cat.id)}>{cat.name}</option>
-                          ))}
+                          {categories
+                            .filter((cat) => cat.parentId == null)
+                            .map((cat) => (
+                              <option key={cat.id} value={String(cat.id)}>
+                                {cat.name}
+                              </option>
+                            ))}
                         </select>
                       )}
                     </label>
+                    {(() => {
+                      // Show the subcategory picker only when the chosen
+                      // parent actually has children. Parents without subs
+                      // (e.g. Atta, Rice & Dal) save directly under the
+                      // parent — this matches the customer-side browser
+                      // which renders their products in a flat grid.
+                      const parentId = productForm.categoryId
+                        ? Number(productForm.categoryId)
+                        : null;
+                      const subs = parentId
+                        ? categories.filter((c) => c.parentId === parentId)
+                        : [];
+                      if (!parentId || subs.length === 0) return null;
+                      return (
+                        <label className="pe-field">
+                          <span className="pe-field__label">Subcategory</span>
+                          <select
+                            className="pe-field__input"
+                            value={productForm.subCategoryId}
+                            onChange={(e) =>
+                              setProductForm((c) => ({
+                                ...c,
+                                subCategoryId: e.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Whole category</option>
+                            {subs.map((s) => (
+                              <option key={s.id} value={String(s.id)}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    })()}
                     <label className="pe-field">
                       <span className="pe-field__label">Unit label <em>*</em></span>
                       <input
@@ -4058,9 +4119,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             const linkAnchor = product.variantGroupId
                               ? products.find((p) => p.id === product.variantGroupId)
                               : null;
+                            // Split the saved categoryId into parent + sub:
+                            // if the row points to a subcategory, the parent
+                            // dropdown shows its parent and the sub dropdown
+                            // shows the row itself. If it's already a top-
+                            // level category, the sub dropdown stays empty.
+                            const productCat = product.categoryId
+                              ? categories.find((c) => c.id === product.categoryId)
+                              : null;
+                            const parentCatId = productCat?.parentId ?? productCat?.id ?? null;
+                            const subCatId = productCat?.parentId != null ? productCat.id : null;
                             setProductForm({
                               name: product.name,
-                              categoryId: product.categoryId ? String(product.categoryId) : '',
+                              categoryId: parentCatId != null ? String(parentCatId) : '',
+                              subCategoryId: subCatId != null ? String(subCatId) : '',
                               brandId: product.brandId ? String(product.brandId) : '',
                               unitLabel: product.unitLabel,
                               description: product.description,
