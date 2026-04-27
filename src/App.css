@@ -8849,11 +8849,24 @@ textarea {
 .rider-picker__text strong {
   font-size: 0.95rem;
   color: var(--c-ink, #0d1b3e);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .rider-picker__text span {
   font-size: 0.8rem;
   color: var(--c-ink-3, #6b6b6b);
+}
+
+.rider-picker__online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.18);
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 /* ═══════════════════════════════════════════
@@ -10039,6 +10052,43 @@ body {
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.rider-reassign-btn {
+  margin-left: 0.5rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #fff;
+  color: #2563eb;
+  border: 1px solid #c7d8f5;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.rider-reassign-btn:hover {
+  background: #eff5ff;
+  border-color: #2563eb;
+}
+
+.rider-rating-chip {
+  margin-left: 0.5rem;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rider-rating-chip--pending {
+  background: #f3f4f6;
+  color: #6b7280;
+  border-color: #d1d5db;
+  font-weight: 500;
 }
 
 /* Shop status admin panel */

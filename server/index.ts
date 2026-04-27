@@ -26,7 +26,12 @@ import {
   initDatabase,
 } from './db.js';
 import { notifyRiderAssigned } from './push.js';
-import { attachWebSocket, broadcast } from './ws.js';
+import {
+  attachWebSocket,
+  broadcast,
+  getConnectedRiderIds,
+  getRiderLocations,
+} from './ws.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,7 +107,16 @@ function startRiderAssignmentSweep() {
     if (inFlight) return;
     inFlight = true;
     try {
-      const handled = await expireAndReassignStaleAssignments();
+      const presence = {
+        connectedRiderIds: getConnectedRiderIds(),
+        locations: new Map(
+          getRiderLocations().map((l) => [
+            l.riderId,
+            { latitude: l.latitude, longitude: l.longitude },
+          ]),
+        ),
+      };
+      const handled = await expireAndReassignStaleAssignments(presence);
       for (const ev of handled) {
         const order = await getOrderByPublicId(ev.publicId);
         if (!order) continue;

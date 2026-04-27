@@ -145,6 +145,8 @@ export interface Order {
   assignedRiderPhone: string | null;
   riderAcceptedAt: string | null;
   riderAssignmentDeadline: string | null;
+  // 1-5 stars given by the customer post-delivery; null until rated.
+  riderRating: number | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
@@ -181,7 +183,16 @@ export interface Rider {
   email: string;
   fullName: string | null;
   phone: string | null;
+  // Sticky — flips only when the rider explicitly toggles availability
+  // in their app. Survives WS disconnects, screen locks, app backgrounding.
   isAvailable: boolean;
+  // Live WS presence indicator (green dot in dispatch picker). NOT a
+  // dispatch gate on its own.
+  isOnline: boolean;
+  // True when ≥1 FCM token is registered for this rider. With FCM as the
+  // primary dispatch channel, this means push can wake the app even when
+  // killed/suspended. Dispatch requires `isOnline` OR `hasDeviceToken`.
+  hasDeviceToken: boolean;
 }
 
 function getToken() {
@@ -1129,6 +1140,28 @@ export async function apiUpdateOrderStatus(
     }),
   });
   return data.order;
+}
+
+export interface AutoDispatchResult {
+  order: Order;
+  rider: {
+    id: number;
+    name: string;
+    rating: number;
+    todayLoad: number;
+    distanceKm: number;
+  };
+}
+
+/// Server picks the best rider (load → distance → rating) and dispatches
+/// the order. The 30s acceptance deadline starts on the server; if the
+/// rider doesn't tap Accept in time, the periodic sweep auto-reassigns.
+export async function apiAutoDispatchOrder(publicId: string) {
+  const data = await request<AutoDispatchResult>(
+    `/orders/${publicId}/auto-dispatch`,
+    { method: 'POST' },
+  );
+  return data;
 }
 
 export async function apiRejectOrderItem(

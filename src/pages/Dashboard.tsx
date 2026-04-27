@@ -37,6 +37,7 @@ import {
   apiGetCompanyPublic,
   apiSetStoreLocation,
   apiUpdateCategory,
+  apiAutoDispatchOrder,
   apiRejectOrderItem,
   apiUpdateOrderStatus,
   apiUpdateProduct,
@@ -382,6 +383,12 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     onRiderLocation: (loc) => {
       setRiderLocations((prev) => ({ ...prev, [loc.riderId]: loc }));
     },
+    onRiderRosterChanged: ({ riders: fresh }) => {
+      // Server pushes the full available-rider list whenever a rider toggles
+      // availability or disconnects. Replace local state so the dispatch
+      // dropdown stays live without a manual reload.
+      setRiders(fresh);
+    },
   });
 
   // Mount load: aggregates (summary, inventorySummary), orders, categories,
@@ -487,6 +494,27 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       console.warn('Refresh inventory failed', err);
     }
   }, [canManageCatalog, productsLoaded, loadInventoryPage]);
+
+  // Safety net for the rider roster: if the WS event is missed (e.g. the
+  // socket was reconnecting when a rider toggled), refetch the roster
+  // whenever the dashboard tab becomes visible again. Cheap GET.
+  useEffect(() => {
+    if (!canManageCatalog) return;
+    function refreshOnFocus() {
+      if (document.visibilityState !== 'visible') return;
+      apiListRiders({ availableOnly: true })
+        .then(setRiders)
+        .catch(() => {
+          /* ignore — next dispatch attempt will refetch inline */
+        });
+    }
+    document.addEventListener('visibilitychange', refreshOnFocus);
+    window.addEventListener('focus', refreshOnFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, [canManageCatalog]);
 
   useEffect(() => {
     void loadDashboard();
@@ -1079,6 +1107,70 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
   }
 
+  /// Manual override for already-OFD orders. Auto-dispatch is the primary
+  /// flow; this is the escape hatch when the algorithm picked the wrong
+  /// rider (e.g. they took an unannounced break) and the admin wants to
+  /// hand the order to someone else without waiting for the 30s timeout.
+  async function handleManualReassign(publicId: string) {
+    let freshRiders: Rider[];
+    try {
+      freshRiders = await apiListRiders({ availableOnly: true });
+      setRiders(freshRiders);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not refresh riders.',
+      );
+      return;
+    }
+
+    const reachable = freshRiders.filter(
+      (r) => r.isOnline || r.hasDeviceToken,
+    );
+    const busyRiderIds = new Set(
+      orders
+        .filter(
+          (o) =>
+            o.publicId !== publicId &&
+            o.status === 'out_for_delivery' &&
+            o.assignedRiderUserId != null,
+        )
+        .map((o) => o.assignedRiderUserId as number),
+    );
+    const candidates = reachable.filter((r) => !busyRiderIds.has(r.id));
+    if (candidates.length === 0) {
+      setError('No other reachable rider is free right now.');
+      return;
+    }
+
+    const order = orders.find((o) => o.publicId === publicId);
+    const chosen = await pickRider({
+      title: `Reassign order ${publicId}`,
+      message: 'Pick a different rider to take this order.',
+      confirmLabel: 'Reassign',
+      cancelLabel: 'Cancel',
+      initialRiderId: order?.assignedRiderUserId ?? null,
+      riders: candidates.map((r) => ({
+        id: r.id,
+        label: r.fullName || r.email,
+        sublabel: r.phone || undefined,
+        online: r.isOnline,
+      })),
+    });
+    if (chosen == null) return;
+    if (chosen === order?.assignedRiderUserId) return; // no-op
+
+    setStatusChangingId(publicId);
+    try {
+      await apiUpdateOrderStatus(publicId, 'out_for_delivery', chosen);
+      setNotice(`Order ${publicId} reassigned.`);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reassignment failed');
+    } finally {
+      setStatusChangingId(null);
+    }
+  }
+
   async function handleStatusChange(publicId: string, status: OrderStatus) {
     // Preserve the order's *actual* current rider assignment for any
     // status change that isn't explicitly a dispatch. Reading from the
@@ -1098,58 +1190,18 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     }
 
     if (status === 'out_for_delivery') {
-      if (riders.length === 0) {
-        setError('No riders available. Add a team member with role "rider" first.');
-        return;
-      }
-
-      // Riders currently delivering another order are unavailable.
-      const busyRiderIds = new Set(
-        orders
-          .filter(
-            (o) =>
-              o.publicId !== publicId &&
-              o.status === 'out_for_delivery' &&
-              o.assignedRiderUserId != null,
-          )
-          .map((o) => o.assignedRiderUserId as number),
-      );
-      const availableRiders = riders.filter((r) => !busyRiderIds.has(r.id));
-
-      if (availableRiders.length === 0) {
-        setError('All riders are currently delivering. Wait until one is free.');
-        return;
-      }
-
-      const order = orders.find((o) => o.publicId === publicId);
-      const currentRiderId =
-        riderIdForUpdate ?? order?.assignedRiderUserId ?? null;
-      const chosen = await pickRider({
-        title: `Dispatch order ${publicId}`,
-        message: 'Select an available rider who will deliver this order.',
-        confirmLabel: 'Dispatch',
-        cancelLabel: 'Cancel',
-        initialRiderId:
-          currentRiderId != null && !busyRiderIds.has(currentRiderId)
-            ? currentRiderId
-            : null,
-        riders: availableRiders.map((r) => ({
-          id: r.id,
-          label: r.fullName || r.email,
-          sublabel: r.phone || undefined,
-        })),
-      });
-      if (chosen == null) return;
-      riderIdForUpdate = chosen;
-      setRiderDrafts((c) => ({ ...c, [publicId]: chosen }));
-    }
-
-    setStatusChangingId(publicId);
-    try {
-      await apiUpdateOrderStatus(publicId, status, riderIdForUpdate);
-      setNotice(`Order ${publicId} updated.`);
-      await loadDashboard();
-      if (status === 'out_for_delivery') {
+      // Auto-dispatch: server picks the best rider (lowest today-load,
+      // closest to the store, highest rating) and starts the 30-second
+      // acceptance deadline. If the rider doesn't tap Accept in time,
+      // the periodic sweep auto-reassigns to the next-best rider.
+      setStatusChangingId(publicId);
+      try {
+        const result = await apiAutoDispatchOrder(publicId);
+        setNotice(
+          `Dispatched to ${result.rider.name} (${result.rider.rating.toFixed(1)}★ · ` +
+            `${result.rider.distanceKm.toFixed(1)} km · ${result.rider.todayLoad} today).`,
+        );
+        await loadDashboard();
         const nextOrder = orders.find(
           (o) =>
             o.publicId !== publicId &&
@@ -1158,7 +1210,19 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             o.status !== 'out_for_delivery',
         );
         setExpandedOrderId(nextOrder ? nextOrder.publicId : null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Auto-dispatch failed');
+      } finally {
+        setStatusChangingId(null);
       }
+      return;
+    }
+
+    setStatusChangingId(publicId);
+    try {
+      await apiUpdateOrderStatus(publicId, status, riderIdForUpdate);
+      setNotice(`Order ${publicId} updated.`);
+      await loadDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update order');
     } finally {
@@ -2753,6 +2817,36 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                                 <strong>{order.assignedRider}</strong>
                                 {order.assignedRiderUserId != null && !order.riderAcceptedAt ? (
                                   <span className="rider-accept-chip"> ⏳ Awaiting accept</span>
+                                ) : null}
+                                {order.status === 'out_for_delivery' &&
+                                order.assignedRiderUserId != null ? (
+                                  <button
+                                    type="button"
+                                    className="rider-reassign-btn"
+                                    onClick={() =>
+                                      void handleManualReassign(order.publicId)
+                                    }
+                                  >
+                                    Reassign
+                                  </button>
+                                ) : null}
+                                {order.status === 'delivered' &&
+                                order.riderRating != null ? (
+                                  <span
+                                    className="rider-rating-chip"
+                                    title={`Customer rated this delivery ${order.riderRating}/5`}
+                                  >
+                                    ★ {order.riderRating}
+                                  </span>
+                                ) : null}
+                                {order.status === 'delivered' &&
+                                order.riderRating == null ? (
+                                  <span
+                                    className="rider-rating-chip rider-rating-chip--pending"
+                                    title="Customer hasn't rated this delivery yet"
+                                  >
+                                    Not rated
+                                  </span>
                                 ) : null}
                               </>
                             ) : (

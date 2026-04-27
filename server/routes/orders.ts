@@ -3,6 +3,7 @@ import geoip from 'geoip-lite';
 import { ORDER_STATUS_VALUES, PAYMENT_METHOD_VALUES } from '../constants.js';
 import {
   createOrder,
+  findBestRiderForOrder,
   getAppSettings,
   getDefaultCompanyId,
   getDashboardSummary,
@@ -11,6 +12,7 @@ import {
   getSalesReport,
   listOrders,
   listOrdersForUser,
+  rateOrderRider,
   rejectOrderItem,
   updateOrderStatus,
   updateUserProfileIfEmpty,
@@ -28,7 +30,12 @@ import {
   authenticateToken,
   requireRole,
 } from '../middleware/auth.js';
-import { broadcast, getRiderLocation } from '../ws.js';
+import {
+  broadcast,
+  getConnectedRiderIds,
+  getRiderLocation,
+  getRiderLocations,
+} from '../ws.js';
 import { TTL, cacheDel, cacheGet, cacheSet, key } from '../cache.js';
 import type { AuthenticatedRequest, OrderStatus } from '../types.js';
 
@@ -455,6 +462,182 @@ router.patch(
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
+);
+
+/// Auto-dispatch: server picks the best rider using load → distance →
+/// rating, marks the order out_for_delivery + assigned_rider_user_id,
+/// starts the 30s acceptance deadline (the sweep auto-reassigns if the
+/// rider doesn't tap Accept in time), and sends an FCM push to the rider.
+/// Returns the assigned order + a snapshot of the rider for the toast.
+router.post(
+  '/:publicId/auto-dispatch',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const publicId = getRouteParam(req.params.publicId);
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      if (!publicId) {
+        return res.status(400).json({ error: 'Order ID is required' });
+      }
+
+      const existing = await getOrderByPublicId(publicId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      if (existing.companyId !== req.user.companyId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (existing.status === 'delivered' || existing.status === 'cancelled') {
+        return res.status(400).json({
+          error: `Order is already ${existing.status}; cannot dispatch.`,
+        });
+      }
+
+      const presence = {
+        connectedRiderIds: getConnectedRiderIds(),
+        locations: new Map(
+          getRiderLocations().map((l) => [
+            l.riderId,
+            { latitude: l.latitude, longitude: l.longitude },
+          ]),
+        ),
+      };
+
+      // Surge-safe retry: if two dispatches race for the same rider,
+      // updateOrderStatus's NOT EXISTS guard fails the loser's UPDATE
+      // (returns null). Exclude that rider and try the next-best until
+      // we win the assignment or run out of candidates.
+      const previousRiderId = existing.assignedRiderUserId ?? null;
+      const tried: number[] = [];
+      let pick: Awaited<ReturnType<typeof findBestRiderForOrder>> = null;
+      let order: Awaited<ReturnType<typeof updateOrderStatus>> = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        pick = await findBestRiderForOrder({
+          companyId: req.user.companyId,
+          excludeIds: tried,
+          presence,
+        });
+        if (!pick) break;
+        order = await updateOrderStatus(
+          publicId,
+          req.user.companyId,
+          'out_for_delivery',
+          pick.id,
+          null,
+        );
+        if (order && order.assignedRiderUserId === pick.id) break;
+        tried.push(pick.id);
+        order = null;
+      }
+
+      if (!pick || !order) {
+        return res.status(409).json({
+          error:
+            'No reachable rider available. Either none are toggled online, ' +
+            'or no available rider has shared their location yet.',
+        });
+      }
+
+      await invalidateOrdersCache(req.user.companyId);
+      broadcast({ type: 'order_updated', payload: order });
+
+      const ownerId = await getOrderOwnerUserId(publicId);
+      void notifyOrderStatus({
+        userId: ownerId,
+        publicId: order.publicId,
+        status: 'out_for_delivery',
+        deliveryOtp: order.deliveryOtp,
+      });
+
+      // Always push to the new rider — auto-dispatch is by definition a
+      // fresh assignment from the rider's perspective, so notify even
+      // when the previous rider id matched (rare race scenario).
+      if (pick.id !== previousRiderId) {
+        void notifyRiderAssigned({
+          riderUserId: pick.id,
+          publicId: order.publicId,
+          customerName: order.customerName ?? 'Customer',
+          deliveryAddress: order.deliveryAddress ?? '',
+        });
+      }
+
+      return res.json({
+        order,
+        rider: {
+          id: pick.id,
+          name: pick.fullName ?? pick.email,
+          rating: pick.rating,
+          todayLoad: pick.todayLoad,
+          distanceKm: Number(pick.distanceKm.toFixed(2)),
+        },
+      });
+    } catch (error) {
+      console.error('Auto-dispatch error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+/// Customer rates the rider after delivery. 1-5 stars; one rating per
+/// order. Updates the rider's running-average rating in the same
+/// transaction so dispatch-time scoring picks up the new value on the
+/// next order.
+router.post(
+  '/:publicId/rate-rider',
+  authenticateToken,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const publicId = getRouteParam(req.params.publicId);
+      if (!publicId) {
+        return res.status(400).json({ error: 'Order ID is required' });
+      }
+      const { rating } = (req.body ?? {}) as { rating?: number };
+      if (
+        typeof rating !== 'number' ||
+        !Number.isInteger(rating) ||
+        rating < 1 ||
+        rating > 5
+      ) {
+        return res
+          .status(400)
+          .json({ error: 'rating must be an integer 1-5' });
+      }
+
+      const result = await rateOrderRider({
+        publicId,
+        customerUserId: req.user.id,
+        rating,
+      });
+      if (!result) {
+        return res.status(409).json({
+          error:
+            'Order is not eligible for rating (not delivered, already rated, or not yours).',
+        });
+      }
+
+      // Re-fetch and broadcast so dashboard / track screens reflect the
+      // new rider_rating immediately.
+      const order = await getOrderByPublicId(publicId);
+      if (order) {
+        broadcast({ type: 'order_updated', payload: order });
+      }
+      return res.json({
+        ok: true,
+        riderId: result.riderId,
+        riderRating: result.rating,
+        riderRatingCount: result.ratingCount,
+      });
+    } catch (error) {
+      console.error('Rate rider error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
 );
 
 router.post(

@@ -65,9 +65,10 @@ export interface CategoryRecord {
 }
 
 // How long a rider has to tap "Accept" before the order auto-reassigns
-// to the next available rider. Single source of truth — used by the SQL
-// that sets rider_assignment_deadline and the sweep that fires on expiry.
-export const RIDER_ACCEPT_TIMEOUT_SECONDS = 45;
+// to the next-best available rider. Single source of truth — used by
+// the SQL that sets rider_assignment_deadline and the sweep that fires
+// on expiry.
+export const RIDER_ACCEPT_TIMEOUT_SECONDS = 30;
 
 export interface OrderItemInput {
   productId: string;
@@ -95,6 +96,8 @@ export interface OrderRecord {
   assignedRiderPhone: string | null;
   riderAcceptedAt: string | null;
   riderAssignmentDeadline: string | null;
+  // 1-5 stars given by the customer post-delivery; null until rated.
+  riderRating: number | null;
   geoLabel: string | null;
   deliveryLatitude: number | null;
   deliveryLongitude: number | null;
@@ -312,6 +315,8 @@ async function createTables(client: PoolClient) {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 VARCHAR(16) UNIQUE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2) NOT NULL DEFAULT 5.00;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rating_count INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin', 'editor', 'viewer', 'rider'));
@@ -482,6 +487,8 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_accepted_at TIMESTAMPTZ;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_assignment_deadline TIMESTAMPTZ;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_skips INTEGER[] NOT NULL DEFAULT '{}';
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_rating SMALLINT
+      CHECK (rider_rating IS NULL OR rider_rating BETWEEN 1 AND 5);
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_latitude DOUBLE PRECISION;
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
@@ -1865,7 +1872,7 @@ export async function listRiders(
   companyId: number,
   opts: { onlyAvailable?: boolean } = {}
 ) {
-  const availableFilter = opts.onlyAvailable ? 'AND is_available = TRUE' : '';
+  const availableFilter = opts.onlyAvailable ? 'AND u.is_available = TRUE' : '';
   const result = await pool.query<{
     id: number;
     uid: string;
@@ -1873,13 +1880,20 @@ export async function listRiders(
     fullName: string | null;
     phone: string | null;
     isAvailable: boolean;
+    // True when at least one FCM device token is registered for this rider.
+    // Proxy for "FCM-reachable" — used by dispatch as one of the
+    // reachability paths (push notifications can wake a backgrounded app).
+    hasDeviceToken: boolean;
   }>(
     `
-      SELECT id, uid, email, full_name AS "fullName", phone,
-             is_available AS "isAvailable"
-      FROM users
-      WHERE company_id = $1 AND role = 'rider' ${availableFilter}
-      ORDER BY COALESCE(full_name, email);
+      SELECT u.id, u.uid, u.email, u.full_name AS "fullName", u.phone,
+             u.is_available AS "isAvailable",
+             EXISTS(
+               SELECT 1 FROM user_devices d WHERE d.user_id = u.id
+             ) AS "hasDeviceToken"
+      FROM users u
+      WHERE u.company_id = $1 AND u.role = 'rider' ${availableFilter}
+      ORDER BY COALESCE(u.full_name, u.email);
     `,
     [companyId]
   );
@@ -1925,24 +1939,154 @@ export async function acceptRiderOrder(publicId: string, riderUserId: number) {
 
 // Pick the next available rider for a given order, excluding any user
 // IDs already in the skip list. Returns null when no candidate is left.
-export async function findNextAvailableRiderForOrder(
-  companyId: number,
-  excludeIds: number[]
-): Promise<{ id: number; fullName: string | null; email: string } | null> {
-  const result = await pool.query<{ id: number; fullName: string | null; email: string }>(
+export interface RiderPickPresence {
+  // user IDs of riders whose mobile app has an active WS to this server
+  connectedRiderIds: Set<number>;
+  // last-known location per rider id (from the WS GPS-ping cache)
+  locations: Map<number, { latitude: number; longitude: number }>;
+}
+
+export interface BestRiderPick {
+  id: number;
+  fullName: string | null;
+  email: string;
+  rating: number;
+  todayLoad: number;
+  distanceKm: number;
+}
+
+/// Picks the best rider for a new (or reassigned) dispatch using a
+/// lexicographic score:
+///   1. Lowest count of orders TODAY (fairness — equal workload)
+///   2. Closest to the company's store (logistics efficiency)
+///   3. Highest rating (reputational tiebreak)
+///   4. Lowest user id (deterministic final tiebreak)
+///
+/// Hard exclusions before scoring:
+///   • not in `excludeIds` (skip list — riders who already failed/timed out)
+///   • is_available = TRUE (rider's own toggle)
+///   • not already on another out_for_delivery order
+///   • reachable: has ≥1 FCM device token OR an active WS connection
+///   • has a last-known GPS location (admin-confirmed setting on 2026-04-27)
+export async function findBestRiderForOrder(opts: {
+  companyId: number;
+  excludeIds: number[];
+  presence: RiderPickPresence;
+}): Promise<BestRiderPick | null> {
+  const { companyId, excludeIds, presence } = opts;
+
+  const result = await pool.query<{
+    id: number;
+    fullName: string | null;
+    email: string;
+    rating: string;
+    todayLoad: string;
+    hasDeviceToken: boolean;
+    storeLat: number | null;
+    storeLng: number | null;
+  }>(
     `
-      SELECT id, full_name AS "fullName", email
-      FROM users
-      WHERE company_id = $1
-        AND role = 'rider'
-        AND COALESCE(is_available, FALSE) = TRUE
-        AND NOT (id = ANY($2::INTEGER[]))
-      ORDER BY id ASC
-      LIMIT 1;
+      SELECT
+        u.id,
+        u.full_name AS "fullName",
+        u.email,
+        u.rating::text AS rating,
+        COALESCE(load.cnt, 0)::text AS "todayLoad",
+        EXISTS(SELECT 1 FROM user_devices d WHERE d.user_id = u.id) AS "hasDeviceToken",
+        c.store_latitude AS "storeLat",
+        c.store_longitude AS "storeLng"
+      FROM users u
+      JOIN companies c ON c.id = u.company_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS cnt
+        FROM orders o
+        WHERE o.assigned_rider_user_id = u.id
+          AND o.status <> 'cancelled'
+          AND (o.created_date AT TIME ZONE 'Asia/Kolkata')::date
+              = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+      ) load ON TRUE
+      WHERE u.company_id = $1
+        AND u.role = 'rider'
+        AND COALESCE(u.is_available, FALSE) = TRUE
+        AND NOT (u.id = ANY($2::INTEGER[]))
+        AND NOT EXISTS (
+          SELECT 1 FROM orders o2
+          WHERE o2.assigned_rider_user_id = u.id
+            AND o2.status = 'out_for_delivery'
+        );
     `,
     [companyId, excludeIds]
   );
-  return result.rows[0] ?? null;
+
+  if (result.rowCount === 0) return null;
+
+  const storeLat = result.rows[0]?.storeLat ?? null;
+  const storeLng = result.rows[0]?.storeLng ?? null;
+  if (storeLat == null || storeLng == null) {
+    // No store coordinates configured — distance dimension can't be
+    // computed. Fall back to load → rating → id only, no location filter.
+    return scoreAndSort(
+      result.rows.map((r) => ({
+        id: r.id,
+        fullName: r.fullName,
+        email: r.email,
+        rating: Number(r.rating),
+        todayLoad: Number(r.todayLoad),
+        distanceKm: 0,
+      }))
+    );
+  }
+
+  const candidates: BestRiderPick[] = [];
+  for (const row of result.rows) {
+    // Reachability: FCM token OR active WS — either path can deliver
+    // the dispatch (push wakes the app, WS broadcasts the assignment).
+    const reachable =
+      row.hasDeviceToken === true || presence.connectedRiderIds.has(row.id);
+    if (!reachable) continue;
+
+    // Per admin decision (2026-04-27): riders without a last-known GPS
+    // location are excluded entirely — we'd be guessing distance.
+    const loc = presence.locations.get(row.id);
+    if (!loc) continue;
+
+    candidates.push({
+      id: row.id,
+      fullName: row.fullName,
+      email: row.email,
+      rating: Number(row.rating),
+      todayLoad: Number(row.todayLoad),
+      distanceKm: haversineKm(storeLat, storeLng, loc.latitude, loc.longitude),
+    });
+  }
+  return scoreAndSort(candidates);
+}
+
+function scoreAndSort(candidates: BestRiderPick[]): BestRiderPick | null {
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    if (a.todayLoad !== b.todayLoad) return a.todayLoad - b.todayLoad;
+    if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+    if (a.rating !== b.rating) return b.rating - a.rating;
+    return a.id - b.id;
+  });
+  return candidates[0];
+}
+
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const R = 6371; // km
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
 }
 
 // Snapshot of an order whose rider didn't accept in time. The sweep
@@ -1957,13 +2101,16 @@ export interface ExpiredAssignment {
 
 // Finds orders where the rider hasn't accepted before the deadline,
 // appends that rider to the skip list, then either reassigns to the
-// next available rider (resetting the deadline) or clears the
+// next-best available rider (resetting the deadline) or clears the
 // assignment so admin can step in. Designed to be safe to call on a
 // fast interval — the WHERE clause caps the work to past-deadline rows
 // and a row-level UPDATE keeps things atomic per-order.
-export async function expireAndReassignStaleAssignments(): Promise<
-  ExpiredAssignment[]
-> {
+//
+// `presence` is injected by the caller so this function stays decoupled
+// from the WS in-memory state (live rider locations + active sockets).
+export async function expireAndReassignStaleAssignments(
+  presence: RiderPickPresence
+): Promise<ExpiredAssignment[]> {
   const stale = await pool.query<{
     publicId: string;
     companyId: number;
@@ -1988,7 +2135,11 @@ export async function expireAndReassignStaleAssignments(): Promise<
   const handled: ExpiredAssignment[] = [];
   for (const row of stale.rows) {
     const skips = Array.from(new Set([...(row.riderSkips ?? []), row.riderUserId]));
-    const next = await findNextAvailableRiderForOrder(row.companyId, skips);
+    const next = await findBestRiderForOrder({
+      companyId: row.companyId,
+      excludeIds: skips,
+      presence,
+    });
 
     if (next) {
       const result = await pool.query(
@@ -5263,6 +5414,8 @@ async function mapOrder(orderRow: OrderRow) {
     assignedRiderPhone: orderRow.assignedRiderPhone ?? null,
     riderAcceptedAt: orderRow.riderAcceptedAt ?? null,
     riderAssignmentDeadline: orderRow.riderAssignmentDeadline ?? null,
+    riderRating:
+      orderRow.riderRating == null ? null : Number(orderRow.riderRating),
     geoLabel: orderRow.geoLabel,
     deliveryLatitude: orderRow.deliveryLatitude,
     deliveryLongitude: orderRow.deliveryLongitude,
@@ -5535,6 +5688,7 @@ const ORDER_SELECT_COLUMNS = `
   o.assigned_rider_user_id AS "assignedRiderUserId",
   o.rider_accepted_at AS "riderAcceptedAt",
   o.rider_assignment_deadline AS "riderAssignmentDeadline",
+  o.rider_rating AS "riderRating",
   r.phone AS "assignedRiderPhone",
   o.geo_label AS "geoLabel",
   o.delivery_latitude AS "deliveryLatitude",
@@ -5770,6 +5924,12 @@ export async function updateOrderStatus(
   // (different) rider counts as a fresh start, so any prior skip list is
   // cleared. The CASE … IS DISTINCT FROM … guard keeps these untouched
   // when the same rider is re-stamped (e.g. by the deliver path).
+  //
+  // Surge guard: if assigning a NEW rider, the WHERE clause refuses the
+  // UPDATE when that rider already has another out_for_delivery order.
+  // Prevents a double-assign race when two dispatches fire simultaneously
+  // — the second loses, returns null, and the caller can retry with a
+  // different rider.
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE orders
@@ -5796,12 +5956,150 @@ export async function updateOrderStatus(
         END,
         updated_date = NOW()
       WHERE public_id = $1 AND company_id = $2
+        AND (
+          $4::INTEGER IS NULL
+          OR $4::INTEGER = assigned_rider_user_id
+          OR NOT EXISTS (
+            SELECT 1 FROM orders o2
+            WHERE o2.assigned_rider_user_id = $4::INTEGER
+              AND o2.status = 'out_for_delivery'
+              AND o2.public_id <> $1
+          )
+        )
       RETURNING id;
     `,
     params
   );
   if (!updated.rowCount) return null;
   return getOrderByPublicId(publicId);
+}
+
+/// Customer rates the rider after delivery (1-5 stars). Atomic in a
+/// transaction so the per-order stamp and the rider's running-average
+/// update can't desync. Returns the updated rider's new average + count,
+/// or null if the order isn't eligible (not delivered, already rated,
+/// not owned by this user, or no rider assigned).
+export async function rateOrderRider(opts: {
+  publicId: string;
+  customerUserId: number;
+  rating: number;
+}): Promise<{ riderId: number; rating: number; ratingCount: number } | null> {
+  if (
+    !Number.isInteger(opts.rating) ||
+    opts.rating < 1 ||
+    opts.rating > 5
+  ) {
+    throw new Error('Rating must be an integer between 1 and 5');
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Stamp the order with the rating only if it's eligible. The guard
+    // prevents double-rating, rating someone else's order, rating a
+    // non-delivered order, or rating an unassigned order.
+    const stamp = await client.query<{ riderId: number }>(
+      `
+        UPDATE orders
+        SET rider_rating = $3, updated_date = NOW()
+        WHERE public_id = $1
+          AND user_id = $2
+          AND status = 'delivered'
+          AND assigned_rider_user_id IS NOT NULL
+          AND rider_rating IS NULL
+        RETURNING assigned_rider_user_id AS "riderId";
+      `,
+      [opts.publicId, opts.customerUserId, opts.rating]
+    );
+    if (!stamp.rowCount || !stamp.rows[0].riderId) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const riderId = stamp.rows[0].riderId;
+    // Compute the new running average. PostgreSQL evaluates all SET
+    // expressions against the OLD row, so referencing rating + rating_count
+    // on the right side gives the previous values. The first real rating
+    // overwrites the placeholder 5.00 default (rating_count was 0).
+    const updated = await client.query<{
+      rating: string;
+      ratingCount: number;
+    }>(
+      `
+        UPDATE users
+        SET rating = ((rating * rating_count) + $1::numeric) / (rating_count + 1),
+            rating_count = rating_count + 1
+        WHERE id = $2 AND role = 'rider'
+        RETURNING rating::text, rating_count AS "ratingCount";
+      `,
+      [opts.rating, riderId]
+    );
+    await client.query('COMMIT');
+    if (!updated.rowCount) return null;
+    return {
+      riderId,
+      rating: Number(updated.rows[0].rating),
+      ratingCount: updated.rows[0].ratingCount,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/// Stats panel for the rider's own home screen: their average rating
+/// and rating count (from the customer-rating updates), the count of
+/// orders they delivered today (IST midnight reset), and lifetime
+/// delivered count.
+export async function getRiderStats(riderUserId: number): Promise<{
+  rating: number;
+  ratingCount: number;
+  todayDeliveries: number;
+  totalDeliveries: number;
+}> {
+  const result = await pool.query<{
+    rating: string;
+    ratingCount: number;
+    todayDeliveries: string;
+    totalDeliveries: string;
+  }>(
+    `
+      SELECT
+        u.rating::text AS rating,
+        u.rating_count AS "ratingCount",
+        (
+          SELECT COUNT(*)::text FROM orders o
+          WHERE o.assigned_rider_user_id = u.id
+            AND o.status = 'delivered'
+            AND (o.updated_date AT TIME ZONE 'Asia/Kolkata')::date
+                = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+        ) AS "todayDeliveries",
+        (
+          SELECT COUNT(*)::text FROM orders o
+          WHERE o.assigned_rider_user_id = u.id
+            AND o.status = 'delivered'
+        ) AS "totalDeliveries"
+      FROM users u
+      WHERE u.id = $1 AND u.role = 'rider'
+      LIMIT 1;
+    `,
+    [riderUserId],
+  );
+  if (!result.rowCount) {
+    return {
+      rating: 5.0,
+      ratingCount: 0,
+      todayDeliveries: 0,
+      totalDeliveries: 0,
+    };
+  }
+  const row = result.rows[0];
+  return {
+    rating: Number(row.rating),
+    ratingCount: row.ratingCount,
+    todayDeliveries: Number(row.todayDeliveries),
+    totalDeliveries: Number(row.totalDeliveries),
+  };
 }
 
 // Soft-rejects a single line inside an order: marks the row as rejected,

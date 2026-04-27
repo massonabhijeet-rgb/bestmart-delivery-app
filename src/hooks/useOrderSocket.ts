@@ -14,18 +14,36 @@ export interface ShopStatusPayload {
   shopClosedMessage: string;
 }
 
+export interface RiderRosterEntry {
+  id: number;
+  uid: string;
+  email: string;
+  fullName: string | null;
+  phone: string | null;
+  isAvailable: boolean;
+  isOnline: boolean;
+  hasDeviceToken: boolean;
+}
+
+export interface RiderRosterPayload {
+  companyId: number;
+  riders: RiderRosterEntry[];
+}
+
 type WsEvent =
   | { type: 'connected' }
   | { type: 'new_order'; payload: Order }
   | { type: 'order_updated'; payload: Order }
   | { type: 'rider_location'; payload: RiderLocation }
-  | { type: 'shop_status_changed'; payload: ShopStatusPayload };
+  | { type: 'shop_status_changed'; payload: ShopStatusPayload }
+  | { type: 'rider_roster_changed'; payload: RiderRosterPayload };
 
 interface Handlers {
   onNewOrder: (order: Order) => void;
   onOrderUpdated: (order: Order) => void;
   onRiderLocation?: (loc: RiderLocation) => void;
   onShopStatusChanged?: (status: ShopStatusPayload) => void;
+  onRiderRosterChanged?: (payload: RiderRosterPayload) => void;
 }
 
 const WS_BASE = import.meta.env.VITE_API_URL
@@ -45,7 +63,14 @@ export function useOrderSocket(handlers: Handlers): void {
     function connect() {
       if (destroyed) return;
 
-      ws = new WebSocket(`${WS_BASE}/ws`);
+      // Pass the JWT so the server can scope company-targeted events
+      // (e.g. rider_roster_changed) to admin/editor sockets of this
+      // company. Anonymous connections still work for public broadcasts.
+      const token = localStorage.getItem('token');
+      const url = token
+        ? `${WS_BASE}/ws?token=${encodeURIComponent(token)}`
+        : `${WS_BASE}/ws`;
+      ws = new WebSocket(url);
 
       ws.onopen = () => {
         retryDelay = 1000; // reset backoff on successful connect
@@ -62,6 +87,8 @@ export function useOrderSocket(handlers: Handlers): void {
             handlersRef.current.onRiderLocation?.(data.payload);
           } else if (data.type === 'shop_status_changed') {
             handlersRef.current.onShopStatusChanged?.(data.payload);
+          } else if (data.type === 'rider_roster_changed') {
+            handlersRef.current.onRiderRosterChanged?.(data.payload);
           }
         } catch {
           // ignore malformed frames

@@ -16,6 +16,7 @@ import {
   resetFailedAttempts,
 } from '../db.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { getConnectedRiderIds } from '../ws.js';
 import { normalizePhoneIN, sendOtp, verifyOtp } from '../otp.js';
 import type { AuthenticatedRequest, UserRole } from '../types.js';
 
@@ -330,7 +331,9 @@ router.get(
       return res.status(401).json({ error: 'Authentication required' });
     }
     const onlyAvailable = req.query.available === 'true';
-    const riders = await listRiders(req.user.companyId, { onlyAvailable });
+    const raw = await listRiders(req.user.companyId, { onlyAvailable });
+    const connected = getConnectedRiderIds();
+    const riders = raw.map((r) => ({ ...r, isOnline: connected.has(r.id) }));
     return res.json({ riders });
   }
 );

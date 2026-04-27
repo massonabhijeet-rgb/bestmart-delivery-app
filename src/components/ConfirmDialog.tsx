@@ -25,6 +25,7 @@ export interface RiderChoice {
   id: number;
   label: string;
   sublabel?: string;
+  online?: boolean;
 }
 
 export interface PickRiderOptions {
@@ -419,7 +420,16 @@ export function RiderPickerHost() {
                         {active ? '●' : '○'}
                       </span>
                       <span className="rider-picker__text">
-                        <strong>{r.label}</strong>
+                        <strong>
+                          {r.label}
+                          {r.online ? (
+                            <span
+                              className="rider-picker__online-dot"
+                              aria-label="online"
+                              title="Connected"
+                            />
+                          ) : null}
+                        </strong>
                         {r.sublabel ? <span>{r.sublabel}</span> : null}
                       </span>
                     </button>

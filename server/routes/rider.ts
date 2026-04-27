@@ -5,6 +5,7 @@ import {
   attachRazorpayQrToOrder,
   getOrderByPublicId,
   getOrderOwnerUserId,
+  getRiderStats,
   listRiderOrders,
   setRiderAvailability,
   updateOrderStatus,
@@ -12,13 +13,23 @@ import {
 import { maybeRefreshRouteForRider } from '../googleMaps.js';
 import { notifyOrderStatus } from '../push.js';
 import { createRazorpayQrCode, razorpayConfigured } from '../razorpay.js';
-import { broadcast, updateRiderLocation } from '../ws.js';
+import { broadcast, broadcastRiderRoster, updateRiderLocation } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
 
 function getRouteParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/// Strips fields the rider isn't allowed to see (per-order customer
+/// rating belongs to admin reporting, not the rider's own surface).
+/// Defense-in-depth: the rider Flutter model also doesn't parse the
+/// field, but stripping at the wire keeps it out of network logs.
+function stripForRider<T extends { riderRating?: unknown }>(order: T): T {
+  const { riderRating: _ignored, ...rest } = order;
+  void _ignored;
+  return rest as T;
 }
 
 router.get(
@@ -30,7 +41,7 @@ router.get(
       return res.status(401).json({ error: 'Authentication required' });
     }
     const orders = await listRiderOrders(req.user.id);
-    return res.json({ orders });
+    return res.json({ orders: orders.map(stripForRider) });
   }
 );
 
@@ -64,7 +75,7 @@ router.post(
         return res.status(404).json({ error: 'Order not found' });
       }
       broadcast({ type: 'order_updated', payload: order });
-      return res.json({ order });
+      return res.json({ order: stripForRider(order) });
     } catch (error) {
       console.error('Rider accept error:', error);
       return res.status(500).json({ error: 'Internal server error' });
@@ -131,7 +142,7 @@ router.post(
         status: 'delivered',
       });
 
-      return res.json({ order });
+      return res.json({ order: stripForRider(order) });
     } catch (error) {
       console.error('Rider deliver error:', error);
       return res.status(500).json({ error: 'Internal server error' });
@@ -198,6 +209,26 @@ router.post(
   }
 );
 
+/// Rider's own home-screen stats: average rating + count of customer
+/// ratings, deliveries today (IST midnight reset), lifetime delivered.
+router.get(
+  '/stats',
+  authenticateToken,
+  requireRole('rider'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+      const stats = await getRiderStats(req.user.id);
+      return res.json(stats);
+    } catch (error) {
+      console.error('getRiderStats error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
 router.patch(
   '/availability',
   authenticateToken,
@@ -209,6 +240,9 @@ router.patch(
       return res.status(400).json({ error: 'available (boolean) is required' });
     }
     await setRiderAvailability(req.user.id, available);
+    // Push the fresh roster to admin/editor sockets so the dispatch picker
+    // stays live without needing a dashboard reload.
+    void broadcastRiderRoster(req.user.companyId);
     return res.json({ ok: true, available });
   }
 );
