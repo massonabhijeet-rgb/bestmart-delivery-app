@@ -1776,11 +1776,20 @@ export async function listRidersForPresence(companyId: number) {
 // can't unregister themselves cleanly (their JWTs are now invalid → 401),
 // so the server proactively clears the table — guaranteeing user_devices
 // holds at most one row per user (the device about to log in).
+//
+// Riders are forced offline (`is_available = FALSE`) on every login: a fresh
+// session must opt in to being available, otherwise stale availability from
+// a previous device persists and admin sees a rider who can't be reached.
+// No-op for non-riders since the column is rider-only.
 export async function rotateUserSession(userId: number): Promise<string> {
   await pool.query(`DELETE FROM user_devices WHERE user_id = $1`, [userId]);
   const { rows } = await pool.query<{ sessionId: string }>(
-    `UPDATE users SET session_id = gen_random_uuid(), updated_date = NOW()
-     WHERE id = $1 RETURNING session_id AS "sessionId";`,
+    `UPDATE users
+        SET session_id = gen_random_uuid(),
+            is_available = FALSE,
+            updated_date = NOW()
+      WHERE id = $1
+      RETURNING session_id AS "sessionId";`,
     [userId]
   );
   if (!rows.length) throw new Error('User not found for session rotation');
@@ -1966,6 +1975,16 @@ export async function listRiders(
     [companyId]
   );
   return result.rows;
+}
+
+export async function getRiderAvailability(userId: number): Promise<boolean> {
+  const { rows } = await pool.query<{ isAvailable: boolean | null }>(
+    `SELECT is_available AS "isAvailable"
+       FROM users
+      WHERE id = $1 AND role = 'rider';`,
+    [userId]
+  );
+  return rows[0]?.isAvailable === true;
 }
 
 export async function setRiderAvailability(

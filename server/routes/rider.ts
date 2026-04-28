@@ -5,6 +5,7 @@ import {
   attachRazorpayQrToOrder,
   getOrderByPublicId,
   getOrderOwnerUserId,
+  getRiderAvailability,
   getRiderStats,
   listRiderOrders,
   setRiderAvailability,
@@ -227,6 +228,17 @@ router.get(
       return res.status(500).json({ error: 'Internal server error' });
     }
   },
+);
+
+router.get(
+  '/availability',
+  authenticateToken,
+  requireRole('rider'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    const available = await getRiderAvailability(req.user.id);
+    return res.json({ available });
+  }
 );
 
 router.patch(
