@@ -8,6 +8,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'bestmart-secret-key-2026';
 interface JwtPayload {
   uid: string;
   email: string;
+  sid?: string;
 }
 
 async function loadUserFromToken(req: AuthenticatedRequest, strict: boolean, res: Response) {
@@ -26,6 +27,16 @@ async function loadUserFromToken(req: AuthenticatedRequest, strict: boolean, res
     if (!user) {
       if (strict) {
         res.status(401).json({ error: 'User not found' });
+      }
+      return false;
+    }
+    // Single-sign-on: every login mints a fresh session_id, so any
+    // older JWT (issued for a previous device) won't match the user's
+    // current session and is rejected here. The mobile app catches
+    // this 401 and bounces to login.
+    if (user.sessionId && payload.sid !== user.sessionId) {
+      if (strict) {
+        res.status(401).json({ error: 'Session ended — signed in elsewhere' });
       }
       return false;
     }

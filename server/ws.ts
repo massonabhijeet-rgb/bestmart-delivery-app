@@ -93,9 +93,12 @@ async function authenticateUpgrade(req: IncomingMessage): Promise<{
     const url = new URL(req.url ?? '', 'http://localhost');
     const token = url.searchParams.get('token');
     if (!token) return null;
-    const payload = jwt.verify(token, JWT_SECRET) as { uid: string };
+    const payload = jwt.verify(token, JWT_SECRET) as { uid: string; sid?: string };
     const user = await findUserByUid(payload.uid);
     if (!user) return null;
+    // Single-sign-on: reject WS handshakes from old sessions just like
+    // the HTTP auth middleware does.
+    if (user.sessionId && payload.sid !== user.sessionId) return null;
     return { userId: user.id, role: user.role, companyId: user.companyId };
   } catch {
     return null;

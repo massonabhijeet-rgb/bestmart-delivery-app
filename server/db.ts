@@ -21,6 +21,7 @@ export interface DbUser {
   lockedAt: string | null;
   fullName: string | null;
   phone: string | null;
+  sessionId: string | null;
 }
 
 export interface ProductRecord {
@@ -223,6 +224,7 @@ function mapUser(row: DbUserRow): DbUser {
     lockedAt: row.lockedAt,
     fullName: row.fullName ?? null,
     phone: row.phone ?? null,
+    sessionId: row.sessionId ?? null,
   };
 }
 
@@ -317,6 +319,7 @@ async function createTables(client: PoolClient) {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2) NOT NULL DEFAULT 5.00;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rating_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS session_id UUID;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin', 'editor', 'viewer', 'rider'));
@@ -1693,7 +1696,8 @@ export async function findUserByEmail(email: string) {
         u.failed_attempts AS "failedAttempts",
         u.locked_at AS "lockedAt",
         u.full_name AS "fullName",
-        u.phone AS "phone"
+        u.phone AS "phone",
+        u.session_id AS "sessionId"
       FROM users u
       JOIN companies c ON c.id = u.company_id
       WHERE LOWER(u.email) = LOWER($1)
@@ -1718,7 +1722,8 @@ export async function findUserByUid(uid: string) {
         u.failed_attempts AS "failedAttempts",
         u.locked_at AS "lockedAt",
         u.full_name AS "fullName",
-        u.phone AS "phone"
+        u.phone AS "phone",
+        u.session_id AS "sessionId"
       FROM users u
       JOIN companies c ON c.id = u.company_id
       WHERE u.uid = $1
@@ -1727,6 +1732,20 @@ export async function findUserByUid(uid: string) {
     [uid]
   );
   return result.rowCount ? mapUser(result.rows[0]) : null;
+}
+
+// Single-sign-on enforcement: every login mints a fresh session_id, which
+// is embedded in the issued JWT. Auth middleware compares the JWT's sid
+// against this column — when a new device logs in, all previously-issued
+// JWTs become invalid and those devices auto-logout on their next API call.
+export async function rotateUserSession(userId: number): Promise<string> {
+  const { rows } = await pool.query<{ sessionId: string }>(
+    `UPDATE users SET session_id = gen_random_uuid(), updated_date = NOW()
+     WHERE id = $1 RETURNING session_id AS "sessionId";`,
+    [userId]
+  );
+  if (!rows.length) throw new Error('User not found for session rotation');
+  return rows[0].sessionId;
 }
 
 export async function incrementFailedAttempts(email: string) {

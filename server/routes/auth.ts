@@ -14,6 +14,7 @@ import {
   listUserAddresses,
   lockUser,
   resetFailedAttempts,
+  rotateUserSession,
 } from '../db.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { getConnectedRiderIds } from '../ws.js';
@@ -61,10 +62,12 @@ router.post('/login', async (req, res) => {
 
     await resetFailedAttempts(email);
 
+    const sid = await rotateUserSession(user.id);
     const token = jwt.sign(
       {
         uid: user.uid,
         email: user.email,
+        sid,
       },
       JWT_SECRET,
       { expiresIn: '7d' }
@@ -129,8 +132,9 @@ router.post('/signup', async (req, res) => {
       return res.status(500).json({ error: 'Failed to create account' });
     }
 
+    const sid = await rotateUserSession(user.id);
     const token = jwt.sign(
-      { uid: user.uid, email: user.email },
+      { uid: user.uid, email: user.email, sid },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -233,7 +237,8 @@ router.post('/otp/verify', async (req, res) => {
       });
     }
 
-    const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
+    const sid = await rotateUserSession(user.id);
+    const token = jwt.sign({ uid: user.uid, email: user.email, sid }, JWT_SECRET, {
       expiresIn: '7d',
     });
 
