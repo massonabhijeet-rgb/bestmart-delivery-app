@@ -21,7 +21,8 @@ router.post('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
   }
   try {
     await registerUserDevice(req.user.id, token, platform);
-    return res.json({ ok: true });
+    console.log(`[devices] registered userId=${req.user.id} email=${req.user.email} platform=${platform} token=${token.slice(0, 20)}...`);
+    return res.json({ ok: true, registeredFor: { id: req.user.id, email: req.user.email } });
   } catch (error) {
     console.error('Register device error:', error);
     return res.status(500).json({ error: 'Failed to register device' });
