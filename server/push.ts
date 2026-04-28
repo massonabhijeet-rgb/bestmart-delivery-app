@@ -47,6 +47,7 @@ export interface BroadcastResult {
   sentCount: number;
   failedCount: number;
   staleRemoved: number;
+  errors?: Array<{ code: string; message: string }>;
 }
 
 async function sendToTokens(
@@ -63,6 +64,7 @@ async function sendToTokens(
   let sent = 0;
   let failed = 0;
   const stale: string[] = [];
+  const errors: Array<{ code: string; message: string }> = [];
 
   for (let i = 0; i < tokens.length; i += FCM_MULTICAST_BATCH) {
     const batch = tokens.slice(i, i + FCM_MULTICAST_BATCH);
@@ -78,7 +80,9 @@ async function sendToTokens(
     response.responses.forEach((r, idx) => {
       if (r.error) {
         const code = r.error.code;
-        console.error(`[push] FCM send failed code=${code} message=${r.error.message} token=${batch[idx].slice(0, 20)}...`);
+        const message = r.error.message ?? '';
+        console.error(`[push] FCM send failed code=${code} message=${message} token=${batch[idx].slice(0, 20)}...`);
+        errors.push({ code, message });
         if (
           code === 'messaging/registration-token-not-registered' ||
           code === 'messaging/invalid-argument' ||
@@ -93,7 +97,12 @@ async function sendToTokens(
   if (stale.length > 0) {
     await removeUserDeviceTokens(stale);
   }
-  return { sentCount: sent, failedCount: failed, staleRemoved: stale.length };
+  return {
+    sentCount: sent,
+    failedCount: failed,
+    staleRemoved: stale.length,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
 }
 
 async function sendToUser(
