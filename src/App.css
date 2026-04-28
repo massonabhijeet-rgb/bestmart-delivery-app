@@ -605,13 +605,113 @@ textarea {
   margin-left: auto;
 }
 
-.dash-nav__email {
-  font-size: 0.82rem;
-  color: rgba(255, 255, 255, 0.55);
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dash-nav__profile {
+  position: relative;
+}
+
+.dash-nav__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: filter 150ms, transform 150ms;
+}
+
+.dash-nav__avatar:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.dash-nav__avatar:focus-visible {
+  outline: 2px solid #a5b4fc;
+  outline-offset: 2px;
+}
+
+.dash-nav__profile-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 240px;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.18),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+  padding: 6px;
+  z-index: 100;
+  animation: profile-menu-pop 140ms ease-out;
+}
+
+@keyframes profile-menu-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.profile-menu__head {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-menu__name {
+  font-weight: 700;
+  color: var(--c-ink, #0d1b3e);
+  font-size: 0.95rem;
+}
+
+.profile-menu__email {
+  font-size: 0.8rem;
+  color: var(--c-ink-3, #6b6b6b);
+  word-break: break-all;
+}
+
+.profile-menu__head .role-badge {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.profile-menu__divider {
+  height: 1px;
+  background: rgba(15, 23, 42, 0.07);
+  margin: 4px 0;
+}
+
+.profile-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--c-ink, #0d1b3e);
+  font-size: 0.88rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.profile-menu__item:hover {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.profile-menu__item--danger {
+  color: #b91c1c;
+}
+
+.profile-menu__item--danger:hover {
+  background: rgba(220, 38, 38, 0.08);
 }
 
 .dash-nav__btn {

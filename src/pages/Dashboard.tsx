@@ -184,6 +184,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // Profile dropdown — replaces the always-visible email/role chips in
+  // the navbar. Stays closed by default; toggled by the avatar button.
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (
+        profileMenuRef.current &&
+        !profileMenuRef.current.contains(e.target as Node)
+      ) {
+        setProfileMenuOpen(false);
+      }
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === 'Escape') setProfileMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [profileMenuOpen]);
+  const profileInitial = (user.fullName || user.email || '?')
+    .trim()
+    .charAt(0)
+    .toUpperCase();
   const [productForm, setProductForm] = useState<ProductFormState>(defaultProductForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [productImage, setProductImage] = useState<File | null>(null);
@@ -1926,15 +1954,47 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         </nav>
 
         <div className="dash-nav__end">
-          <span className={`role-badge role-badge--${user.role}`}>{user.role}</span>
-          <span className="dash-nav__email">{user.email}</span>
-
           <button type="button" className="dash-nav__btn" onClick={onOpenStore}>
             Storefront
           </button>
-          <button type="button" className="dash-nav__btn dash-nav__btn--accent" onClick={onLogout}>
-            Log Out
-          </button>
+          <div className="dash-nav__profile" ref={profileMenuRef}>
+            <button
+              type="button"
+              className="dash-nav__avatar"
+              onClick={() => setProfileMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen}
+              aria-label="Account menu"
+              title={user.email}
+            >
+              {profileInitial}
+            </button>
+            {profileMenuOpen && (
+              <div className="dash-nav__profile-menu" role="menu">
+                <div className="profile-menu__head">
+                  <div className="profile-menu__name">
+                    {user.fullName || user.email.split('@')[0]}
+                  </div>
+                  <div className="profile-menu__email">{user.email}</div>
+                  <span className={`role-badge role-badge--${user.role}`}>
+                    {user.role}
+                  </span>
+                </div>
+                <div className="profile-menu__divider" />
+                <button
+                  type="button"
+                  className="profile-menu__item profile-menu__item--danger"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    onLogout();
+                  }}
+                  role="menuitem"
+                >
+                  Log out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
