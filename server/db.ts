@@ -406,6 +406,16 @@ async function createTables(client: PoolClient) {
     ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories (parent_id) WHERE parent_id IS NOT NULL;
+    -- Allow same-name categories under different parents (e.g.
+    -- Baby Care › Skin Care AND Personal Care › Skin Care). The
+    -- original UNIQUE (company_id, slug) blocked this. Replace with
+    -- a unique scoped by parent_id, COALESCE'd to a sentinel so
+    -- top-level categories also get the right uniqueness semantics
+    -- (NULL ≠ NULL in SQL UNIQUE without this).
+    ALTER TABLE categories
+      DROP CONSTRAINT IF EXISTS categories_company_id_slug_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS categories_company_parent_slug_idx
+      ON categories (company_id, COALESCE(parent_id, -1), slug);
   `);
 
   // One-time migration: copy distinct values from legacy products.category into categories rows,
@@ -2407,8 +2417,21 @@ export async function listProductsPage(opts: ListProductsPageOpts): Promise<List
     where.push(`c.name = $${params.length}`);
   }
   if (opts.categoryId != null) {
+    // Branch query: include the requested category AND all its descendants
+    // (Baby Care → Diapers & Wipes → Small etc.). A product tagged to a
+    // leaf shows up under the leaf's parent and grandparent. Recursive
+    // CTE walks parent → child until no more rows exist; categories table
+    // is small (<1k rows even at maturity) so this is sub-millisecond.
     params.push(opts.categoryId);
-    where.push(`p.category_id = $${params.length}`);
+    where.push(`p.category_id IN (
+      WITH RECURSIVE category_tree AS (
+        SELECT id FROM categories WHERE id = $${params.length}
+        UNION ALL
+        SELECT cat.id FROM categories cat
+          JOIN category_tree ct ON cat.parent_id = ct.id
+      )
+      SELECT id FROM category_tree
+    )`);
   }
   if (opts.brand) {
     params.push(opts.brand);

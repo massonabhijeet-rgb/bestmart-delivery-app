@@ -4,6 +4,7 @@ import { fuzzyRank } from '../lib/fuzzySearch';
 import { playOrderAlert, unlockAudio } from '../lib/sound';
 import { useOrderSocket } from '../hooks/useOrderSocket';
 import type { RiderLocation } from '../hooks/useOrderSocket';
+import { CategoryPicker } from '../components/CategoryPicker';
 import { confirm, pickRider, rejectOrder } from '../components/ConfirmDialog';
 import { withBusy } from '../components/BusyOverlay';
 import BroadcastPanel from '../components/BroadcastPanel';
@@ -78,6 +79,21 @@ import type {
   UserRole,
 } from '../services/api';
 
+/// Builds "Baby Care › Skin Care" by walking parent_id up from the given
+/// category. Used in the inline-create parent dropdown so admin can pick
+/// any node at any depth and clearly see its position in the tree.
+function breadcrumbFor(id: number, all: Category[]): string {
+  const byId = new Map(all.map((c) => [c.id, c]));
+  const path: string[] = [];
+  let current = byId.get(id);
+  let safety = 12; // depth cap — stops a corrupt cycle from looping forever
+  while (current && safety-- > 0) {
+    path.unshift(current.name);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return path.join(' › ');
+}
+
 function haversineKm(
   a: { lat: number; lng: number },
   b: { lat: number; lng: number }
@@ -118,12 +134,10 @@ interface BulkProductRow {
 
 interface ProductFormState {
   name: string;
-  // The parent (top-level) category. UI-only; not what gets saved if a
-  // subcategory is also picked.
+  // The category the product is tagged to. Can be at any depth — the
+  // typeahead picker surfaces every level (Baby Care, Diapers & Wipes,
+  // Small, etc.) in one searchable list.
   categoryId: string;
-  // Optional sub-category. If non-empty, the product is mapped to this
-  // subcategory; otherwise it falls back to the parent categoryId.
-  subCategoryId: string;
   brandId: string;
   unitLabel: string;
   description: string;
@@ -142,7 +156,6 @@ interface ProductFormState {
 const defaultProductForm: ProductFormState = {
   name: '',
   categoryId: '',
-  subCategoryId: '',
   brandId: '',
   unitLabel: '',
   description: '',
@@ -267,6 +280,10 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [creatingUser, setCreatingUser] = useState(false);
   const [showProductEditor, setShowProductEditor] = useState(false);
   const [inlineCategoryName, setInlineCategoryName] = useState('');
+  // Parent for the inline create. Empty string = top-level. Lets admin
+  // create same-named categories under different parents (e.g. Skin Care
+  // under both Baby Care and Personal Care).
+  const [inlineCategoryParentId, setInlineCategoryParentId] = useState<string>('');
   const [creatingInlineCategory, setCreatingInlineCategory] = useState(false);
   const [showInlineCategoryInput, setShowInlineCategoryInput] = useState(false);
   const [slowMovers, setSlowMovers] = useState<SlowMoverSuggestion[]>([]);
@@ -835,12 +852,33 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   async function handleCreateCategoryInline() {
     const name = inlineCategoryName.trim();
     if (!name) return;
+    const parentId = inlineCategoryParentId
+      ? Number(inlineCategoryParentId)
+      : null;
+
+    // Disambiguation guard: if a category with this name already exists
+    // (case-insensitive) and the admin hasn't picked a parent, force them
+    // to. Stops accidentally creating a duplicate top-level "Skin Care"
+    // when a "Skin Care" already exists under some other parent.
+    if (parentId == null) {
+      const collisions = categories.filter(
+        (c) => c.name.trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (collisions.length > 0) {
+        setError(
+          `"${name}" already exists. Pick a parent above to create another one with a different parent.`,
+        );
+        return;
+      }
+    }
+
     setCreatingInlineCategory(true);
     try {
-      const created = await apiCreateCategory(name);
+      const created = await apiCreateCategory(name, parentId);
       setCategories((prev) => [...prev, created]);
       setProductForm((c) => ({ ...c, categoryId: String(created.id) }));
       setInlineCategoryName('');
+      setInlineCategoryParentId('');
       setShowInlineCategoryInput(false);
       setNotice(`Category "${name}" created.`);
     } catch (err) {
@@ -916,16 +954,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         setError('Please select a category.');
         return;
       }
-      // The product is mapped to the subcategory if the admin picked
-      // one; otherwise it falls back to the parent. This handles both
-      // (a) parents with no subs (sub picker hidden, fallback works),
-      // and (b) parents with subs where the admin can pick the leaf.
-      const finalCategoryId = productForm.subCategoryId
-        ? Number(productForm.subCategoryId)
-        : Number(productForm.categoryId);
       const payload = {
         name: productForm.name,
-        categoryId: finalCategoryId,
+        categoryId: Number(productForm.categoryId),
         brandId: productForm.brandId ? Number(productForm.brandId) : null,
         unitLabel: productForm.unitLabel,
         description: productForm.description,
@@ -3491,7 +3522,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                         )}
                       </span>
                       {showInlineCategoryInput ? (
-                        <div className="pe-inline-create">
+                        <div className="pe-inline-create pe-inline-create--col">
                           <input
                             className="pe-field__input"
                             value={inlineCategoryName}
@@ -3500,87 +3531,74 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             autoFocus
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') { e.preventDefault(); void handleCreateCategoryInline(); }
-                              if (e.key === 'Escape') { setShowInlineCategoryInput(false); setInlineCategoryName(''); }
+                              if (e.key === 'Escape') {
+                                setShowInlineCategoryInput(false);
+                                setInlineCategoryName('');
+                                setInlineCategoryParentId('');
+                              }
                             }}
                           />
-                          <button
-                            type="button"
-                            className="primary-button pe-inline-create__btn"
-                            disabled={!inlineCategoryName.trim() || creatingInlineCategory}
-                            onClick={() => void handleCreateCategoryInline()}
+                          {/*
+                            Parent dropdown — empty = top-level. The flat
+                            list mirrors the typeahead picker's options so
+                            admin can nest a new category at any depth.
+                          */}
+                          <select
+                            className="pe-field__input"
+                            value={inlineCategoryParentId}
+                            onChange={(e) => setInlineCategoryParentId(e.target.value)}
                           >
-                            {creatingInlineCategory ? '…' : 'Add'}
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost-button pe-inline-create__btn"
-                            onClick={() => { setShowInlineCategoryInput(false); setInlineCategoryName(''); }}
-                          >
-                            Cancel
-                          </button>
+                            <option value="">(Top-level — no parent)</option>
+                            {categories
+                              .slice()
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map((c) => (
+                                <option key={c.id} value={String(c.id)}>
+                                  {breadcrumbFor(c.id, categories)}
+                                </option>
+                              ))}
+                          </select>
+                          <div className="pe-inline-create__actions">
+                            <button
+                              type="button"
+                              className="primary-button pe-inline-create__btn"
+                              disabled={!inlineCategoryName.trim() || creatingInlineCategory}
+                              onClick={() => void handleCreateCategoryInline()}
+                            >
+                              {creatingInlineCategory ? '…' : 'Add'}
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-button pe-inline-create__btn"
+                              onClick={() => {
+                                setShowInlineCategoryInput(false);
+                                setInlineCategoryName('');
+                                setInlineCategoryParentId('');
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
                       ) : (
-                        <select
-                          className="pe-field__input"
-                          value={productForm.categoryId}
-                          onChange={(e) =>
+                        <CategoryPicker
+                          categories={categories}
+                          value={
+                            productForm.categoryId
+                              ? Number(productForm.categoryId)
+                              : null
+                          }
+                          onChange={(id) =>
                             setProductForm((c) => ({
                               ...c,
-                              categoryId: e.target.value,
-                              // Reset sub when parent changes — old sub
-                              // belonged to a different parent's tree.
-                              subCategoryId: '',
+                              categoryId: id != null ? String(id) : '',
                             }))
                           }
                           required
-                        >
-                          <option value="">Select category</option>
-                          {categories
-                            .filter((cat) => cat.parentId == null)
-                            .map((cat) => (
-                              <option key={cat.id} value={String(cat.id)}>
-                                {cat.name}
-                              </option>
-                            ))}
-                        </select>
+                          placeholder="Search any category — try 'small di'"
+                        />
                       )}
                     </label>
-                    {(() => {
-                      // Show the subcategory picker only when the chosen
-                      // parent actually has children. Parents without subs
-                      // (e.g. Atta, Rice & Dal) save directly under the
-                      // parent — this matches the customer-side browser
-                      // which renders their products in a flat grid.
-                      const parentId = productForm.categoryId
-                        ? Number(productForm.categoryId)
-                        : null;
-                      const subs = parentId
-                        ? categories.filter((c) => c.parentId === parentId)
-                        : [];
-                      if (!parentId || subs.length === 0) return null;
-                      return (
-                        <label className="pe-field">
-                          <span className="pe-field__label">Subcategory</span>
-                          <select
-                            className="pe-field__input"
-                            value={productForm.subCategoryId}
-                            onChange={(e) =>
-                              setProductForm((c) => ({
-                                ...c,
-                                subCategoryId: e.target.value,
-                              }))
-                            }
-                          >
-                            <option value="">Whole category</option>
-                            {subs.map((s) => (
-                              <option key={s.id} value={String(s.id)}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      );
-                    })()}
                     <label className="pe-field">
                       <span className="pe-field__label">Unit label <em>*</em></span>
                       <input
@@ -4179,20 +4197,9 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                             const linkAnchor = product.variantGroupId
                               ? products.find((p) => p.id === product.variantGroupId)
                               : null;
-                            // Split the saved categoryId into parent + sub:
-                            // if the row points to a subcategory, the parent
-                            // dropdown shows its parent and the sub dropdown
-                            // shows the row itself. If it's already a top-
-                            // level category, the sub dropdown stays empty.
-                            const productCat = product.categoryId
-                              ? categories.find((c) => c.id === product.categoryId)
-                              : null;
-                            const parentCatId = productCat?.parentId ?? productCat?.id ?? null;
-                            const subCatId = productCat?.parentId != null ? productCat.id : null;
                             setProductForm({
                               name: product.name,
-                              categoryId: parentCatId != null ? String(parentCatId) : '',
-                              subCategoryId: subCatId != null ? String(subCatId) : '',
+                              categoryId: product.categoryId ? String(product.categoryId) : '',
                               brandId: product.brandId ? String(product.brandId) : '',
                               unitLabel: product.unitLabel,
                               description: product.description,
