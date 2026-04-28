@@ -1738,7 +1738,13 @@ export async function findUserByUid(uid: string) {
 // is embedded in the issued JWT. Auth middleware compares the JWT's sid
 // against this column — when a new device logs in, all previously-issued
 // JWTs become invalid and those devices auto-logout on their next API call.
+//
+// Also wipes any pre-existing user_devices rows for this user. Old devices
+// can't unregister themselves cleanly (their JWTs are now invalid → 401),
+// so the server proactively clears the table — guaranteeing user_devices
+// holds at most one row per user (the device about to log in).
 export async function rotateUserSession(userId: number): Promise<string> {
+  await pool.query(`DELETE FROM user_devices WHERE user_id = $1`, [userId]);
   const { rows } = await pool.query<{ sessionId: string }>(
     `UPDATE users SET session_id = gen_random_uuid(), updated_date = NOW()
      WHERE id = $1 RETURNING session_id AS "sessionId";`,
