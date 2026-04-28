@@ -78,6 +78,7 @@ async function sendToTokens(
     response.responses.forEach((r, idx) => {
       if (r.error) {
         const code = r.error.code;
+        console.error(`[push] FCM send failed code=${code} message=${r.error.message} token=${batch[idx].slice(0, 20)}...`);
         if (
           code === 'messaging/registration-token-not-registered' ||
           code === 'messaging/invalid-argument' ||
