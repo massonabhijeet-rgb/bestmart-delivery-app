@@ -1734,6 +1734,39 @@ export async function findUserByUid(uid: string) {
   return result.rowCount ? mapUser(result.rows[0]) : null;
 }
 
+// Used by the admin presence endpoint — returns enough per-rider info to
+// answer "why isn't auto-dispatch picking this rider?" The runtime checks
+// (location in memory, WS connection) are layered on by the route.
+export async function listRidersForPresence(companyId: number) {
+  const { rows } = await pool.query<{
+    id: number;
+    email: string;
+    fullName: string | null;
+    isAvailable: boolean;
+    hasDeviceToken: boolean;
+    onTheWay: boolean;
+  }>(
+    `
+      SELECT
+        u.id,
+        u.email,
+        u.full_name AS "fullName",
+        COALESCE(u.is_available, FALSE) AS "isAvailable",
+        EXISTS(SELECT 1 FROM user_devices d WHERE d.user_id = u.id) AS "hasDeviceToken",
+        EXISTS(
+          SELECT 1 FROM orders o
+          WHERE o.assigned_rider_user_id = u.id
+            AND o.status = 'out_for_delivery'
+        ) AS "onTheWay"
+      FROM users u
+      WHERE u.company_id = $1 AND u.role = 'rider'
+      ORDER BY "isAvailable" DESC, u.id;
+    `,
+    [companyId]
+  );
+  return rows;
+}
+
 // Single-sign-on enforcement: every login mints a fresh session_id, which
 // is embedded in the issued JWT. Auth middleware compares the JWT's sid
 // against this column — when a new device logs in, all previously-issued

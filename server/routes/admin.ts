@@ -3,17 +3,66 @@ import { authenticateToken, requireRole } from '../middleware/auth.js';
 import {
   countCustomersWithDevices,
   findCustomerByIdentifier,
+  listRidersForPresence,
 } from '../db.js';
 import {
   broadcastToCustomers,
   notifyCustomerById,
 } from '../push.js';
+import { getConnectedRiderIds, getRiderLocations } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
 
 const TITLE_MAX = 120;
 const BODY_MAX = 1000;
+
+// Why isn't auto-dispatch picking my rider? Returns each rider's full
+// eligibility breakdown: DB availability flag, FCM token presence, live
+// WebSocket connection, last-known GPS location. Eligible = isAvailable
+// && (hasDeviceToken || wsConnected) && location && !onTheWay.
+router.get(
+  '/rider-presence',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Auth required' });
+    try {
+      const riders = await listRidersForPresence(req.user.companyId);
+      const connected = getConnectedRiderIds();
+      const locations = new Map(
+        getRiderLocations().map((l) => [l.riderId, l]),
+      );
+      const enriched = riders.map((r) => {
+        const loc = locations.get(r.id);
+        const wsConnected = connected.has(r.id);
+        const reachable = r.hasDeviceToken || wsConnected;
+        const eligibleForDispatch =
+          r.isAvailable && reachable && loc != null && !r.onTheWay;
+        return {
+          ...r,
+          wsConnected,
+          location: loc
+            ? { lat: loc.latitude, lng: loc.longitude, updatedAt: loc.updatedAt }
+            : null,
+          eligibleForDispatch,
+          missing: eligibleForDispatch
+            ? null
+            : [
+                !r.isAvailable && 'not toggled Available',
+                !reachable && 'no FCM token AND no live WebSocket',
+                !loc && 'no GPS location pushed since last server restart',
+                r.onTheWay && 'currently on a delivery (out_for_delivery)',
+              ].filter(Boolean),
+        };
+      });
+      return res.json({ riders: enriched });
+    } catch (error) {
+      console.error('Admin rider-presence error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 router.get(
   '/broadcast/recipients',
