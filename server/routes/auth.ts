@@ -61,13 +61,17 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Customer mobile app sends client='customer'. Only role=viewer is
-    // allowed in that app — staff accounts (admin, editor, rider, picker,
-    // superuser) must use their dedicated app/web. Generic "wrong app"
-    // copy keeps things friendly without leaking which role the email is.
-    if (client === 'customer' && user.role !== 'viewer') {
+    // Each client app pins its own expected role. Staff using the
+    // wrong app gets a generic "wrong account" message instead of
+    // leaking which role their email actually carries.
+    const clientRole: Record<string, UserRole> = {
+      customer: 'viewer',
+      picker: 'picker',
+    };
+    const expectedRole = client ? clientRole[client] : undefined;
+    if (expectedRole && user.role !== expectedRole) {
       return res.status(403).json({
-        error: 'This account is not a customer account. Please use the staff app.',
+        error: `This account is not a ${expectedRole} account. Please use your assigned app.`,
       });
     }
 
@@ -249,12 +253,18 @@ router.post('/otp/verify', async (req, res) => {
       });
     }
 
-    // Same customer-app guard as /login: OTP is the customer flow, but
-    // a phone number that ends up linked to a staff account must not be
-    // able to back-door into the shopping app via OTP.
-    if (client === 'customer' && user.role !== 'viewer') {
+    // Same per-client role guard as /login: a phone number tied to a
+    // staff account must not be able to back-door into another app via
+    // OTP. Customer is the only OTP-using client today; the picker /
+    // rider apps don't expose OTP login.
+    const otpClientRole: Record<string, UserRole> = {
+      customer: 'viewer',
+      picker: 'picker',
+    };
+    const expectedRole = client ? otpClientRole[client] : undefined;
+    if (expectedRole && user.role !== expectedRole) {
       return res.status(403).json({
-        error: 'This account is not a customer account. Please use the staff app.',
+        error: `This account is not a ${expectedRole} account. Please use your assigned app.`,
       });
     }
 
