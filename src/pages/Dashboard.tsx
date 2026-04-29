@@ -407,6 +407,15 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const [unseenCount, setUnseenCount] = useState(0);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Separate toast for rider-didn't-accept events so it can stack with
+  // the new-order toast and use its own auto-dismiss timer.
+  const [reassignToast, setReassignToast] = useState<{
+    publicId: string;
+    customerName: string | null;
+    previousRiderName: string | null;
+    newRiderName: string | null;
+  } | null>(null);
+  const reassignToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isSuperuser = user.role === 'superuser';
   const canManageCatalog =
@@ -462,6 +471,20 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
       // availability or disconnects. Replace local state so the dispatch
       // dropdown stays live without a manual reload.
       setRiders(fresh);
+    },
+    onRiderReassigned: (payload) => {
+      // Server's rider-assignment sweep fired — the previous rider didn't
+      // tap Accept in time. Surface a toast + audible alert so admin knows
+      // the assignment changed without needing to stare at a specific row.
+      playOrderAlert();
+      if (reassignToastTimerRef.current) {
+        clearTimeout(reassignToastTimerRef.current);
+      }
+      setReassignToast(payload);
+      reassignToastTimerRef.current = setTimeout(
+        () => setReassignToast(null),
+        9000,
+      );
     },
   });
 
@@ -2125,6 +2148,63 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             onClick={() => { handleTabClick('orders'); setToast(null); }}
           >
             View in queue →
+          </button>
+        </div>
+      )}
+
+      {/* ── Rider didn't accept → reassigned / unassigned toast ── */}
+      {reassignToast && (
+        <div
+          className="order-toast order-toast--warn"
+          role="alert"
+          style={{
+            // Stack below the new-order toast when both are visible.
+            // 'top: 5.5rem' + 1.25rem spacing between cards = 6.75rem.
+            top: toast ? '17rem' : '5.5rem',
+            borderColor: '#F59E0B',
+          }}
+        >
+          <div className="order-toast__header">
+            <span
+              className="order-toast__dot"
+              style={{ backgroundColor: '#F59E0B' }}
+            />
+            <span className="order-toast__label">
+              {reassignToast.newRiderName
+                ? 'Rider reassigned'
+                : 'No rider available'}
+            </span>
+            <button
+              type="button"
+              className="order-toast__close"
+              onClick={() => setReassignToast(null)}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="order-toast__id">#{reassignToast.publicId}</div>
+          {reassignToast.customerName && (
+            <div className="order-toast__customer">
+              {reassignToast.customerName}
+            </div>
+          )}
+          <div
+            className="order-toast__distance"
+            style={{ marginTop: 6 }}
+          >
+            {reassignToast.previousRiderName ?? 'Previous rider'} didn't accept
+            {reassignToast.newRiderName ? (
+              <> — sent to <strong>{reassignToast.newRiderName}</strong></>
+            ) : (
+              <> — no riders available, please reassign manually</>
+            )}
+          </div>
+          <button
+            type="button"
+            className="order-toast__cta"
+            onClick={() => { handleTabClick('orders'); setReassignToast(null); }}
+          >
+            View order →
           </button>
         </div>
       )}

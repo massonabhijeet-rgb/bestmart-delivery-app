@@ -73,7 +73,7 @@ export interface CategoryRecord {
 // to the next-best available rider. Single source of truth — used by
 // the SQL that sets rider_assignment_deadline and the sweep that fires
 // on expiry.
-export const RIDER_ACCEPT_TIMEOUT_SECONDS = 30;
+export const RIDER_ACCEPT_TIMEOUT_SECONDS = 120;
 
 export interface OrderItemInput {
   productId: string;
@@ -2222,7 +2222,7 @@ export async function setRiderAvailability(
 // same rider (re-accepting is a no-op); returns null if the caller isn't
 // the assigned rider, the deadline has already passed, or the order is
 // already closed. The deadline guard makes accept race-safe against the
-// auto-reassign sweep that fires when 45s elapse.
+// auto-reassign sweep that fires when RIDER_ACCEPT_TIMEOUT_SECONDS elapse.
 export async function acceptRiderOrder(publicId: string, riderUserId: number) {
   const updated = await pool.query<{ id: number }>(
     `
@@ -2398,10 +2398,13 @@ function haversineKm(
 
 // Snapshot of an order whose rider didn't accept in time. The sweep
 // returns these so callers can broadcast / push-notify the next rider.
+// previousRiderName is included so the admin toast can name who failed
+// to accept ("Rider Ramesh didn't accept; reassigned to Suresh").
 export interface ExpiredAssignment {
   publicId: string;
   companyId: number;
   previousRiderUserId: number;
+  previousRiderName: string | null;
   newRiderUserId: number | null;
   newRiderName: string | null;
 }
@@ -2422,13 +2425,15 @@ export async function expireAndReassignStaleAssignments(
     publicId: string;
     companyId: number;
     riderUserId: number;
+    riderName: string | null;
     riderSkips: number[];
   }>(
     `
-      SELECT public_id AS "publicId",
-             company_id AS "companyId",
+      SELECT public_id     AS "publicId",
+             company_id    AS "companyId",
              assigned_rider_user_id AS "riderUserId",
-             rider_skips AS "riderSkips"
+             assigned_rider AS "riderName",
+             rider_skips    AS "riderSkips"
         FROM orders
        WHERE rider_assignment_deadline IS NOT NULL
          AND rider_assignment_deadline < NOW()
@@ -2478,6 +2483,7 @@ export async function expireAndReassignStaleAssignments(
           publicId: row.publicId,
           companyId: row.companyId,
           previousRiderUserId: row.riderUserId,
+          previousRiderName: row.riderName,
           newRiderUserId: next.id,
           newRiderName: next.fullName,
         });
@@ -2506,6 +2512,7 @@ export async function expireAndReassignStaleAssignments(
           publicId: row.publicId,
           companyId: row.companyId,
           previousRiderUserId: row.riderUserId,
+          previousRiderName: row.riderName,
           newRiderUserId: null,
           newRiderName: null,
         });

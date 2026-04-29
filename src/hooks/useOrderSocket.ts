@@ -30,13 +30,27 @@ export interface RiderRosterPayload {
   riders: RiderRosterEntry[];
 }
 
+// Fired by the server's rider-assignment sweep when a rider didn't
+// accept their dispatched order in time. The order itself has already
+// been mutated (and pushed via order_updated immediately before this);
+// this event is purely the toast trigger so the admin notices the
+// silent reassignment / unassignment.
+export interface RiderReassignedPayload {
+  publicId: string;
+  companyId: number;
+  customerName: string | null;
+  previousRiderName: string | null;
+  newRiderName: string | null;
+}
+
 type WsEvent =
   | { type: 'connected' }
   | { type: 'new_order'; payload: Order }
   | { type: 'order_updated'; payload: Order }
   | { type: 'rider_location'; payload: RiderLocation }
   | { type: 'shop_status_changed'; payload: ShopStatusPayload }
-  | { type: 'rider_roster_changed'; payload: RiderRosterPayload };
+  | { type: 'rider_roster_changed'; payload: RiderRosterPayload }
+  | { type: 'rider_reassigned'; payload: RiderReassignedPayload };
 
 interface Handlers {
   onNewOrder: (order: Order) => void;
@@ -44,6 +58,7 @@ interface Handlers {
   onRiderLocation?: (loc: RiderLocation) => void;
   onShopStatusChanged?: (status: ShopStatusPayload) => void;
   onRiderRosterChanged?: (payload: RiderRosterPayload) => void;
+  onRiderReassigned?: (payload: RiderReassignedPayload) => void;
 }
 
 const WS_BASE = import.meta.env.VITE_API_URL
@@ -89,6 +104,8 @@ export function useOrderSocket(handlers: Handlers): void {
             handlersRef.current.onShopStatusChanged?.(data.payload);
           } else if (data.type === 'rider_roster_changed') {
             handlersRef.current.onRiderRosterChanged?.(data.payload);
+          } else if (data.type === 'rider_reassigned') {
+            handlersRef.current.onRiderReassigned?.(data.payload);
           }
         } catch {
           // ignore malformed frames

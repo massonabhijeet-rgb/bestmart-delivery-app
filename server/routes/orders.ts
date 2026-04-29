@@ -466,8 +466,9 @@ router.patch(
 
 /// Auto-dispatch: server picks the best rider using load → distance →
 /// rating, marks the order out_for_delivery + assigned_rider_user_id,
-/// starts the 30s acceptance deadline (the sweep auto-reassigns if the
-/// rider doesn't tap Accept in time), and sends an FCM push to the rider.
+/// starts the rider acceptance deadline (RIDER_ACCEPT_TIMEOUT_SECONDS —
+/// the sweep auto-reassigns if the rider doesn't tap Accept in time),
+/// and sends an FCM push to the rider.
 /// Returns the assigned order + a snapshot of the rider for the toast.
 router.post(
   '/:publicId/auto-dispatch',

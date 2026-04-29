@@ -43,13 +43,28 @@ export type RiderRosterPayload = {
   riders: RiderRosterEntry[];
 };
 
+// Fired by the rider-assignment sweep when a rider didn't accept in
+// time. Gives the admin dashboard enough context to show a toast that
+// reads either "Rider X didn't accept; reassigned to Rider Y" or
+// "Rider X didn't accept; no riders available". Order is also pushed
+// via order_updated immediately before this so the order list itself
+// is already up to date when the toast fires.
+export type RiderReassignedPayload = {
+  publicId: string;
+  companyId: number;
+  customerName: string | null;
+  previousRiderName: string | null;
+  newRiderName: string | null;
+};
+
 export type WsEvent =
   | { type: 'connected' }
   | { type: 'new_order'; payload: OrderRecord }
   | { type: 'order_updated'; payload: OrderRecord }
   | { type: 'rider_location'; payload: RiderLocation }
   | { type: 'shop_status_changed'; payload: ShopStatusPayload }
-  | { type: 'rider_roster_changed'; payload: RiderRosterPayload };
+  | { type: 'rider_roster_changed'; payload: RiderRosterPayload }
+  | { type: 'rider_reassigned'; payload: RiderReassignedPayload };
 
 // In-memory cache so newly connected admins can get last-known positions
 const riderLocations = new Map<number, RiderLocation>();

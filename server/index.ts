@@ -123,6 +123,19 @@ function startRiderAssignmentSweep() {
         const order = await getOrderByPublicId(ev.publicId);
         if (!order) continue;
         broadcast({ type: 'order_updated', payload: order });
+        // Surface the timeout to the admin dashboard so the reassign /
+        // unassign isn't silent. The order_updated above already moved
+        // the row's data; this event is purely the toast trigger.
+        broadcast({
+          type: 'rider_reassigned',
+          payload: {
+            publicId: order.publicId,
+            companyId: ev.companyId,
+            customerName: order.customerName ?? null,
+            previousRiderName: ev.previousRiderName,
+            newRiderName: ev.newRiderName,
+          },
+        });
         if (ev.newRiderUserId) {
           void notifyRiderAssigned({
             riderUserId: ev.newRiderUserId,
