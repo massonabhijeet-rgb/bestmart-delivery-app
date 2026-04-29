@@ -26,9 +26,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'bestmart-secret-key-2026';
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body as {
+    const { email, password, client } = req.body as {
       email?: string;
       password?: string;
+      client?: string;
     };
 
     if (!email || !password) {
@@ -57,6 +58,16 @@ router.post('/login', async (req, res) => {
       }
       return res.status(401).json({
         error: `Invalid email or password. ${5 - attempts} attempt(s) remaining.`,
+      });
+    }
+
+    // Customer mobile app sends client='customer'. Only role=viewer is
+    // allowed in that app — staff accounts (admin, editor, rider, picker,
+    // superuser) must use their dedicated app/web. Generic "wrong app"
+    // copy keeps things friendly without leaking which role the email is.
+    if (client === 'customer' && user.role !== 'viewer') {
+      return res.status(403).json({
+        error: 'This account is not a customer account. Please use the staff app.',
       });
     }
 
@@ -197,10 +208,11 @@ router.post('/otp/send', async (req, res) => {
 
 router.post('/otp/verify', async (req, res) => {
   try {
-    const { phone, otp, requestId } = req.body as {
+    const { phone, otp, requestId, client } = req.body as {
       phone?: string;
       otp?: string;
       requestId?: string;
+      client?: string;
     };
     if (!phone || !otp || !requestId) {
       return res.status(400).json({ error: 'Phone, OTP, and requestId are required' });
@@ -234,6 +246,15 @@ router.post('/otp/verify', async (req, res) => {
     if (user.lockedAt) {
       return res.status(423).json({
         error: 'Account locked. Contact the administrator.',
+      });
+    }
+
+    // Same customer-app guard as /login: OTP is the customer flow, but
+    // a phone number that ends up linked to a staff account must not be
+    // able to back-door into the shopping app via OTP.
+    if (client === 'customer' && user.role !== 'viewer') {
+      return res.status(403).json({
+        error: 'This account is not a customer account. Please use the staff app.',
       });
     }
 
@@ -364,7 +385,10 @@ router.post(
       if (!email || !password || !role) {
         return res.status(400).json({ error: 'Email, password, and role are required' });
       }
-      if (!['admin', 'editor', 'viewer', 'rider'].includes(role)) {
+      // Superuser is the platform owner — provisioned out-of-band, never
+      // creatable from the admin panel. Admin endpoint must reject it
+      // even if the UI somehow surfaces it.
+      if (!['admin', 'editor', 'viewer', 'rider', 'picker'].includes(role)) {
         return res.status(400).json({ error: 'Invalid role' });
       }
       const existing = await findUserByEmail(email);

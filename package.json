@@ -10,7 +10,8 @@
     "start": "node --import tsx server/index.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "seed:superuser": "tsx server/scripts/seedSuperuser.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1031.0",

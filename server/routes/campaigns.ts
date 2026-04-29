@@ -64,7 +64,7 @@ router.get('/active', attachUserIfPresent, async (req: AuthenticatedRequest, res
 router.get(
   '/',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) {
@@ -82,7 +82,7 @@ router.get(
 router.post(
   '/',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) {
@@ -125,7 +125,7 @@ router.post(
 router.put(
   '/:id',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) {
@@ -173,7 +173,7 @@ router.put(
 router.delete(
   '/:id',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) {
@@ -202,7 +202,7 @@ router.delete(
 router.post(
   '/:id/upload-image',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   imageUpload.single('campaignImage'),
   async (req: AuthenticatedRequest, res) => {
     try {

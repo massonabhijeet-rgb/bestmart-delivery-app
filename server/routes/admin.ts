@@ -237,7 +237,7 @@ router.patch(
 router.get(
   '/broadcast/recipients',
   authenticateToken,
-  requireRole('admin'),
+  requireRole('superuser'),
   async (_req: AuthenticatedRequest, res) => {
     try {
       const count = await countCustomersWithDevices();
@@ -252,7 +252,7 @@ router.get(
 router.post(
   '/broadcast/lookup',
   authenticateToken,
-  requireRole('admin'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       const { identifier } = (req.body ?? {}) as { identifier?: string };
@@ -274,7 +274,7 @@ router.post(
 router.post(
   '/broadcast',
   authenticateToken,
-  requireRole('admin'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       const {

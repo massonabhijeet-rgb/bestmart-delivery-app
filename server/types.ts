@@ -1,6 +1,12 @@
 import type { Request } from 'express';
 
-export type UserRole = 'admin' | 'editor' | 'viewer' | 'rider' | 'picker';
+export type UserRole =
+  | 'superuser'
+  | 'admin'
+  | 'editor'
+  | 'viewer'
+  | 'rider'
+  | 'picker';
 
 export type OrderStatus =
   | 'placed'

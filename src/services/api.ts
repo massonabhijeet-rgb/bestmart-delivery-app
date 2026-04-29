@@ -19,7 +19,13 @@ function busyLabelFor(method: string, endpoint: string): string {
   return 'Working…';
 }
 
-export type UserRole = 'admin' | 'editor' | 'viewer' | 'rider' | 'picker';
+export type UserRole =
+  | 'superuser'
+  | 'admin'
+  | 'editor'
+  | 'viewer'
+  | 'rider'
+  | 'picker';
 export type OrderStatus =
   | 'placed'
   | 'confirmed'

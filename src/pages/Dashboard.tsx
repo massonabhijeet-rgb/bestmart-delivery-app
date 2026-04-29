@@ -408,8 +408,14 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const [unseenCount, setUnseenCount] = useState(0);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const canManageCatalog = user.role === 'admin' || user.role === 'editor';
-  const canManageTeam = user.role === 'admin';
+  const isSuperuser = user.role === 'superuser';
+  const canManageCatalog =
+    isSuperuser || user.role === 'admin' || user.role === 'editor';
+  const canManageTeam = isSuperuser || user.role === 'admin';
+  // Overlays, themed pages, and customer-broadcast notifications are
+  // platform-wide marketing tools and only the superuser can manage them.
+  // Admins / editors do everything else but are explicitly blocked here.
+  const canManageMarketing = isSuperuser;
 
   // Wire WebSocket — new orders appear instantly, no reload needed
   useOrderSocket({
@@ -601,7 +607,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
 
   // Lazy-load campaigns when the Overlays tab first opens.
   useEffect(() => {
-    if (!canManageCatalog) return;
+    if (!canManageMarketing) return;
     if (activeTab !== 'campaigns') return;
     if (campaignsLoaded) return;
     (async () => {
@@ -613,7 +619,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         setError(err instanceof Error ? err.message : 'Unable to load overlays');
       }
     })();
-  }, [activeTab, canManageCatalog, campaignsLoaded]);
+  }, [activeTab, canManageMarketing, campaignsLoaded]);
 
   // Debounce the inventory search input so typing doesn't fire a query per keystroke.
   useEffect(() => {
@@ -1974,11 +1980,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
     { key: 'inventory', label: 'Inventory' },
     ...(canManageCatalog ? [{ key: 'categories' as DashTab, label: 'Categories' }] : []),
     ...(canManageCatalog ? [{ key: 'offers' as DashTab, label: "Today's Offers" }] : []),
-    ...(canManageCatalog ? [{ key: 'campaigns' as DashTab, label: 'Overlays' }] : []),
-    ...(canManageCatalog ? [{ key: 'themedPages' as DashTab, label: 'Themed pages' }] : []),
+    ...(canManageMarketing ? [{ key: 'campaigns' as DashTab, label: 'Overlays' }] : []),
+    ...(canManageMarketing ? [{ key: 'themedPages' as DashTab, label: 'Themed pages' }] : []),
     ...(canManageTeam ? [{ key: 'coupons' as DashTab, label: 'Coupons' }] : []),
     ...(canManageTeam ? [{ key: 'team' as DashTab, label: 'Team' }] : []),
-    ...(user.role === 'admin' ? [{ key: 'broadcast' as DashTab, label: 'Notifications' }] : []),
+    ...(canManageMarketing ? [{ key: 'broadcast' as DashTab, label: 'Notifications' }] : []),
   ];
 
   function handleTabClick(key: DashTab) {
@@ -2077,11 +2083,11 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         {activeTab === 'inventory' && renderInventory()}
         {activeTab === 'categories' && renderCategories()}
         {activeTab === 'offers' && renderOffers()}
-        {activeTab === 'campaigns' && renderCampaigns()}
-        {activeTab === 'themedPages' && canManageCatalog && <ThemedPagesPanel />}
+        {activeTab === 'campaigns' && canManageMarketing && renderCampaigns()}
+        {activeTab === 'themedPages' && canManageMarketing && <ThemedPagesPanel />}
         {activeTab === 'coupons' && renderCoupons()}
         {activeTab === 'team' && renderTeam()}
-        {activeTab === 'broadcast' && user.role === 'admin' && <BroadcastPanel />}
+        {activeTab === 'broadcast' && canManageMarketing && <BroadcastPanel />}
       </main>
 
       {/* ── New Order Toast ── */}
@@ -2557,7 +2563,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
         )}
 
         {/* Shop Status */}
-        {user.role === 'admin' && (
+        {canManageTeam && (
           <div className={`section-box shop-status${shopOpenState ? '' : ' shop-status--closed'}`}>
             <div className="section-box__head">
               <div>

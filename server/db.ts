@@ -335,7 +335,7 @@ async function createTables(client: PoolClient) {
       BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'editor', 'viewer', 'rider', 'picker'));
+      CHECK (role IN ('superuser', 'admin', 'editor', 'viewer', 'rider', 'picker'));
   `);
 
   await client.query(`
@@ -1869,6 +1869,9 @@ export async function resetFailedAttempts(email: string) {
 }
 
 export async function listTeamMembers(companyId: number) {
+  // Superusers are platform-owner accounts and are intentionally hidden
+  // from the admin team console — admin must not see their email or be
+  // able to manage them. Provisioned out-of-band only.
   const result = await pool.query(
     `
       SELECT
@@ -1882,6 +1885,7 @@ export async function listTeamMembers(companyId: number) {
         created_date AS "createdDate"
       FROM users
       WHERE company_id = $1
+        AND role <> 'superuser'
       ORDER BY
         CASE role
           WHEN 'admin' THEN 1

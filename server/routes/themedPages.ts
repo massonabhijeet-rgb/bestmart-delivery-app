@@ -172,7 +172,7 @@ router.get(
 router.get(
   '/admin/all',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -188,7 +188,7 @@ router.get(
 router.post(
   '/',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -210,7 +210,7 @@ router.post(
 router.put(
   '/:id',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -235,7 +235,7 @@ router.put(
 router.delete(
   '/:id',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -270,7 +270,7 @@ router.delete(
 router.put(
   '/:id/tiles',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -294,7 +294,7 @@ router.put(
 router.post(
   '/:id/upload-image',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   imageUpload.single('image'),
   async (req: AuthenticatedRequest, res) => {
     try {
@@ -356,7 +356,7 @@ router.post(
 router.post(
   '/:id/tiles/:tileId/upload-image',
   authenticateToken,
-  requireRole('admin', 'editor'),
+  requireRole('superuser'),
   imageUpload.single('image'),
   async (req: AuthenticatedRequest, res) => {
     try {
