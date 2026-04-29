@@ -68,7 +68,9 @@ router.get('/', attachUserIfPresent, async (req: AuthenticatedRequest, res) => {
   // can render them as a tappable tile that opens the sub-category
   // browser. The fallback icon on the tile handles missing imagery.
   const isManagement =
-    req.user?.role === 'admin' || req.user?.role === 'editor';
+    req.user?.role === 'superuser' ||
+    req.user?.role === 'admin' ||
+    req.user?.role === 'editor';
 
   const cacheKey = `${key.categoriesList(companyId)}:${isManagement ? 'all' : 'visible'}`;
   const cached = await cacheGet<{ categories: unknown[] }>(cacheKey);

@@ -83,6 +83,13 @@ export function requireRole(...roles: UserRole[]) {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
+    // Superuser is the platform-owner role and implicitly satisfies
+    // every per-route check — that way callers never have to remember
+    // to include 'superuser' in their allow-list, and adding new admin
+    // endpoints later is automatically reachable by superuser.
+    if (req.user.role === 'superuser') {
+      return next();
+    }
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'You do not have permission for this action' });
     }

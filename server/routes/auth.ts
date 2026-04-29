@@ -320,7 +320,7 @@ router.delete('/me', authenticateToken, async (req: AuthenticatedRequest, res) =
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  if (req.user.role === 'admin') {
+  if (req.user.role === 'admin' || req.user.role === 'superuser') {
     return res.status(403).json({
       error: 'Admin accounts cannot be deleted from the app. Contact support.',
     });

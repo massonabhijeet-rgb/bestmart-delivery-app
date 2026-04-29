@@ -126,7 +126,9 @@ router.get('/page', attachUserIfPresent, async (req: AuthenticatedRequest, res) 
   const isAdmin =
     wantsAdmin &&
     !!req.user &&
-    (req.user.role === 'admin' || req.user.role === 'editor') &&
+    (req.user.role === 'superuser' ||
+      req.user.role === 'admin' ||
+      req.user.role === 'editor') &&
     req.user.companyId === companyId;
 
   const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
@@ -432,7 +434,9 @@ router.get('/:uniqueId/variants', attachUserIfPresent, async (req: Authenticated
   // Storefront shoppers only see active siblings that have artwork —
   // image-less variants would render a blank tile in the QuickView.
   const isManagement =
-    req.user?.role === 'admin' || req.user?.role === 'editor';
+    req.user?.role === 'superuser' ||
+    req.user?.role === 'admin' ||
+    req.user?.role === 'editor';
   const visible = isManagement
     ? variants
     : variants.filter(
