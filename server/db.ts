@@ -22,6 +22,9 @@ export interface DbUser {
   fullName: string | null;
   phone: string | null;
   sessionId: string | null;
+  // Picker-only flag — admin grants this when they want a picker to also
+  // be able to update product stock counts. Always false for non-pickers.
+  pickerCanUpdateInventory: boolean;
 }
 
 export interface ProductRecord {
@@ -38,6 +41,7 @@ export interface ProductRecord {
   priceCents: number;
   originalPriceCents: number | null;
   stockQuantity: number;
+  lowStockThreshold: number;
   badge: string | null;
   imageUrl: string | null;
   isActive: boolean;
@@ -95,6 +99,8 @@ export interface OrderRecord {
   assignedRider: string | null;
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
+  assignedPickerUserId: number | null;
+  assignedPickerName: string | null;
   riderAcceptedAt: string | null;
   riderAssignmentDeadline: string | null;
   // 1-5 stars given by the customer post-delivery; null until rated.
@@ -225,6 +231,7 @@ function mapUser(row: DbUserRow): DbUser {
     fullName: row.fullName ?? null,
     phone: row.phone ?? null,
     sessionId: row.sessionId ?? null,
+    pickerCanUpdateInventory: row.pickerCanUpdateInventory ?? false,
   };
 }
 
@@ -243,6 +250,7 @@ function mapProduct(row: ProductRow): ProductRecord {
     priceCents: row.priceCents,
     originalPriceCents: row.originalPriceCents,
     stockQuantity: row.stockQuantity,
+    lowStockThreshold: Number(row.lowStockThreshold ?? 10),
     badge: row.badge,
     imageUrl: row.imageUrl,
     isActive: row.isActive,
@@ -320,9 +328,14 @@ async function createTables(client: PoolClient) {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2) NOT NULL DEFAULT 5.00;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rating_count INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS session_id UUID;
+    -- Picker permission: admin grants this per-user when they want a
+    -- picker to also be able to update inventory stock counts. Defaults
+    -- false — pickers can only see / pack orders unless explicitly granted.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS picker_can_update_inventory
+      BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'editor', 'viewer', 'rider'));
+      CHECK (role IN ('admin', 'editor', 'viewer', 'rider', 'picker'));
   `);
 
   await client.query(`
@@ -400,6 +413,12 @@ async function createTables(client: PoolClient) {
     ALTER TABLE products ADD COLUMN IF NOT EXISTS bogo_get_qty INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS brand_id INTEGER REFERENCES brands(id) ON DELETE SET NULL;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS variant_group_id INTEGER;
+    -- Per-product threshold for the "low stock" picker push. Defaults to
+    -- 10 units; admin can override per item from the product edit page.
+    -- Server fires the alert when stock_quantity transitions to <=
+    -- low_stock_threshold (one alert per crossing).
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold
+      INTEGER NOT NULL DEFAULT 10;
     CREATE INDEX IF NOT EXISTS idx_products_variant_group
       ON products(company_id, variant_group_id) WHERE variant_group_id IS NOT NULL;
   `);
@@ -470,7 +489,7 @@ async function createTables(client: PoolClient) {
       subtotal_cents INTEGER NOT NULL,
       delivery_fee_cents INTEGER NOT NULL,
       total_cents INTEGER NOT NULL,
-      status VARCHAR(40) NOT NULL CHECK (status IN ('placed', 'confirmed', 'packing', 'out_for_delivery', 'delivered', 'cancelled')),
+      status VARCHAR(40) NOT NULL CHECK (status IN ('placed', 'confirmed', 'packing', 'packed', 'out_for_delivery', 'delivered', 'cancelled')),
       assigned_rider VARCHAR(255),
       geo_label VARCHAR(255),
       created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -489,6 +508,17 @@ async function createTables(client: PoolClient) {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS arrival_notified_at TIMESTAMPTZ;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_rider_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    -- Picker assigned by admin to handle the order's pick-and-pack step.
+    -- Distinct from the rider (who handles the delivery leg). Cleared on
+    -- order cancellation; otherwise sticks until the next admin reassign.
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_picker_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    -- Add 'packed' to the order status CHECK so the picker can mark a
+    -- packed order ready for the rider pickup. Drop-and-recreate is the
+    -- only way to widen a CHECK constraint in Postgres.
+    ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
+    ALTER TABLE orders ADD CONSTRAINT orders_status_check
+      CHECK (status IN ('placed', 'confirmed', 'packing', 'packed',
+                        'out_for_delivery', 'delivered', 'cancelled'));
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_otp VARCHAR(6);
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(80);
@@ -1702,7 +1732,8 @@ export async function findUserByEmail(email: string) {
         u.locked_at AS "lockedAt",
         u.full_name AS "fullName",
         u.phone AS "phone",
-        u.session_id AS "sessionId"
+        u.session_id AS "sessionId",
+        u.picker_can_update_inventory AS "pickerCanUpdateInventory"
       FROM users u
       JOIN companies c ON c.id = u.company_id
       WHERE LOWER(u.email) = LOWER($1)
@@ -1728,7 +1759,8 @@ export async function findUserByUid(uid: string) {
         u.locked_at AS "lockedAt",
         u.full_name AS "fullName",
         u.phone AS "phone",
-        u.session_id AS "sessionId"
+        u.session_id AS "sessionId",
+        u.picker_can_update_inventory AS "pickerCanUpdateInventory"
       FROM users u
       JOIN companies c ON c.id = u.company_id
       WHERE u.uid = $1
@@ -1840,11 +1872,13 @@ export async function listTeamMembers(companyId: number) {
   const result = await pool.query(
     `
       SELECT
+        id,
         uid,
         email,
         role,
         full_name AS "fullName",
         phone,
+        picker_can_update_inventory AS "pickerCanUpdateInventory",
         created_date AS "createdDate"
       FROM users
       WHERE company_id = $1
@@ -1853,7 +1887,8 @@ export async function listTeamMembers(companyId: number) {
           WHEN 'admin' THEN 1
           WHEN 'editor' THEN 2
           WHEN 'rider' THEN 3
-          ELSE 4
+          WHEN 'picker' THEN 4
+          ELSE 5
         END,
         email;
     `,
@@ -1981,6 +2016,182 @@ export async function listRiders(
   );
   return result.rows;
 }
+
+// ----- Pickers (in-store staff who pick + pack orders) ---------------------
+
+// Lookup for the admin's "assign picker" dropdown on the order detail.
+// Includes the inventory-permission flag so the admin UI can show a chip
+// next to pickers who can also update stock counts.
+export async function listPickers(companyId: number) {
+  const result = await pool.query<{
+    id: number;
+    uid: string;
+    email: string;
+    fullName: string | null;
+    phone: string | null;
+    canUpdateInventory: boolean;
+  }>(
+    `
+      SELECT u.id, u.uid, u.email, u.full_name AS "fullName", u.phone,
+             u.picker_can_update_inventory AS "canUpdateInventory"
+      FROM users u
+      WHERE u.company_id = $1 AND u.role = 'picker'
+      ORDER BY COALESCE(u.full_name, u.email);
+    `,
+    [companyId]
+  );
+  return result.rows;
+}
+
+// Admin manually assigns (or unassigns with `null`) a picker to an order.
+// Doesn't touch status — admin separately moves the order through
+// 'confirmed' → 'packing' if needed; the picker can also flip the status
+// themselves once they accept the work.
+export async function assignPickerToOrder(
+  publicId: string,
+  companyId: number,
+  pickerUserId: number | null,
+) {
+  if (pickerUserId !== null) {
+    const valid = await pool.query(
+      `SELECT 1 FROM users
+       WHERE id = $1 AND company_id = $2 AND role = 'picker' LIMIT 1;`,
+      [pickerUserId, companyId]
+    );
+    if (!valid.rowCount) {
+      throw new Error('Selected picker is invalid');
+    }
+  }
+  const updated = await pool.query<{ id: number }>(
+    `UPDATE orders
+        SET assigned_picker_user_id = $3, updated_date = NOW()
+      WHERE public_id = $1 AND company_id = $2
+      RETURNING id;`,
+    [publicId, companyId, pickerUserId]
+  );
+  if (!updated.rowCount) return null;
+  return getOrderByPublicId(publicId);
+}
+
+// Picker's own queue: every order admin has assigned to them, in the
+// pre-delivery phase. 'packed' is included so the picker can see what
+// they've completed but is still awaiting rider pickup.
+export async function listPickerOrders(pickerUserId: number) {
+  const result = await pool.query(
+    `SELECT ${ORDER_SELECT_COLUMNS} ${ORDER_FROM_CLAUSE}
+      WHERE o.assigned_picker_user_id = $1
+        AND o.status IN ('confirmed', 'packing', 'packed')
+      ORDER BY o.created_date ASC;`,
+    [pickerUserId]
+  );
+  return Promise.all(result.rows.map((row: OrderRow) => mapOrder(row)));
+}
+
+// Picker advances their own order through packing → packed. Locked to
+// those two transitions — anything else (mark out_for_delivery,
+// cancel, etc.) belongs to admin and stays in updateOrderStatus.
+// The WHERE clause asserts (publicId, pickerUserId) so a picker can't
+// touch someone else's order even if they guess the publicId.
+export async function updatePickerOrderStatus(
+  publicId: string,
+  pickerUserId: number,
+  newStatus: OrderStatus,
+) {
+  if (newStatus !== 'packing' && newStatus !== 'packed') {
+    throw new Error('Picker can only set status to packing or packed');
+  }
+  const updated = await pool.query<{ id: number }>(
+    `UPDATE orders
+        SET status = $3, updated_date = NOW()
+      WHERE public_id = $1 AND assigned_picker_user_id = $2
+      RETURNING id;`,
+    [publicId, pickerUserId, newStatus]
+  );
+  if (!updated.rowCount) return null;
+  return getOrderByPublicId(publicId);
+}
+
+// Admin grants/revokes the picker's inventory write permission.
+// Returns true when a row matched (picker exists in this company).
+export async function setUserPickerInventoryPermission(
+  userId: number,
+  companyId: number,
+  allowed: boolean,
+) {
+  const result = await pool.query(
+    `UPDATE users
+        SET picker_can_update_inventory = $3, updated_date = NOW()
+      WHERE id = $1 AND company_id = $2 AND role = 'picker';`,
+    [userId, companyId, allowed]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// Picker stock update — narrow surface: only stock_quantity changes,
+// no other product field. Caller must verify
+// users.picker_can_update_inventory before calling.
+export async function updateProductStockByPicker(
+  productUniqueId: string,
+  companyId: number,
+  newStock: number,
+) {
+  const safe = Math.max(0, Math.floor(newStock));
+  const result = await pool.query<{ id: number }>(
+    `UPDATE products
+        SET stock_quantity = $3, updated_date = NOW()
+      WHERE unique_id = $1 AND company_id = $2
+      RETURNING id;`,
+    [productUniqueId, companyId, safe]
+  );
+  if (!result.rowCount) return null;
+  return readProductWithCategory(pool, result.rows[0].id);
+}
+
+// Per-product threshold below which the product is "low stock". Used by
+// the admin product-edit form and the picker low-stock dashboard.
+export async function setProductLowStockThreshold(
+  productUniqueId: string,
+  companyId: number,
+  threshold: number,
+) {
+  const safe = Math.max(0, Math.floor(threshold));
+  const result = await pool.query(
+    `UPDATE products
+        SET low_stock_threshold = $3, updated_date = NOW()
+      WHERE unique_id = $1 AND company_id = $2;`,
+    [productUniqueId, companyId, safe]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// All active products at or below their per-product low-stock threshold.
+// Used by the picker dashboard ("inventory I should restock") and the
+// background job that pushes low-stock notifications.
+export async function listLowStockProducts(companyId: number) {
+  const { rows } = await pool.query<{
+    uniqueId: string;
+    name: string;
+    stockQuantity: number;
+    lowStockThreshold: number;
+    categoryId: number | null;
+  }>(
+    `
+      SELECT unique_id AS "uniqueId", name,
+             stock_quantity AS "stockQuantity",
+             low_stock_threshold AS "lowStockThreshold",
+             category_id AS "categoryId"
+      FROM products
+      WHERE company_id = $1
+        AND is_active = TRUE
+        AND stock_quantity <= low_stock_threshold
+      ORDER BY stock_quantity ASC, name;
+    `,
+    [companyId]
+  );
+  return rows;
+}
+
+// ----- end pickers --------------------------------------------------------
 
 export async function getRiderAvailability(userId: number): Promise<boolean> {
   const { rows } = await pool.query<{ isAvailable: boolean | null }>(
@@ -2404,6 +2615,7 @@ const PRODUCT_SELECT_COLUMNS = `
   p.price_cents AS "priceCents",
   p.original_price_cents AS "originalPriceCents",
   p.stock_quantity AS "stockQuantity",
+  p.low_stock_threshold AS "lowStockThreshold",
   p.badge,
   p.image_url AS "imageUrl",
   p.is_active AS "isActive",
@@ -5517,6 +5729,8 @@ async function mapOrder(orderRow: OrderRow) {
     assignedRider: orderRow.assignedRider,
     assignedRiderUserId: orderRow.assignedRiderUserId ?? null,
     assignedRiderPhone: orderRow.assignedRiderPhone ?? null,
+    assignedPickerUserId: orderRow.assignedPickerUserId ?? null,
+    assignedPickerName: orderRow.assignedPickerName ?? null,
     riderAcceptedAt: orderRow.riderAcceptedAt ?? null,
     riderAssignmentDeadline: orderRow.riderAssignmentDeadline ?? null,
     riderRating:
@@ -5791,6 +6005,8 @@ const ORDER_SELECT_COLUMNS = `
   o.status,
   o.assigned_rider AS "assignedRider",
   o.assigned_rider_user_id AS "assignedRiderUserId",
+  o.assigned_picker_user_id AS "assignedPickerUserId",
+  p.full_name AS "assignedPickerName",
   o.rider_accepted_at AS "riderAcceptedAt",
   o.rider_assignment_deadline AS "riderAssignmentDeadline",
   o.rider_rating AS "riderRating",
@@ -5813,6 +6029,7 @@ const ORDER_SELECT_COLUMNS = `
 const ORDER_FROM_CLAUSE = `
   FROM orders o
   LEFT JOIN users r ON r.id = o.assigned_rider_user_id
+  LEFT JOIN users p ON p.id = o.assigned_picker_user_id
 `;
 
 export async function getOrderByPublicId(publicId: string) {

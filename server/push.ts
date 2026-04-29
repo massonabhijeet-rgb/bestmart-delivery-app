@@ -153,6 +153,64 @@ export async function notifyRiderAssigned(params: {
   }
 }
 
+// Picker version of the rider-assignment push. Fires when admin assigns
+// (or re-assigns) an order to a picker so they get nudged to the queue.
+// Same shape as the rider push so the mobile app can route on `type`.
+export async function notifyPickerAssigned(params: {
+  pickerUserId: number;
+  publicId: string;
+  itemCount: number;
+  customerName: string;
+}) {
+  try {
+    const tokens = await listUserDeviceTokens(params.pickerUserId);
+    if (tokens.length === 0) return;
+    const body = `${params.itemCount} item${params.itemCount === 1 ? '' : 's'} · ${params.customerName}`;
+    await sendToTokens(tokens, `New order to pack: ${params.publicId}`, body, {
+      type: 'picker_order_assigned',
+      orderId: params.publicId,
+    });
+  } catch (error) {
+    console.error('[push] notifyPickerAssigned failed:', error);
+  }
+}
+
+// Push fired when a product's stock_quantity drops to or below its
+// low_stock_threshold. Targets every picker in the company so whoever
+// is on shift can react. Caller is responsible for de-duping (e.g. only
+// fire on the transition into the threshold, not every save below).
+export async function notifyPickersLowStock(params: {
+  companyId: number;
+  productName: string;
+  stockQuantity: number;
+  threshold: number;
+  pickerUserIds: number[];
+}) {
+  try {
+    if (params.pickerUserIds.length === 0) return;
+    // Multi-target: fan-out one push per picker. listUserDeviceTokens is
+    // cheap and parallel-safe; a small Promise.all keeps total latency at
+    // ~one round trip even when there are several pickers on shift.
+    await Promise.all(
+      params.pickerUserIds.map(async (pickerUserId) => {
+        const tokens = await listUserDeviceTokens(pickerUserId);
+        if (tokens.length === 0) return;
+        await sendToTokens(
+          tokens,
+          'Low stock',
+          `${params.productName} is at ${params.stockQuantity} (threshold ${params.threshold}). Please restock.`,
+          {
+            type: 'picker_low_stock',
+            stockQuantity: String(params.stockQuantity),
+          },
+        );
+      }),
+    );
+  } catch (error) {
+    console.error('[push] notifyPickersLowStock failed:', error);
+  }
+}
+
 interface StatusCopy {
   title: string;
   body: (id: string, otp?: string | null) => string;

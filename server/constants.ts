@@ -4,6 +4,7 @@ export const ORDER_STATUS_VALUES: OrderStatus[] = [
   'placed',
   'confirmed',
   'packing',
+  'packed',
   'out_for_delivery',
   'delivered',
   'cancelled',

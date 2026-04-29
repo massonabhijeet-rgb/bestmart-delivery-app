@@ -1,15 +1,20 @@
 import { Router } from 'express';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import {
+  assignPickerToOrder,
   countCustomersWithDevices,
   findCustomerByIdentifier,
+  listPickers,
   listRidersForPresence,
+  setProductLowStockThreshold,
+  setUserPickerInventoryPermission,
 } from '../db.js';
 import {
   broadcastToCustomers,
   notifyCustomerById,
+  notifyPickerAssigned,
 } from '../push.js';
-import { getConnectedRiderIds, getRiderLocations } from '../ws.js';
+import { broadcast, getConnectedRiderIds, getRiderLocations } from '../ws.js';
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
@@ -63,6 +68,171 @@ router.get(
     }
   }
 );
+
+// ----- Picker management endpoints --------------------------------------
+
+/// List of all pickers in this company — drives the admin's "Assign
+/// picker" dropdown on the order detail page. Editors see this too so
+/// they can also reassign on the floor.
+router.get(
+  '/pickers',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Auth required' });
+    try {
+      const pickers = await listPickers(req.user.companyId);
+      return res.json({ pickers });
+    } catch (error) {
+      console.error('Admin listPickers error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+/// Manually assign (or unassign with body.pickerUserId === null) a picker
+/// to an order. Fires an FCM push to the picker on every new assignment
+/// — including a re-assign from picker A to picker B (B gets the push,
+/// A's app drops the order from its queue on the next /picker/orders
+/// fetch or order_updated WebSocket event).
+router.post(
+  '/orders/:publicId/assign-picker',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Auth required' });
+    const publicId = Array.isArray(req.params.publicId)
+      ? req.params.publicId[0]
+      : req.params.publicId;
+    if (!publicId) {
+      return res.status(400).json({ error: 'Order ID is required' });
+    }
+    const { pickerUserId } = (req.body ?? {}) as {
+      pickerUserId?: number | null;
+    };
+    if (
+      pickerUserId !== null &&
+      pickerUserId !== undefined &&
+      typeof pickerUserId !== 'number'
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'pickerUserId must be a number or null' });
+    }
+    try {
+      const targetPickerId = pickerUserId ?? null;
+      const order = await assignPickerToOrder(
+        publicId,
+        req.user.companyId,
+        targetPickerId,
+      );
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      broadcast({ type: 'order_updated', payload: order });
+      if (targetPickerId !== null) {
+        void notifyPickerAssigned({
+          pickerUserId: targetPickerId,
+          publicId: order.publicId,
+          itemCount: order.items.length,
+          customerName: order.customerName ?? 'Customer',
+        });
+      }
+      return res.json({ order });
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Internal server error';
+      console.error('Admin assign-picker error:', error);
+      return res.status(400).json({ error: msg });
+    }
+  }
+);
+
+/// Toggle a picker's inventory write permission. Idempotent — calling
+/// again with the same value is a no-op.
+router.patch(
+  '/users/:userId/picker-permissions',
+  authenticateToken,
+  requireRole('admin'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Auth required' });
+    const userIdParam = Array.isArray(req.params.userId)
+      ? req.params.userId[0]
+      : req.params.userId;
+    const userId = Number(userIdParam);
+    if (!Number.isFinite(userId)) {
+      return res.status(400).json({ error: 'userId must be a number' });
+    }
+    const { canUpdateInventory } = (req.body ?? {}) as {
+      canUpdateInventory?: boolean;
+    };
+    if (typeof canUpdateInventory !== 'boolean') {
+      return res
+        .status(400)
+        .json({ error: 'canUpdateInventory (boolean) is required' });
+    }
+    try {
+      const ok = await setUserPickerInventoryPermission(
+        userId,
+        req.user.companyId,
+        canUpdateInventory,
+      );
+      if (!ok) {
+        return res
+          .status(404)
+          .json({ error: 'Picker not found in this company' });
+      }
+      return res.json({ ok: true, canUpdateInventory });
+    } catch (error) {
+      console.error('Admin picker-permissions error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+/// Per-product low-stock threshold. Pickers see / get notified when
+/// stock_quantity ≤ this value. Threshold is a non-negative integer; 0
+/// effectively disables low-stock alerts for that product.
+router.patch(
+  '/products/:productUniqueId/low-stock-threshold',
+  authenticateToken,
+  requireRole('admin', 'editor'),
+  async (req: AuthenticatedRequest, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Auth required' });
+    const productUniqueId = Array.isArray(req.params.productUniqueId)
+      ? req.params.productUniqueId[0]
+      : req.params.productUniqueId;
+    if (!productUniqueId) {
+      return res.status(400).json({ error: 'Product ID is required' });
+    }
+    const { threshold } = (req.body ?? {}) as { threshold?: number };
+    if (
+      typeof threshold !== 'number' ||
+      !Number.isFinite(threshold) ||
+      threshold < 0
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'threshold must be a non-negative number' });
+    }
+    try {
+      const ok = await setProductLowStockThreshold(
+        productUniqueId,
+        req.user.companyId,
+        threshold,
+      );
+      if (!ok) {
+        return res.status(404).json({ error: 'Product not found' });
+      }
+      return res.json({ ok: true, threshold });
+    } catch (error) {
+      console.error('Admin low-stock-threshold error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// ----- end picker management ---------------------------------------------
 
 router.get(
   '/broadcast/recipients',

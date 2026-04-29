@@ -20,6 +20,10 @@ import {
   apiBulkImportProducts,
   apiCreateCategory,
   apiCreateUser,
+  apiSetPickerInventoryPermission,
+  apiAssignPickerToOrder,
+  apiListPickers,
+  apiSetProductLowStockThreshold,
   apiDeleteCategory,
   apiDeleteProduct,
   apiRestoreProduct,
@@ -144,6 +148,11 @@ interface ProductFormState {
   price: string;
   originalPrice: string;
   stockQuantity: string;
+  // Threshold below which the product fires the low-stock push. Saved
+  // separately from the main product UPDATE via apiSetProductLowStockThreshold,
+  // so editors can change it without having to re-validate every other
+  // product field.
+  lowStockThreshold: string;
   badge: string;
   imageUrl: string;
   isActive: boolean;
@@ -162,6 +171,7 @@ const defaultProductForm: ProductFormState = {
   price: '',
   originalPrice: '',
   stockQuantity: '0',
+  lowStockThreshold: '10',
   badge: '',
   imageUrl: '',
   isActive: true,
@@ -350,6 +360,13 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
   const offerSearchRef = useRef<HTMLInputElement>(null);
   const [riderDrafts, setRiderDrafts] = useState<Record<string, number | ''>>({});
   const [riders, setRiders] = useState<Rider[]>([]);
+  // Lazy-loaded picker roster — fetched once when admin first opens an
+  // order detail, since most admins won't ever interact with assignment
+  // and the list is small enough that a single fetch is cheap.
+  const [pickers, setPickers] = useState<
+    Array<{ id: number; fullName: string | null; email: string }>
+  >([]);
+  const [pickersLoaded, setPickersLoaded] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
   const [showInlineBrandInput, setShowInlineBrandInput] = useState(false);
@@ -978,6 +995,19 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             : await apiAddProduct(payload);
           if (productImage) {
             await apiUploadProductImage(result.uniqueId, productImage);
+          }
+          // Low-stock threshold is its own endpoint — it lives outside
+          // the standard product UPDATE because pickers / editors need
+          // the option to retune it without touching the rest of the
+          // product. Fire-and-forget; surface errors but don't roll back
+          // the product save (the threshold can be retried in isolation).
+          const threshold = Number(productForm.lowStockThreshold);
+          if (Number.isFinite(threshold) && threshold >= 0) {
+            try {
+              await apiSetProductLowStockThreshold(result.uniqueId, threshold);
+            } catch (e) {
+              console.error('Threshold save failed (product saved):', e);
+            }
           }
           return result;
         },
@@ -2914,6 +2944,61 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                           <span className="detail-kv__v">{order.geoLabel ?? '—'}</span>
                         </div>
                         <div className="detail-kv">
+                          <span className="detail-kv__k">Picker</span>
+                          <span className="detail-kv__v">
+                            <select
+                              value={order.assignedPickerUserId ?? ''}
+                              onFocus={async () => {
+                                if (pickersLoaded) return;
+                                try {
+                                  const { pickers: list } =
+                                    await apiListPickers();
+                                  setPickers(
+                                    list.map((p) => ({
+                                      id: p.id,
+                                      fullName: p.fullName,
+                                      email: p.email,
+                                    })),
+                                  );
+                                  setPickersLoaded(true);
+                                } catch (err) {
+                                  console.error('Load pickers failed', err);
+                                }
+                              }}
+                              onChange={async (e) => {
+                                const val = e.target.value;
+                                const next = val === '' ? null : Number(val);
+                                try {
+                                  await apiAssignPickerToOrder(
+                                    order.publicId,
+                                    next,
+                                  );
+                                  setNotice(
+                                    next === null
+                                      ? `Picker unassigned from ${order.publicId}.`
+                                      : `Picker assigned to ${order.publicId}.`,
+                                  );
+                                  await loadDashboard();
+                                } catch (err) {
+                                  setError(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'Picker assignment failed',
+                                  );
+                                }
+                              }}
+                              style={{ minWidth: 180 }}
+                            >
+                              <option value="">— Unassigned —</option>
+                              {pickers.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.fullName || p.email}
+                                </option>
+                              ))}
+                            </select>
+                          </span>
+                        </div>
+                        <div className="detail-kv">
                           <span className="detail-kv__k">Rider</span>
                           <span className="detail-kv__v">
                             {order.assignedRider ? (
@@ -3831,6 +3916,34 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                       <span className="pe-field__warn">Low stock warning will appear on storefront</span>
                     )}
                   </label>
+                  <label className="pe-field">
+                    <span className="pe-field__label">
+                      Low-stock threshold
+                      <em
+                        style={{
+                          fontWeight: 400,
+                          fontStyle: 'normal',
+                          color: 'var(--c-ink-muted)',
+                          marginLeft: 6,
+                          fontSize: 12,
+                        }}
+                      >
+                        — pickers get notified at this stock level
+                      </em>
+                    </span>
+                    <input
+                      className="pe-field__input"
+                      type="number"
+                      min="0"
+                      value={productForm.lowStockThreshold}
+                      onChange={(e) =>
+                        setProductForm((c) => ({
+                          ...c,
+                          lowStockThreshold: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
 
                   <div className="pe-toggle-row">
                     <div>
@@ -4206,6 +4319,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                               price: String(product.priceCents / 100),
                               originalPrice: product.originalPriceCents ? String(product.originalPriceCents / 100) : '',
                               stockQuantity: String(product.stockQuantity),
+                              lowStockThreshold: String(product.lowStockThreshold ?? 10),
                               badge: product.badge ?? '',
                               imageUrl: product.imageUrl ?? '',
                               isActive: product.isActive,
@@ -6447,6 +6561,7 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
                 <option value="editor">Editor</option>
                 <option value="viewer">Viewer</option>
                 <option value="rider">Rider</option>
+                <option value="picker">Picker</option>
               </select>
             </label>
             <label>
@@ -6478,6 +6593,42 @@ function Dashboard({ user, onLogout, onOpenStore }: DashboardProps) {
             <div key={member.uid} className="member-row">
               <div>
                 <div className="member-email">{member.email}</div>
+                {/* Pickers get a tiny "inventory" toggle inline. Admin
+                    flips it without leaving the team list. Other roles
+                    don't render the toggle at all. */}
+                {member.role === 'picker' ? (
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginTop: 4,
+                      fontSize: 12,
+                      color: 'var(--c-ink-muted)',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={member.pickerCanUpdateInventory}
+                      onChange={async (e) => {
+                        const next = e.target.checked;
+                        try {
+                          await apiSetPickerInventoryPermission(member.id, next);
+                          setTeam((prev) =>
+                            prev.map((m) =>
+                              m.id === member.id
+                                ? { ...m, pickerCanUpdateInventory: next }
+                                : m,
+                            ),
+                          );
+                        } catch (err) {
+                          console.error('Toggle picker permission failed', err);
+                        }
+                      }}
+                    />
+                    <span>Can update inventory</span>
+                  </label>
+                ) : null}
               </div>
               <span className={`role-badge role-badge--${member.role}`}>{member.role}</span>
               <span className="member-date">Joined {formatDateTime(member.createdDate)}</span>

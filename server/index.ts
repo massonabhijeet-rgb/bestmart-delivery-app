@@ -18,6 +18,7 @@ import mobileRoutes from './routes/mobile.js';
 import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
 import paymentRoutes from './routes/payments.js';
+import pickerRoutes from './routes/picker.js';
 import riderRoutes from './routes/rider.js';
 import themedPageRoutes from './routes/themedPages.js';
 import {
@@ -90,6 +91,7 @@ app.use('/api/mobile', mobileRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/picker', pickerRoutes);
 app.use('/api/rider', riderRoutes);
 app.use('/api/themed-pages', themedPageRoutes);
 

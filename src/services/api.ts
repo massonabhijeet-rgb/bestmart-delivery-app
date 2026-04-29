@@ -19,11 +19,12 @@ function busyLabelFor(method: string, endpoint: string): string {
   return 'Working…';
 }
 
-export type UserRole = 'admin' | 'editor' | 'viewer' | 'rider';
+export type UserRole = 'admin' | 'editor' | 'viewer' | 'rider' | 'picker';
 export type OrderStatus =
   | 'placed'
   | 'confirmed'
   | 'packing'
+  | 'packed'
   | 'out_for_delivery'
   | 'delivered'
   | 'cancelled';
@@ -37,6 +38,7 @@ export interface User {
   role: UserRole;
   fullName: string | null;
   phone: string | null;
+  pickerCanUpdateInventory?: boolean;
 }
 
 export interface SavedAddress {
@@ -85,6 +87,7 @@ export interface Product {
   priceCents: number;
   originalPriceCents: number | null;
   stockQuantity: number;
+  lowStockThreshold: number;
   badge: string | null;
   imageUrl: string | null;
   isActive: boolean;
@@ -143,6 +146,8 @@ export interface Order {
   assignedRider: string | null;
   assignedRiderUserId: number | null;
   assignedRiderPhone: string | null;
+  assignedPickerUserId: number | null;
+  assignedPickerName: string | null;
   riderAcceptedAt: string | null;
   riderAssignmentDeadline: string | null;
   // 1-5 stars given by the customer post-delivery; null until rated.
@@ -169,11 +174,13 @@ export interface DashboardSummary {
 }
 
 export interface TeamMember {
+  id: number;
   uid: string;
   email: string;
   role: UserRole;
   fullName: string | null;
   phone: string | null;
+  pickerCanUpdateInventory: boolean;
   createdDate: string;
 }
 
@@ -1242,6 +1249,59 @@ export async function apiCreateUser(
     body: JSON.stringify({ email, password, role, ...extras }),
   });
   return data;
+}
+
+// Picker management — admin only.
+export async function apiSetPickerInventoryPermission(
+  userId: number,
+  canUpdateInventory: boolean,
+) {
+  return request<{ ok: true; canUpdateInventory: boolean }>(
+    `/admin/users/${userId}/picker-permissions`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ canUpdateInventory }),
+    },
+  );
+}
+
+export async function apiListPickers() {
+  return request<{
+    pickers: Array<{
+      id: number;
+      uid: string;
+      email: string;
+      fullName: string | null;
+      phone: string | null;
+      canUpdateInventory: boolean;
+    }>;
+  }>('/admin/pickers');
+}
+
+export async function apiAssignPickerToOrder(
+  publicId: string,
+  pickerUserId: number | null,
+) {
+  return request<{ order: Order }>(
+    `/admin/orders/${publicId}/assign-picker`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ pickerUserId }),
+    },
+  );
+}
+
+export async function apiSetProductLowStockThreshold(
+  productUniqueId: string,
+  threshold: number,
+) {
+  return request<{ ok: true; threshold: number }>(
+    `/admin/products/${productUniqueId}/low-stock-threshold`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ threshold }),
+    },
+  );
 }
 
 export interface BroadcastCustomer {
