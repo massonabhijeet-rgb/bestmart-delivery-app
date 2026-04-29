@@ -482,6 +482,11 @@ async function createTables(client: PoolClient) {
   await client.query(`
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_latitude DOUBLE PRECISION;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_longitude DOUBLE PRECISION;
+    -- Set the moment the rider's location first lands within ~20m of the
+    -- delivery point (proximity check on PATCH /rider/location). Used to
+    -- guarantee the "your rider has arrived" push fires exactly once per
+    -- order — subsequent location updates inside the radius are no-ops.
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS arrival_notified_at TIMESTAMPTZ;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_rider_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
@@ -6590,6 +6595,68 @@ export async function listActiveDeliveriesForRider(
       routeOriginLat: r.routeOriginLat,
       routeOriginLng: r.routeOriginLng,
     }));
+}
+
+// Used by the rider-location handler to decide whether to fire the
+// "your rider has arrived" push. Returns the rider's single
+// out-for-delivery order (riders can't be on more than one at a time
+// in practice) along with everything needed for proximity + notify in
+// one round-trip: customer userId for the FCM target, the delivery
+// coordinates, and whether the arrival push already fired.
+export async function getRiderArrivalContext(riderId: number): Promise<{
+  publicId: string;
+  customerUserId: number | null;
+  deliveryLatitude: number;
+  deliveryLongitude: number;
+  alreadyNotified: boolean;
+} | null> {
+  const { rows } = await pool.query<{
+    publicId: string;
+    customerUserId: number | null;
+    deliveryLatitude: number | null;
+    deliveryLongitude: number | null;
+    arrivalNotifiedAt: Date | null;
+  }>(
+    `
+      SELECT public_id AS "publicId",
+             created_by_user_id AS "customerUserId",
+             delivery_latitude AS "deliveryLatitude",
+             delivery_longitude AS "deliveryLongitude",
+             arrival_notified_at AS "arrivalNotifiedAt"
+      FROM orders
+      WHERE assigned_rider_user_id = $1
+        AND status = 'out_for_delivery'
+        AND delivery_latitude IS NOT NULL
+        AND delivery_longitude IS NOT NULL
+      ORDER BY created_date DESC
+      LIMIT 1
+    `,
+    [riderId]
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    publicId: r.publicId,
+    customerUserId: r.customerUserId,
+    deliveryLatitude: r.deliveryLatitude!,
+    deliveryLongitude: r.deliveryLongitude!,
+    alreadyNotified: r.arrivalNotifiedAt !== null,
+  };
+}
+
+// Atomic claim-and-mark — race-safe. Returns true exactly once per order:
+// the first call writes the timestamp, subsequent calls find it non-null
+// and update zero rows. Caller fires the push only when this returns true.
+export async function markOrderArrivalNotified(
+  publicId: string
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE orders
+        SET arrival_notified_at = NOW()
+      WHERE public_id = $1 AND arrival_notified_at IS NULL`,
+    [publicId]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function saveOrderRoute(

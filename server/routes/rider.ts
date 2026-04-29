@@ -5,16 +5,41 @@ import {
   attachRazorpayQrToOrder,
   getOrderByPublicId,
   getOrderOwnerUserId,
+  getRiderArrivalContext,
   getRiderAvailability,
   getRiderStats,
   listRiderOrders,
+  markOrderArrivalNotified,
   setRiderAvailability,
   updateOrderStatus,
 } from '../db.js';
 import { maybeRefreshRouteForRider } from '../googleMaps.js';
-import { notifyOrderStatus } from '../push.js';
+import { notifyCustomerById, notifyOrderStatus } from '../push.js';
 import { createRazorpayQrCode, razorpayConfigured } from '../razorpay.js';
 import { broadcast, broadcastRiderRoster, updateRiderLocation } from '../ws.js';
+
+/// Great-circle distance between two lat/lng points in meters. Standard
+/// haversine — accurate to a meter or two at the scales we care about
+/// (last-mile delivery, < 5 km), which is what the proximity push uses.
+function haversineMeters(
+  lat1: number, lng1: number, lat2: number, lng2: number,
+): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/// "At your doorstep" radius — the rider's GPS first reading inside this
+/// radius triggers the arrival push. 25m balances false-positives (multi-
+/// floor buildings, GPS jitter parking next door) against waiting too
+/// long (50m can mean "still on the bike one block away").
+const ARRIVAL_RADIUS_METERS = 25;
 import type { AuthenticatedRequest } from '../types.js';
 
 const router = Router();
@@ -283,6 +308,33 @@ router.patch(
     // deliveries. Throttled by distance inside the helper so most pings are
     // no-ops.
     void maybeRefreshRouteForRider(req.user.id, latitude, longitude);
+
+    // Proximity push: fires "your rider has arrived" exactly once when the
+    // rider's GPS first lands within ARRIVAL_RADIUS_METERS of the customer.
+    // Race-safe via markOrderArrivalNotified — concurrent location updates
+    // can't double-fire because only the first UPDATE returns rowCount > 0.
+    void (async () => {
+      try {
+        const ctx = await getRiderArrivalContext(req.user!.id);
+        if (!ctx || ctx.alreadyNotified || ctx.customerUserId === null) return;
+        const dist = haversineMeters(
+          latitude, longitude,
+          ctx.deliveryLatitude, ctx.deliveryLongitude,
+        );
+        if (dist > ARRIVAL_RADIUS_METERS) return;
+        const claimed = await markOrderArrivalNotified(ctx.publicId);
+        if (!claimed) return;
+        await notifyCustomerById(
+          ctx.customerUserId,
+          'Your rider has arrived',
+          `Order #${ctx.publicId} is at your doorstep. Please collect it.`,
+          { type: 'order_arrived', orderId: ctx.publicId },
+        );
+      } catch (error) {
+        console.error('[rider/location] arrival proximity check failed:', error);
+      }
+    })();
+
     return res.json({ ok: true });
   }
 );
