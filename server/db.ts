@@ -541,37 +541,18 @@ async function createTables(client: PoolClient) {
     ALTER TABLE companies ADD COLUMN IF NOT EXISTS store_longitude DOUBLE PRECISION;
   `);
 
-  // Backfill: link orders to users by email, then hydrate user_addresses from orders.
-  await client.query(`
-    UPDATE orders o
-    SET created_by_user_id = u.id
-    FROM users u
-    WHERE o.created_by_user_id IS NULL
-      AND o.customer_email IS NOT NULL
-      AND LOWER(u.email) = LOWER(o.customer_email);
-  `);
-
-  await client.query(`
-    INSERT INTO user_addresses (
-      user_id, full_name, phone, delivery_address, delivery_notes, latitude, longitude, use_count, last_used_date
-    )
-    SELECT
-      o.created_by_user_id,
-      o.customer_name,
-      o.customer_phone,
-      o.delivery_address,
-      (ARRAY_AGG(o.delivery_notes ORDER BY o.created_date DESC))[1],
-      (ARRAY_AGG(o.delivery_latitude ORDER BY o.created_date DESC))[1],
-      (ARRAY_AGG(o.delivery_longitude ORDER BY o.created_date DESC))[1],
-      COUNT(*)::int,
-      MAX(o.created_date)
-    FROM orders o
-    WHERE o.created_by_user_id IS NOT NULL
-    GROUP BY o.created_by_user_id, o.customer_name, o.customer_phone, o.delivery_address
-    ON CONFLICT (user_id, full_name, phone, delivery_address)
-    DO UPDATE SET
-      last_used_date = GREATEST(user_addresses.last_used_date, EXCLUDED.last_used_date);
-  `);
+  // INTENTIONAL REMOVAL: there used to be two boot-time backfills here —
+  // (1) attaching anonymous orders to users by customer_email match, and
+  // (2) hydrating user_addresses from those (now-attributed) orders.
+  // Both ran on every server start and caused cross-user data leakage:
+  // an anonymous checkout that typed somebody else's email (typo or
+  // shared family inbox) ended up tagged to that other user's account,
+  // putting the wrong order into their /my-orders feed and the wrong
+  // delivery address into their saved-address book. New writes are
+  // already correct (createOrder uses req.user.id directly), so simply
+  // not running these backfills again is enough to stop new leaks; any
+  // existing mis-attributed rows need targeted cleanup, not another
+  // boot-time pass — left to a one-shot script if/when needed.
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS coupons (
