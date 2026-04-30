@@ -787,6 +787,20 @@ async function createTables(client: PoolClient) {
       ON click_events(user_id, created_date DESC) WHERE user_id IS NOT NULL;
   `);
 
+  // Server-backed cart so the basket follows the user across devices /
+  // reinstalls. Composite PK keeps each (user, product) pair unique;
+  // ON DELETE CASCADE on both FKs means deleting a user or unpublishing a
+  // product naturally garbage-collects stale rows without bookkeeping.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS cart_items (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      qty INTEGER NOT NULL CHECK (qty > 0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, product_id)
+    );
+  `);
+
   // Elasticsearch-like fuzzy/ranked product search. pg_trgm provides similarity()
   // for typo tolerance; GIN trigram indexes make ILIKE '%q%' and similarity()
   // fast even on large catalogs. Wrapped in a SAVEPOINT because managed Postgres
@@ -6899,4 +6913,65 @@ export async function saveOrderRoute(
       params.originLng,
     ]
   );
+}
+
+// Server-backed cart. The client treats local SharedPreferences as the
+// render cache and uses these endpoints purely for cross-device sync.
+// Returns the user's cart enriched with the current product snapshot —
+// only active products are included so the client never has to render
+// (or be confused by) items that were unpublished while the cart sat.
+export async function getCart(userId: number) {
+  const result = await pool.query(
+    `
+      SELECT
+        ci.qty AS "qty",
+        ci.updated_at AS "updatedAt",
+        ${PRODUCT_SELECT_COLUMNS}
+      FROM cart_items ci
+      JOIN products p ON p.id = ci.product_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN brands b ON b.id = p.brand_id
+      WHERE ci.user_id = $1
+        AND p.is_active = TRUE
+      ORDER BY ci.updated_at DESC
+    `,
+    [userId]
+  );
+  return result.rows.map((row: ProductRow & { qty: number; updatedAt: string }) => ({
+    qty: Number(row.qty),
+    updatedAt: row.updatedAt,
+    product: mapProduct(row),
+  }));
+}
+
+// Idempotent full-cart replace inside a transaction: wipe the user's
+// rows then insert the new set. Inactive / unknown products are
+// silently dropped (the next GET returns the canonical state).
+export async function replaceCart(
+  userId: number,
+  items: ReadonlyArray<{ productId: number; qty: number }>
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM cart_items WHERE user_id = $1', [userId]);
+    for (const it of items) {
+      await client.query(
+        `
+          INSERT INTO cart_items (user_id, product_id, qty)
+          SELECT $1, $2, $3
+          WHERE EXISTS (
+            SELECT 1 FROM products WHERE id = $2 AND is_active = TRUE
+          )
+        `,
+        [userId, it.productId, it.qty]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
